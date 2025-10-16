@@ -1,0 +1,160 @@
+{{define "content"}}
+<div class="container setup-page">
+    <div class="setup-container">
+        <div class="setup-header">
+            <h1>Create Your Account</h1>
+            <p>Step 1 of 3: Create your user account</p>
+        </div>
+
+        <div class="setup-steps">
+            <div class="step active">
+                <div class="step-number">1</div>
+                <div class="step-label">Create User Account</div>
+            </div>
+            <div class="step">
+                <div class="step-number">2</div>
+                <div class="step-label">Create Administrator</div>
+            </div>
+            <div class="step">
+                <div class="step-number">3</div>
+                <div class="step-label">Configure Server</div>
+            </div>
+        </div>
+
+        <div class="setup-content">
+            <form class="setup-form" method="POST" action="/user/setup/register">
+                {{if .Error}}
+                <div class="alert alert-error">
+                    <div class="alert-icon">❌</div>
+                    <div class="alert-content">
+                        <div class="alert-message">{{.Error}}</div>
+                    </div>
+                </div>
+                {{end}}
+
+                <div class="form-group">
+                    <label class="form-label" for="username">
+                        Username
+                        <span class="required">*</span>
+                    </label>
+                    <input
+                        class="form-input"
+                        id="username"
+                        name="username"
+                        type="text"
+                        placeholder="Choose a username"
+                        value="{{.Username}}"
+                        required
+                        pattern="^[a-zA-Z0-9_]{3,50}$"
+                    />
+                    <span class="form-hint">3-50 characters, letters, numbers, and underscores only</span>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="email">
+                        Email
+                        <span class="required">*</span>
+                    </label>
+                    <input
+                        class="form-input"
+                        id="email"
+                        name="email"
+                        type="email"
+                        placeholder="your@email.com"
+                        value="{{.Email}}"
+                        required
+                    />
+                    <span class="form-hint">We'll use this for account recovery</span>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="password">
+                        Password
+                        <span class="required">*</span>
+                    </label>
+                    <input
+                        class="form-input"
+                        id="password"
+                        name="password"
+                        type="password"
+                        placeholder="Choose a strong password"
+                        required
+                        minlength="8"
+                    />
+                    <span class="form-hint">At least 8 characters, include uppercase, lowercase, and numbers</span>
+                    <div class="password-strength" id="password-strength"></div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="confirm_password">
+                        Confirm Password
+                        <span class="required">*</span>
+                    </label>
+                    <input
+                        class="form-input"
+                        id="confirm_password"
+                        name="confirm_password"
+                        type="password"
+                        placeholder="Re-enter your password"
+                        required
+                    />
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary btn-lg">Create Account</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+// Password strength indicator
+const passwordInput = document.getElementById('password');
+const strengthDiv = document.getElementById('password-strength');
+
+passwordInput?.addEventListener('input', (e) => {
+    const pwd = e.target.value;
+    let strength = 0;
+    let label = '';
+    let className = '';
+
+    if (pwd.length >= 8) strength++;
+    if (pwd.length >= 12) strength++;
+    if (/[a-z]/.test(pwd) && /[A-Z]/.test(pwd)) strength++;
+    if (/[0-9]/.test(pwd)) strength++;
+    if (/[^a-zA-Z0-9]/.test(pwd)) strength++;
+
+    if (pwd.length === 0) {
+        strengthDiv.innerHTML = '';
+        return;
+    }
+
+    if (strength <= 2) {
+        label = 'Weak';
+        className = 'strength-weak';
+    } else if (strength <= 3) {
+        label = 'Fair';
+        className = 'strength-fair';
+    } else if (strength <= 4) {
+        label = 'Good';
+        className = 'strength-good';
+    } else {
+        label = 'Strong';
+        className = 'strength-strong';
+    }
+
+    strengthDiv.innerHTML = `<div class="strength-bar ${className}"><span>${label}</span></div>`;
+});
+
+// Password confirmation validation
+const confirmInput = document.getElementById('confirm_password');
+confirmInput?.addEventListener('input', (e) => {
+    if (e.target.value !== passwordInput.value) {
+        e.target.setCustomValidity('Passwords do not match');
+    } else {
+        e.target.setCustomValidity('');
+    }
+});
+</script>
+{{end}}

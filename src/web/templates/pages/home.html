@@ -1,0 +1,151 @@
+{{define "content"}}
+<div class="container home-page">
+    <section class="hero">
+        <h1>{{.ServerTitle}}</h1>
+        <p class="tagline">{{.ServerTagline}}</p>
+        <p class="description">{{.ServerDescription}}</p>
+
+        <div class="hero-actions">
+            {{if .IsAuthenticated}}
+            <a href="/user" class="btn btn-primary btn-lg">Go to Dashboard</a>
+            {{else}}
+            <a href="/auth/login" class="btn btn-primary btn-lg">Get Started</a>
+            {{if .RegistrationEnabled}}
+            <a href="/auth/register" class="btn btn-secondary btn-lg">Sign Up</a>
+            {{end}}
+            {{end}}
+        </div>
+    </section>
+
+    <section class="features">
+        <div class="feature-grid">
+            <div class="feature-card">
+                <div class="feature-icon">🎲</div>
+                <h3>Random Git Messages</h3>
+                <p>Get funny and sarcastic git commit messages for your projects. Over 5000+ unique messages!</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🔄</div>
+                <h3>No Duplicates</h3>
+                <p>Our smart cycle system ensures you never get the same message twice until all messages are used.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🚀</div>
+                <h3>Simple API</h3>
+                <p>Easy to use REST API with both JSON and plain text responses. Perfect for automation.</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="api-demo">
+        <h2>Try It Now</h2>
+        <div class="demo-container">
+            <div class="demo-output">
+                <h3>Random Commit Message:</h3>
+                <div id="random-message" class="message-display">
+                    <p class="loading">Click the button to get a message...</p>
+                </div>
+            </div>
+            <button id="get-random" class="btn btn-primary btn-lg">Get Random Message</button>
+        </div>
+
+        <div class="api-example">
+            <h3>API Endpoints:</h3>
+            <div class="endpoint-list">
+                <div class="endpoint">
+                    <code>GET /api/v1/random</code>
+                    <span>Get random message (JSON)</span>
+                </div>
+                <div class="endpoint">
+                    <code>GET /api/v1/random.txt</code>
+                    <span>Get random message (text)</span>
+                </div>
+                <div class="endpoint">
+                    <code>GET /api/v1/messages.json</code>
+                    <span>Get all messages</span>
+                </div>
+                <div class="endpoint">
+                    <code>GET /api/v1/stats</code>
+                    <span>Get usage statistics</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="stats-section">
+        <h2>Current Stats</h2>
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="total-messages">-</div>
+                <div class="stat-label">Total Messages</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="used-in-cycle">-</div>
+                <div class="stat-label">Used This Cycle</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="remaining">-</div>
+                <div class="stat-label">Remaining</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="cycle-number">-</div>
+                <div class="stat-label">Cycle Number</div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<script>
+// Load stats on page load
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        const res = await fetch('/api/v1/stats');
+        const data = await res.json();
+        if (data.success) {
+            document.getElementById('total-messages').textContent = data.data.total_messages.toLocaleString();
+            document.getElementById('used-in-cycle').textContent = data.data.used_in_cycle.toLocaleString();
+            document.getElementById('remaining').textContent = data.data.remaining_in_cycle.toLocaleString();
+            document.getElementById('cycle-number').textContent = data.data.cycle;
+        }
+    } catch (e) {
+        console.error('Failed to load stats:', e);
+    }
+});
+
+// Get random message button
+document.getElementById('get-random')?.addEventListener('click', async () => {
+    const btn = document.getElementById('get-random');
+    const display = document.getElementById('random-message');
+
+    btn.disabled = true;
+    btn.classList.add('loading');
+    display.innerHTML = '<p class="loading">Loading...</p>';
+
+    try {
+        const res = await fetch('/api/v1/random');
+        const data = await res.json();
+
+        if (data.success) {
+            display.innerHTML = `
+                <p class="message">${data.data.content}</p>
+                <div class="message-meta">
+                    <span>Message ID: ${data.data.id}</span>
+                    <span>Remaining: ${data.meta.remaining_in_cycle}</span>
+                </div>
+            `;
+
+            // Update stats
+            document.getElementById('used-in-cycle').textContent = data.meta.used_in_cycle.toLocaleString();
+            document.getElementById('remaining').textContent = data.meta.remaining_in_cycle.toLocaleString();
+        } else {
+            display.innerHTML = `<p class="error">Error: ${data.error.message}</p>`;
+        }
+    } catch (e) {
+        display.innerHTML = `<p class="error">Failed to fetch message</p>`;
+    } finally {
+        btn.disabled = false;
+        btn.classList.remove('loading');
+    }
+});
+</script>
+{{end}}

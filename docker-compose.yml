@@ -1,0 +1,23 @@
+services:
+  gitmessages:
+    image: ghcr.io/apimgr/gitmessages:latest
+    container_name: gitmessages
+    restart: unless-stopped
+    environment:
+      - DB_TYPE=sqlite
+    volumes:
+      - ./rootfs/data/gitmessages:/data
+      - ./rootfs/config/gitmessages:/config
+    ports:
+      # Development (random port 64000-64999)
+      - "127.0.0.1:64080:80"
+      # Production (uncomment)
+      # - "172.17.0.1:64080:80"
+    networks:
+      - gitmessages
+
+networks:
+  gitmessages:
+    name: gitmessages
+    driver: bridge
+    external: false

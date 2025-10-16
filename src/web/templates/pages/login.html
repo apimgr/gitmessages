@@ -1,0 +1,79 @@
+{{define "content"}}
+<div class="container auth-page">
+    <div class="auth-container">
+        <div class="auth-header">
+            <h1>Welcome Back</h1>
+            <p>Sign in to your account</p>
+        </div>
+
+        <form class="auth-form" method="POST" action="/auth/login">
+            {{if .Error}}
+            <div class="alert alert-error">
+                <div class="alert-icon">❌</div>
+                <div class="alert-content">
+                    <div class="alert-message">{{.Error}}</div>
+                </div>
+            </div>
+            {{end}}
+
+            {{if .Success}}
+            <div class="alert alert-success">
+                <div class="alert-icon">✅</div>
+                <div class="alert-content">
+                    <div class="alert-message">{{.Success}}</div>
+                </div>
+            </div>
+            {{end}}
+
+            <div class="form-group">
+                <label class="form-label" for="username">
+                    Username or Email
+                </label>
+                <input
+                    class="form-input"
+                    id="username"
+                    name="username"
+                    type="text"
+                    placeholder="Enter your username or email"
+                    value="{{.Username}}"
+                    required
+                    autofocus
+                />
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="password">
+                    Password
+                </label>
+                <input
+                    class="form-input"
+                    id="password"
+                    name="password"
+                    type="password"
+                    placeholder="Enter your password"
+                    required
+                />
+            </div>
+
+            <div class="form-group form-checkbox">
+                <label>
+                    <input type="checkbox" name="remember" value="1" checked>
+                    <span>Remember me for 30 days</span>
+                </label>
+            </div>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary btn-lg btn-block">Sign In</button>
+            </div>
+
+            <div class="form-links">
+                <a href="/auth/password/reset">Forgot password?</a>
+                {{if .RegistrationEnabled}}
+                <span>·</span>
+                <a href="/auth/register">Create account</a>
+                {{end}}
+            </div>
+        </form>
+    </div>
+</div>
+{{end}}

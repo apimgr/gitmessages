@@ -1,0 +1,41 @@
+# Binaries
+binaries/
+release/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Dependencies
+vendor/
+node_modules/
+__pycache__/
+
+# Environment (should not exist but ignore)
+.env
+.env.*
+
+# Temporary
+tmp/
+temp/
+*.tmp

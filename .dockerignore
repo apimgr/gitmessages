@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+
+# Binaries
+binaries/
+release/
+
+# Tests
+tests/
+
+# Documentation
+docs/
+*.md
+
+# CI/CD
+.github/
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+
+# Databases (runtime)
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment
+.env
+.env.*

@@ -1,0 +1,114 @@
+{{define "content"}}
+<div class="container dashboard-page">
+    <div class="dashboard-header">
+        <h1>Welcome, {{.DisplayName}}!</h1>
+        <p>Manage your account and API access</p>
+    </div>
+
+    <div class="quick-actions">
+        <h2>Quick Actions</h2>
+        <div class="action-grid">
+            <a href="/user/profile" class="action-card">
+                <div class="action-icon">👤</div>
+                <h3>Edit Profile</h3>
+                <p>Update your information</p>
+            </a>
+            <a href="/user/tokens" class="action-card">
+                <div class="action-icon">🔑</div>
+                <h3>API Tokens</h3>
+                <p>Manage access tokens</p>
+            </a>
+            <a href="/user/settings" class="action-card">
+                <div class="action-icon">⚙️</div>
+                <h3>Settings</h3>
+                <p>Configure preferences</p>
+            </a>
+            <a href="/user/sessions" class="action-card">
+                <div class="action-icon">📱</div>
+                <h3>Sessions</h3>
+                <p>Active devices</p>
+            </a>
+        </div>
+    </div>
+
+    <div class="dashboard-content">
+        <div class="dashboard-row">
+            <div class="dashboard-col">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Account Overview</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="info-list">
+                            <div class="info-item">
+                                <span class="info-label">Username:</span>
+                                <span class="info-value">{{.Username}}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Email:</span>
+                                <span class="info-value">{{.Email}}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Role:</span>
+                                <span class="info-value badge badge-user">{{.Role}}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Member Since:</span>
+                                <span class="info-value">{{.CreatedAt}}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Last Login:</span>
+                                <span class="info-value">{{.LastLogin}}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="dashboard-col">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>API Usage</h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="stat-list">
+                            <div class="stat-item">
+                                <div class="stat-value">{{.TokenCount}}</div>
+                                <div class="stat-label">Active Tokens</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value">{{.SessionCount}}</div>
+                                <div class="stat-label">Active Sessions</div>
+                            </div>
+                        </div>
+                        <a href="/user/tokens" class="btn btn-secondary btn-sm">Manage Tokens</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h3>Security Status</h3>
+            </div>
+            <div class="card-body">
+                <div class="security-checks">
+                    <div class="security-check {{if .PasswordStrong}}check-pass{{else}}check-warn{{end}}">
+                        <span class="check-icon">{{if .PasswordStrong}}✓{{else}}⚠{{end}}</span>
+                        <span class="check-label">Password Strength</span>
+                        <span class="check-status">{{if .PasswordStrong}}Strong{{else}}Consider updating{{end}}</span>
+                    </div>
+                    <div class="security-check {{if .TwoFactorEnabled}}check-pass{{else}}check-warn{{end}}">
+                        <span class="check-icon">{{if .TwoFactorEnabled}}✓{{else}}⚠{{end}}</span>
+                        <span class="check-label">Two-Factor Authentication</span>
+                        <span class="check-status">{{if .TwoFactorEnabled}}Enabled{{else}}Disabled{{end}}</span>
+                        {{if not .TwoFactorEnabled}}
+                        <a href="/user/security" class="check-action">Enable</a>
+                        {{end}}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{{end}}

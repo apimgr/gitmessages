@@ -1,0 +1,146 @@
+{{define "content"}}
+<div class="container setup-page">
+    <div class="setup-container">
+        <div class="setup-header">
+            <h1>Create Administrator Account</h1>
+            <p>Step 2 of 3: Set up system administrator</p>
+        </div>
+
+        <div class="setup-steps">
+            <div class="step complete">
+                <div class="step-number">✓</div>
+                <div class="step-label">Create User Account</div>
+            </div>
+            <div class="step active">
+                <div class="step-number">2</div>
+                <div class="step-label">Create Administrator</div>
+            </div>
+            <div class="step">
+                <div class="step-number">3</div>
+                <div class="step-label">Configure Server</div>
+            </div>
+        </div>
+
+        <div class="setup-content">
+            <div class="info-box">
+                <p><strong>Almost there!</strong> Now let's create the administrator account for system management.</p>
+                <p>The administrator can access /admin routes but cannot access user features. This separation ensures security.</p>
+            </div>
+
+            <form class="setup-form" method="POST" action="/user/setup/admin">
+                {{if .Error}}
+                <div class="alert alert-error">
+                    <div class="alert-icon">❌</div>
+                    <div class="alert-content">
+                        <div class="alert-message">{{.Error}}</div>
+                    </div>
+                </div>
+                {{end}}
+
+                <div class="form-group">
+                    <label class="form-label" for="username">
+                        Administrator Username
+                    </label>
+                    <input
+                        class="form-input"
+                        id="username"
+                        name="username"
+                        type="text"
+                        value="administrator"
+                        readonly
+                        disabled
+                    />
+                    <span class="form-hint">Administrator username is fixed for security</span>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="password">
+                        Administrator Password
+                        <span class="required">*</span>
+                    </label>
+                    <input
+                        class="form-input"
+                        id="password"
+                        name="password"
+                        type="password"
+                        placeholder="Choose a strong password (min 12 chars)"
+                        required
+                        minlength="12"
+                    />
+                    <span class="form-hint">Minimum 12 characters for administrator accounts</span>
+                    <div class="password-strength" id="password-strength"></div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="confirm_password">
+                        Confirm Password
+                        <span class="required">*</span>
+                    </label>
+                    <input
+                        class="form-input"
+                        id="confirm_password"
+                        name="confirm_password"
+                        type="password"
+                        placeholder="Re-enter administrator password"
+                        required
+                    />
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary btn-lg">Create Administrator</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+// Password strength indicator (same as register page)
+const passwordInput = document.getElementById('password');
+const strengthDiv = document.getElementById('password-strength');
+
+passwordInput?.addEventListener('input', (e) => {
+    const pwd = e.target.value;
+    let strength = 0;
+    let label = '';
+    let className = '';
+
+    if (pwd.length >= 12) strength++;
+    if (pwd.length >= 16) strength++;
+    if (/[a-z]/.test(pwd) && /[A-Z]/.test(pwd)) strength++;
+    if (/[0-9]/.test(pwd)) strength++;
+    if (/[^a-zA-Z0-9]/.test(pwd)) strength++;
+
+    if (pwd.length === 0) {
+        strengthDiv.innerHTML = '';
+        return;
+    }
+
+    if (strength <= 2) {
+        label = 'Weak';
+        className = 'strength-weak';
+    } else if (strength <= 3) {
+        label = 'Fair';
+        className = 'strength-fair';
+    } else if (strength <= 4) {
+        label = 'Good';
+        className = 'strength-good';
+    } else {
+        label = 'Strong';
+        className = 'strength-strong';
+    }
+
+    strengthDiv.innerHTML = `<div class="strength-bar ${className}"><span>${label}</span></div>`;
+});
+
+// Password confirmation
+const confirmInput = document.getElementById('confirm_password');
+confirmInput?.addEventListener('input', (e) => {
+    if (e.target.value !== passwordInput.value) {
+        e.target.setCustomValidity('Passwords do not match');
+    } else {
+        e.target.setCustomValidity('');
+    }
+});
+</script>
+{{end}}
