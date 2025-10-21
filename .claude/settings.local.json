@@ -1,26 +1,69 @@
 {
+  "model": "sonnet[1m]",
   "permissions": {
     "allow": [
+      "Read(**)",
+      "Write(**)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
       "Bash(mkdir:*)",
-      "Bash(go mod init:*)",
-      "Bash(go get:*)",
-      "Bash(go mod:*)",
-      "Bash(go build:*)",
+      "Bash(tree:*)",
+      "Bash(go:*)",
       "Bash(curl:*)",
-      "Bash(for i in {1..5})",
-      "Bash(do curl -s http://localhost:8080/api/v1/random.txt)",
-      "Bash(done)",
-      "Bash(pkill:*)",
-      "Bash(cat:*)",
+      "Bash(wget:*)",
+      "Bash(echo:*)",
       "Bash(make:*)",
-      "Bash(do curl -s http://localhost:8080/api/v1/health.txt)",
-      "Bash(break)",
-      "Bash(do curl -s http://localhost:8080/api/v1/stats)",
-      "Bash(do curl -s http://localhost:8080/api/v1/messages.json)",
-      "Bash(do curl -s http://localhost:8080/)",
-      "Bash(./gitmessages:*)"
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(awk:*)",
+      "Bash(sed:*)",
+      "Bash(cat:*)",
+      "Bash(chmod:*)",
+      "Bash(chown:*)",
+      "Bash(docker:*)",
+      "Bash(docker-compose:*)",
+      "Bash(incus:*)",
+      "Bash(git:*)",
+      "Bash(pkill:*)",
+      "Bash(rm:*)",
+      "Bash(mv:*)",
+      "Bash(cp:*)",
+      "Bash(ls:*)",
+      "Bash(pwd:*)",
+      "Bash(cd:*)",
+      "Bash(head:*)",
+      "Bash(timeout:*)",
+      "Bash(do:*)",
+      "Bash(ln:*)",
+      "Bash(test:*)",
+      "Bash(do)",
+      "Bash(sort:*)",
+      "Bash(paste:*)",
+      "Bash(*:*)"
     ],
-    "deny": [],
+    "deny": [
+      "Bash(git commit:*)"
+    ],
     "ask": []
+  },
+  "preferences": {
+    "auto_commit": false
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write(**)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if grep -qi 'anthropic\\|claude' \"$file\" 2>/dev/null; then echo 'Error: File contains vendor names (Anthropic/Claude)' >&2; exit 1; fi"
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "MAX_THINKING_TOKENS": "1000"
   }
 }
+
