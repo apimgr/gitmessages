@@ -1,0 +1,25 @@
+name: gitmessages
+
+services:
+  gitmessages:
+    image: ghcr.io/apimgr/gitmessages:latest
+    container_name: gitmessages
+    restart: unless-stopped
+    environment:
+      # Hardcoded with sane defaults - NO .env files
+      - MODE=production
+      - TZ=America/New_York
+      # ENABLE_TOR=true is default, no need to specify
+    ports:
+      # Production: bound to Docker bridge only
+      - "172.17.0.1:64580:80"
+    volumes:
+      - ./rootfs/config/gitmessages:/config
+      - ./rootfs/data/gitmessages:/data
+    networks:
+      - gitmessages
+
+networks:
+  gitmessages:
+    name: gitmessages
+    external: false
