@@ -161,7 +161,7 @@ make run-dev
 ├── scripts/          # Installation scripts
 ├── tests/            # Test files
 ├── binaries/         # Built binaries
-├── rootfs/           # Docker volumes
+├── volumes/           # Docker volumes
 ├── Makefile          # Build automation
 ├── Dockerfile        # Container definition
 └── docker-compose.yml
