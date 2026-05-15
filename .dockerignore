@@ -1,48 +1,45 @@
 # Git
-.git
+.git/
 .gitignore
+.gitattributes
 
-# Binaries
+# CI/CD workflows (not needed in container)
+.github/
+.gitea/
+.forgejo/
+.gitlab-ci.yml
+Jenkinsfile
+
+# Runtime volume data (NEVER include in image)
+volumes/
+
+# Build output (container builds from source)
 binaries/
-release/
+releases/
 
-# Tests
+# Tests (not needed in production image)
 tests/
 
-# Documentation
+# Documentation (not needed in container)
 docs/
 *.md
 
-# CI/CD
-.github/
-
-# Docker
-Dockerfile
-docker-compose.yml
-.dockerignore
-
-# Temporary
-tmp/
-temp/
-*.tmp
-
-# OS
-.DS_Store
-Thumbs.db
+# Build files (not needed - build happens inside Docker)
+Makefile
 
 # IDE
-.vscode/
 .idea/
+.vscode/
 *.swp
+*.swo
 
-# Logs
-*.log
+# AI config directories
+.claude/
+.cursor/
+.aider/
+.ai/
+.windsurf/
 
-# Databases (runtime)
-*.db
-*.sqlite
-*.sqlite3
-
-# Environment
-.env
-.env.*
+# Coverage
+coverage.out
+coverage.html
