@@ -175,3 +175,18 @@ dist
 ### Node Patch ###
 .webpack/
 .svelte-kit
+
+### Project-Specific ###
+binaries/
+releases/
+volumes/
+.idea/
+.vscode/
+*.swp
+*.swo
+.claude/settings.local.json
+.cursor/
+.aider/
+.ai/
+.windsurf/
+CLAUDE.local.md
