@@ -14,8 +14,6 @@ const (
 	Production Mode = "production"
 	// Development mode - optimized for development with debugging features
 	Development Mode = "development"
-
-	appName = "gitmessages"
 )
 
 var (

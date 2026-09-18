@@ -27,20 +27,6 @@ type ServerConfig struct {
 	UpdateBranch string        `yaml:"update_branch"`
 	Metrics      MetricsConfig `yaml:"metrics"`
 	Logging      LoggingConfig `yaml:"logging"`
-	Admin        AdminConfig   `yaml:"admin"`
-	Session      SessionConfig `yaml:"session"`
-}
-
-// AdminConfig contains admin authentication settings
-type AdminConfig struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
-	APIToken string `yaml:"api_token"`
-}
-
-// SessionConfig contains session settings
-type SessionConfig struct {
-	Timeout int `yaml:"timeout"`
 }
 
 // MetricsConfig contains metrics settings
@@ -107,14 +93,6 @@ func DefaultConfig() *Config {
 			Logging: LoggingConfig{
 				AccessFormat: "apache",
 				Level:        "info",
-			},
-			Admin: AdminConfig{
-				Username: "admin",
-				Password: "",
-				APIToken: "",
-			},
-			Session: SessionConfig{
-				Timeout: 3600,
 			},
 		},
 		WebUI: WebUIConfig{
@@ -233,6 +211,8 @@ server:
   port: "%s"
   fqdn: "%s"
   address: "%s"
+  mode: "%s"
+  update_branch: "%s"
 
   metrics:
     enabled: %t
@@ -263,6 +243,8 @@ web-security:
 		cfg.Server.Port,
 		cfg.Server.FQDN,
 		cfg.Server.Address,
+		cfg.Server.Mode,
+		cfg.Server.UpdateBranch,
 		cfg.Server.Metrics.Enabled,
 		cfg.Server.Metrics.Endpoint,
 		cfg.Server.Metrics.IncludeSystem,

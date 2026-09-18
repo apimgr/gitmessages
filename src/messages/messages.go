@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
-	"time"
 )
 
 //go:embed data/messages.json
@@ -30,9 +29,6 @@ func New() (*Manager, error) {
 	if err := m.loadMessages(); err != nil {
 		return nil, err
 	}
-
-	// Seed random
-	rand.Seed(time.Now().UnixNano())
 
 	return m, nil
 }

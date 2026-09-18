@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/apimgr/gitmessages/src/admin"
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/messages"
 	"github.com/apimgr/gitmessages/src/paths"
@@ -26,8 +25,6 @@ var (
 	Commit    = "unknown"
 	BuildDate = "unknown"
 )
-
-const projectName = "gitmessages"
 
 var msgManager *messages.Manager
 var cfg *config.Config
@@ -187,23 +184,6 @@ func main() {
 	// Setup HTTP server
 	mux := http.NewServeMux()
 	setupRoutes(mux)
-
-	// Setup admin handler
-	sessionTimeout := 3600
-	if cfg.Server.Session.Timeout > 0 {
-		sessionTimeout = cfg.Server.Session.Timeout
-	}
-	adminHandler := admin.NewHandler(
-		cfg.Server.Admin.Username,
-		cfg.Server.Admin.Password,
-		cfg.Server.Admin.APIToken,
-		sessionTimeout,
-		false, // SSL enabled
-		Version,
-		Commit,
-		BuildDate,
-	)
-	adminHandler.RegisterRoutes(mux)
 
 	server := &http.Server{
 		Addr:         listen,

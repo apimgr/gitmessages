@@ -14,6 +14,14 @@ const (
 	orgName = "apimgr"
 )
 
+// capitalize upper-cases the first rune of an ASCII word, leaving the rest unchanged.
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
 // ServiceType represents the type of service manager
 type ServiceType int
 
@@ -359,7 +367,7 @@ func installWindows() error {
 	}
 
 	// Create service using sc.exe
-	displayName := strings.Title(appName) + " API"
+	displayName := capitalize(appName) + " API"
 	cmd := exec.Command("sc.exe", "create", appName,
 		"binPath=", binaryPath,
 		"DisplayName=", displayName,
