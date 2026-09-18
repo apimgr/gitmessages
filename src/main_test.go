@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -511,4 +512,72 @@ func TestServiceDispatch_Status(t *testing.T) {
 	serviceRestart()
 	serviceReload()
 	serviceStatus()
+}
+
+// TestServiceInstallUninstallDisable exercises the real systemd unit file
+// writer/remover. systemctl itself is absent in the test container, but
+// runCommand only logs on failure rather than exiting, so the file-write and
+// file-remove paths are still exercised end to end.
+func TestServiceInstallUninstallDisable(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("serviceInstall/Uninstall/Disable target Linux systemd paths")
+	}
+	if err := os.MkdirAll("/etc/systemd/system", 0755); err != nil {
+		t.Fatalf("MkdirAll(/etc/systemd/system): %v", err)
+	}
+	t.Cleanup(func() { os.Remove("/etc/systemd/system/gitmessages.service") })
+
+	configDir := t.TempDir()
+	serviceInstall(configDir)
+
+	data, err := os.ReadFile("/etc/systemd/system/gitmessages.service")
+	if err != nil {
+		t.Fatalf("service unit file missing after serviceInstall: %v", err)
+	}
+	if !strings.Contains(string(data), configDir) {
+		t.Errorf("service unit file does not reference configDir %q", configDir)
+	}
+
+	serviceDisable()
+	serviceUninstall()
+
+	if _, err := os.Stat("/etc/systemd/system/gitmessages.service"); !os.IsNotExist(err) {
+		t.Errorf("service unit file still exists after serviceUninstall, err=%v", err)
+	}
+}
+
+// TestMaintenanceBackupRestore exercises the real tar-based backup/restore
+// cycle against a uniquely named directory so the restore's "-C /" target
+// only ever touches a path this test creates and cleans up itself.
+func TestMaintenanceBackupRestore(t *testing.T) {
+	srcDir, err := os.MkdirTemp("", "gitmessages-restoretest-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(srcDir)
+
+	want := "mode: test\n"
+	if err := os.WriteFile(filepath.Join(srcDir, "config.yaml"), []byte(want), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	backupFile := filepath.Join(t.TempDir(), "backup.tar.gz")
+	maintenanceBackup(srcDir, backupFile)
+
+	if _, err := os.Stat(backupFile); err != nil {
+		t.Fatalf("backup file missing after maintenanceBackup: %v", err)
+	}
+
+	restoredDir := "/" + filepath.Base(srcDir)
+	t.Cleanup(func() { os.RemoveAll(restoredDir) })
+
+	maintenanceRestore(backupFile, srcDir)
+
+	data, err := os.ReadFile(filepath.Join(restoredDir, "config.yaml"))
+	if err != nil {
+		t.Fatalf("restored file missing after maintenanceRestore: %v", err)
+	}
+	if string(data) != want {
+		t.Errorf("restored content = %q, want %q", data, want)
+	}
 }

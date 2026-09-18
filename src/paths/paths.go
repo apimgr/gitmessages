@@ -31,20 +31,31 @@ func GetDirectories() Directories {
 	}
 }
 
+// isContainer is indirected through a variable so tests can force the
+// non-container branch of GetDefaultDirs even when the test process itself
+// is running inside a container (as it always is under this project's
+// Docker-only build/test workflow).
+var isContainer = IsRunningInContainer
+
+// isRootUser is indirected through a variable so tests can force both the
+// root and non-root branches of GetDefaultDirs regardless of the actual
+// privileges of the test process.
+var isRootUser = func() bool {
+	if runtime.GOOS == "windows" {
+		return os.Getenv("USERDOMAIN") == os.Getenv("COMPUTERNAME")
+	}
+	return os.Geteuid() == 0
+}
+
 // GetDefaultDirs returns OS-specific default directories based on privileges
 func GetDefaultDirs(projectName string) (configDir, dataDir, logsDir string) {
 	// Check if running in container
-	if IsRunningInContainer() {
+	if isContainer() {
 		return "/config", "/data", "/logs"
 	}
 
 	// Check if running as root/admin
-	isRoot := false
-	if runtime.GOOS == "windows" {
-		isRoot = os.Getenv("USERDOMAIN") == os.Getenv("COMPUTERNAME")
-	} else {
-		isRoot = os.Geteuid() == 0
-	}
+	isRoot := isRootUser()
 
 	if isRoot {
 		switch runtime.GOOS {
