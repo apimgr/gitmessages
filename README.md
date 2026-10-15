@@ -1,191 +1,91 @@
-# GitMessages
+# Git Messages
 
-A universal server template for managing git commit messages and conventions.
-
-## Quick Installation
-
-### Linux/macOS
-
-```bash
-# Download and run installer
-curl -fsSL https://raw.githubusercontent.com/apimgr/gitmessages/main/scripts/install.sh | bash
-```
-
-### Windows
-
-```powershell
-# Download and run installer (PowerShell as Administrator)
-iwr -useb https://raw.githubusercontent.com/apimgr/gitmessages/main/scripts/windows.ps1 | iex
-```
-
-### Docker
-
-```bash
-# Using docker-compose
-docker-compose up -d
-
-# Or using docker directly
-docker run -d \
-  --name gitmessages \
-  -p 80:80 \
-  -v ./data:/data \
-  -v ./config:/config \
-  ghcr.io/apimgr/gitmessages:latest
-```
-
-## Usage
-
-After installation, the server will automatically start and be accessible at:
-- **HTTP**: `http://your-server-ip:port`
-- **HTTPS**: `https://your-server-ip:port` (if configured)
-
-### First Run Setup
-
-1. Open your browser to the server address
-2. Create your user account (this will be the owner)
-3. Create the administrator account (username: "administrator")
-4. Configure server settings in the admin panel
-
-### CLI Commands
-
-```bash
-# Show version
-gitmessages --version
-
-# Show status
-gitmessages --status
-
-# Show help
-gitmessages --help
-
-# Set custom port
-gitmessages --port 8080
-
-# Set dual ports (HTTP and HTTPS)
-gitmessages --port "8080,8443"
-
-# Development mode
-gitmessages --dev
-```
+Git Messages is a curated reference and builder for git commit message conventions. Browse commit types, emoji mappings, templates, and examples, or build a message using Conventional Commits or Angular formatting. The catalog is embedded in the Go binaries; the service has no accounts, submissions, or runtime data store.
 
 ## Features
 
-- ✅ Single binary with all assets embedded
-- ✅ Multiple database support (SQLite, MySQL, PostgreSQL, MSSQL)
-- ✅ Automatic Let's Encrypt SSL/TLS certificates
-- ✅ Web-based administration interface
-- ✅ RESTful API with Swagger documentation
-- ✅ GraphQL endpoint
-- ✅ Built-in scheduler for automated tasks
-- ✅ Comprehensive health monitoring
-- ✅ Automatic backups
-- ✅ PWA support
-- ✅ Dark/Light theme
-- ✅ Mobile responsive
-- ✅ Multi-platform support (Linux, macOS, Windows, BSD)
+- Commit types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`, `ci`, `build`, and `revert`
+- Conventional Commits and Angular convention references
+- Feature, bug-fix, release, hotfix, and documentation templates
+- Random example messages
+- Server-rendered, mobile-friendly web UI and installable PWA
+- Versioned REST API, OpenAPI JSON, and GraphQL
+- Companion `gitmessages-cli` for shell use
 
-## API Documentation
+## Install
 
-Interactive API documentation is available at:
-- **Swagger UI**: `http://your-server:port/api/docs`
-- **GraphQL Playground**: `http://your-server:port/api/graphql`
+Download the server and CLI binaries for your operating system from the [GitHub Releases page](https://github.com/apimgr/gitmessages/releases). For containers, use `ghcr.io/apimgr/gitmessages:latest`.
 
-## Health Check
+## Run the server
 
-Monitor server health at:
-- **JSON**: `http://your-server:port/healthz`
-- **API**: `http://your-server:port/api/v1/health`
-- **Text**: `http://your-server:port/api/v1/health.txt`
+```sh
+gitmessages --port 8080 --address 127.0.0.1
+```
+
+Open `http://127.0.0.1:8080/`. The application uses a read-only embedded catalog; it does not need a database or operator web panel. Server settings are read from `server.yml` in the configuration directory selected by `--config` or `CONFIG_DIR`.
+
+## Web pages
+
+- `/` — product home
+- `/types` — commit type reference
+- `/templates` — message templates
+- `/builder` — interactive commit message builder
+- `/server/about`, `/server/help`, `/server/healthz`, `/server/privacy`, `/server/terms` — server information pages
+- `/server/docs/swagger` — REST API reference
+- `/server/docs/graphql` — GraphQL query guide
+
+## REST API
+
+The API is public and read-only except for its stateless message builder. Responses use JSON envelopes with `ok` and `data` fields.
+
+```sh
+curl http://127.0.0.1:8080/api/v1/types
+curl http://127.0.0.1:8080/api/v1/conventions
+curl http://127.0.0.1:8080/api/v1/templates
+curl http://127.0.0.1:8080/api/v1/messages/random
+curl -X POST http://127.0.0.1:8080/api/v1/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"feat","scope":"api","description":"add message search"}'
+```
+
+OpenAPI JSON is served at `/api/v1/server/swagger` (also `/api/swagger`). GraphQL accepts GET and POST requests at `/graphql`, `/api/v1/server/graphql`, and `/api/graphql`.
+
+## CLI
+
+The CLI uses `--server`, `GITMESSAGES_SERVER_PRIMARY`, or its user configuration at `~/.config/apimgr/gitmessages/cli.yml`.
+
+```sh
+gitmessages-cli --server https://gitmessages.example types
+gitmessages-cli --server https://gitmessages.example random
+git commit -m "$(gitmessages-cli random)"
+gitmessages-cli --server https://gitmessages.example build --type feat --scope api --description 'add message search'
+```
+
+Use `--json` before the command to print JSON output.
+
+## Build and test
+
+Go commands run through the `casjaysdev/go:latest` container using Make targets:
+
+```sh
+make dev
+make local
+make build
+make test
+```
 
 ## Configuration
 
-All configuration is stored in the database and managed through the web interface. No configuration files are needed.
+Configuration is optional. Server defaults are documented in `src/config/config.go`; no database or account settings are used by this product. The CLI creates its config directory with user-only permissions and writes `cli.yml` with mode `0600`.
 
-### Database Options
+## Security and privacy
 
-- **SQLite** (default): No setup required, works out of the box
-- **MySQL/MariaDB**: Configure in admin settings
-- **PostgreSQL**: Configure in admin settings
-- **MSSQL**: Configure in admin settings
-
-## Backup & Restore
-
-Automatic backups run daily at 3:00 AM. Backups include:
-- Database (daily, weekly, monthly rotation)
-- User data and uploaded files
-- System settings
-
-To restore from backup, use the admin interface or CLI:
-
-```bash
-./scripts/restore.sh /path/to/backup.tar.gz
-```
-
-## Security
-
-- All inputs are validated and sanitized
-- Secure session management (30-day persistent sessions)
-- Rate limiting on all endpoints
-- API token authentication
-- Comprehensive audit logging
-- Security headers on all responses
-- Optional 2FA support
+The catalog is embedded and no user-submitted content is stored. All builder fields are validated on the server. Public endpoints include security headers, CORS, request size limits, and per-client rate limiting. The service does not call external services at runtime.
 
 ## Development
 
-### Build from Source
-
-```bash
-# Clone repository
-git clone https://github.com/apimgr/gitmessages.git
-cd gitmessages
-
-# Build all platforms
-make build
-
-# Build for development
-make dev
-
-# Run tests
-make test
-
-# Run in development mode with hot reload
-make run-dev
-```
-
-### Project Structure
-
-```
-.
-├── src/              # All source code
-├── scripts/          # Installation scripts
-├── tests/            # Test files
-├── binaries/         # Built binaries
-├── volumes/           # Docker volumes
-├── Makefile          # Build automation
-├── Dockerfile        # Container definition
-└── docker-compose.yml
-```
-
-### Requirements
-
-- Go 1.21 or later
-- Make
-- Docker (optional)
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+See [the developer documentation](docs/development.md) for repository structure and contribution guidance.
 
 ## License
 
-MIT License - see [LICENSE.md](LICENSE.md) for details.
-
-## Support
-
-- **Issues**: https://github.com/apimgr/gitmessages/issues
-- **Documentation**: https://github.com/apimgr/gitmessages/wiki
-
----
-
-Built with ❤️ following the [Universal Server Template Specification v1.0](CLAUDE.md)
+MIT. See [LICENSE.md](LICENSE.md).
