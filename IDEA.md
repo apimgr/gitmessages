@@ -37,6 +37,8 @@ client_binary: gitmessages-cli
 - No paid tiers, no API keys, no rate-limited access tiers
 - No git repository integration (read-only reference provider only)
 
+**Shared server capabilities outside this product's scope:** database persistence, email, GeoIP, scheduled catalog jobs, and backup/restore do not apply. The catalog is immutable release data embedded in the binary, the message builder is stateless, no user data is collected, and no external runtime services are called. Operational availability controls such as health checks and rate limiting remain applicable.
+
 ### Roles & permissions
 
 There are no user roles. All endpoints are public and require no authentication.

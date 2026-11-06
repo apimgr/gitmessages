@@ -9,6 +9,7 @@ Git Messages is a curated reference and builder for git commit message conventio
 - Feature, bug-fix, release, hotfix, and documentation templates
 - Random example messages
 - Server-rendered, mobile-friendly web UI and installable PWA
+- English, Spanish, Chinese, French, Arabic, German, and Japanese interface translations
 - Versioned REST API, OpenAPI JSON, and GraphQL
 - Companion `gitmessages-cli` for shell use
 
@@ -39,11 +40,13 @@ Open `http://127.0.0.1:8080/`. The application uses a read-only embedded catalog
 The API is public and read-only except for its stateless message builder. Responses use JSON envelopes with `ok` and `data` fields.
 
 ```sh
-curl http://127.0.0.1:8080/api/v1/types
-curl http://127.0.0.1:8080/api/v1/conventions
-curl http://127.0.0.1:8080/api/v1/templates
-curl http://127.0.0.1:8080/api/v1/messages/random
-curl -X POST http://127.0.0.1:8080/api/v1/messages \
+curl -q -LSsf http://127.0.0.1:8080/api/v1/types
+curl -q -LSsf http://127.0.0.1:8080/api/v1/conventions
+curl -q -LSsf http://127.0.0.1:8080/api/v1/templates
+curl -q -LSsf http://127.0.0.1:8080/api/v1/messages/random
+curl -q -LSsf http://127.0.0.1:8080/api/v1/types \
+  -H 'Accept-Language: es'
+curl -q -LSsf http://127.0.0.1:8080/api/v1/messages \
   -H 'Content-Type: application/json' \
   -d '{"type":"feat","scope":"api","description":"add message search"}'
 ```
@@ -61,7 +64,7 @@ git commit -m "$(gitmessages-cli random)"
 gitmessages-cli --server https://gitmessages.example build --type feat --scope api --description 'add message search'
 ```
 
-Use `--json` before the command to print JSON output.
+Use `--json` before the command to print JSON output. Select a language with `--lang`, `GITMESSAGES_LANG`, the `language` setting in `cli.yml`, or `LANG`.
 
 ## Build and test
 
@@ -85,6 +88,10 @@ The catalog is embedded and no user-submitted content is stored. All builder fie
 ## Development
 
 See [the developer documentation](docs/development.md) for repository structure and contribution guidance.
+
+## Disclaimer
+
+This software is provided "as is" without warranty of any kind. Use it at your own risk. The authors are not responsible for damages, data loss, or issues resulting from its use. The catalog is a reference and does not replace your repository's contribution rules. Evaluate the software before production use.
 
 ## License
 
