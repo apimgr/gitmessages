@@ -1,0 +1,2 @@
+FROM ghcr.io/apimgr/gitmessages:latest
+ENV MODE=development

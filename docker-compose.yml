@@ -1,23 +1,32 @@
+name: gitmessages
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "5m"
+    max-file: "1"
+
 services:
   gitmessages:
     image: ghcr.io/apimgr/gitmessages:latest
-    container_name: gitmessages
-    restart: unless-stopped
+    container_name: gitmessages-app
+    hostname: gitmessages
+    restart: always
+    pull_policy: always
+    logging: *default-logging
     environment:
-      - DB_TYPE=sqlite
+      PORT: 8080
+      TZ: America/New_York
     volumes:
-      - ./volumes/data/gitmessages:/data
-      - ./volumes/config/gitmessages:/config
+      - ./volumes/config:/config
+      - ./volumes/data:/data
+      - ./volumes/logs:/logs
     ports:
-      # Development (random port 64000-64999)
-      - "127.0.0.1:64080:80"
-      # Production (uncomment)
-      # - "172.17.0.1:64080:80"
+      - "172.17.0.1:64580:8080"
     networks:
       - gitmessages
 
 networks:
   gitmessages:
     name: gitmessages
-    driver: bridge
     external: false

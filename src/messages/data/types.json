@@ -1,0 +1,13 @@
+[
+  {"type":"feat","description":"A new feature","emoji":"✨","example":"feat(auth): add passkey sign-in","breaking":false},
+  {"type":"fix","description":"A bug fix","emoji":"🐛","example":"fix(parser): handle empty input","breaking":false},
+  {"type":"docs","description":"Documentation only changes","emoji":"📝","example":"docs(api): clarify pagination defaults","breaking":false},
+  {"type":"style","description":"Formatting or style changes without behavior changes","emoji":"🎨","example":"style(web): align navigation spacing","breaking":false},
+  {"type":"refactor","description":"Code changes that neither fix a bug nor add a feature","emoji":"♻️","example":"refactor(cache): extract key generation","breaking":false},
+  {"type":"perf","description":"A change that improves performance","emoji":"⚡","example":"perf(search): index normalized terms","breaking":false},
+  {"type":"test","description":"Adding or correcting tests","emoji":"🧪","example":"test(auth): cover expired sessions","breaking":false},
+  {"type":"chore","description":"Maintenance work that does not change application behavior","emoji":"🔧","example":"chore(deps): update yaml parser","breaking":false},
+  {"type":"ci","description":"Changes to continuous integration configuration","emoji":"👷","example":"ci(actions): cache Go modules","breaking":false},
+  {"type":"build","description":"Changes to build tools or dependencies","emoji":"📦","example":"build(go): enable reproducible builds","breaking":false},
+  {"type":"revert","description":"Reverts a previous commit","emoji":"⏪","example":"revert: restore previous cache behavior","breaking":false}
+]

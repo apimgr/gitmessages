@@ -1,154 +1,58 @@
-# Variables
-PROJECTNAME = gitmessages
-PROJECTORG = apimgr
-VERSION = $(shell cat release.txt || echo "0.0.1")
-COMMIT = $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-BUILD_DATE = $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-LDFLAGS = -ldflags "-s -w -X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.BuildDate=$(BUILD_DATE)"
+# Infer the project identity from its Git remote, then fall back to its directory.
+PROJECT_NAME := $(shell remote=$$(git remote get-url origin 2>/dev/null); if [ -n "$$remote" ]; then basename "$$remote" .git; else basename "$(PWD)"; fi)
+PROJECT_ORG := $(shell remote=$$(git remote get-url origin 2>/dev/null); if [ -n "$$remote" ]; then printf "%s\n" "$$remote" | sed -E 's|.*/([^/]+)/[^/]+(\.git)?$$|\1|'; else basename "$(dir $(PWD))"; fi)
+INTERNAL_NAME := gitmessages
+VERSION := $(shell cat release.txt 2>/dev/null || echo "$${VERSION:-devel}")
+COMMIT_ID := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
+BUILD_EPOCH := $(shell date -u +%s)
+OFFICIAL_SITE ?= $(shell cat site.txt 2>/dev/null)
+BINDIR := binaries
+RELDIR := releases
+PLATFORMS ?= linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64,windows/arm64,freebsd/amd64,freebsd/arm64
+GO_CACHE ?= $(HOME)/go/pkg/mod
+GO_BUILD ?= $(HOME)/.cache/go-build/$(PROJECT_NAME)
+DOCKER_MEM ?= 4g
+DOCKER_CPUS ?= 2
+REGISTRY ?= ghcr.io/$(PROJECT_ORG)/$(PROJECT_NAME)
+LDFLAGS := -s -w -X 'main.Version=$(VERSION)' -X 'main.CommitID=$(COMMIT_ID)' -X 'main.BuildEpoch=$(BUILD_EPOCH)' -X 'main.OfficialSite=$(OFFICIAL_SITE)'
+CLIENT_LDFLAGS := -s -w -X 'main.Version=$(VERSION)' -X 'main.CommitID=$(COMMIT_ID)' -X 'main.BuildEpoch=$(BUILD_EPOCH)'
+CONTAINER := docker run --rm --name $(PROJECT_NAME)-$$(tr -dc 'a-z0-9' </dev/urandom | head -c8) --memory=$(DOCKER_MEM) --cpus=$(DOCKER_CPUS) -v $(PWD):/app -v $(GO_CACHE):/usr/local/share/go/pkg/mod -v $(GO_BUILD):/usr/local/share/go/cache -w /app -e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false casjaysdev/go:latest
 
-# Go parameters
-GOCMD = go
-GOBUILD = $(GOCMD) build
-GOCLEAN = $(GOCMD) clean
-GOTEST = $(GOCMD) test
-GOGET = $(GOCMD) get
-GOMOD = $(GOCMD) mod
-
-# Binary names
-BINARY_DIR = binaries
-BINARY_NAME = $(PROJECTNAME)
-
-# Build targets
-.PHONY: all build release test docker dev clean help
-
-all: build
-
-help:
-	@echo "Available targets:"
-	@echo "  build        - Build for all platforms"
-	@echo "  release      - Create GitHub release and upload binaries"
-	@echo "  test         - Run all tests"
-	@echo "  docker       - Build and push Docker image"
-	@echo "  dev          - Build development version with hot reload"
-	@echo "  clean        - Clean build artifacts"
-
-build:
-	@echo "Building $(PROJECTNAME) v$(VERSION) ($(COMMIT))..."
-	@mkdir -p $(BINARY_DIR)
-
-	# Increment version
-	@echo "$(VERSION)" | awk -F. '{$$NF = $$NF + 1;} 1' | sed 's/ /./g' > release.txt
-
-	# Linux AMD64
-	@echo "Building for Linux AMD64..."
-	@GOOS=linux GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME)-linux-amd64 ./src
-
-	# Linux ARM64
-	@echo "Building for Linux ARM64..."
-	@GOOS=linux GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME)-linux-arm64 ./src
-
-	# Windows AMD64
-	@echo "Building for Windows AMD64..."
-	@GOOS=windows GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME)-windows-amd64.exe ./src
-
-	# Windows ARM64
-	@echo "Building for Windows ARM64..."
-	@GOOS=windows GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME)-windows-arm64.exe ./src
-
-	# macOS AMD64
-	@echo "Building for macOS AMD64..."
-	@GOOS=darwin GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME)-macos-amd64 ./src
-
-	# macOS ARM64
-	@echo "Building for macOS ARM64..."
-	@GOOS=darwin GOARCH=arm64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME)-macos-arm64 ./src
-
-	# BSD AMD64
-	@echo "Building for BSD AMD64..."
-	@GOOS=freebsd GOARCH=amd64 $(GOBUILD) $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME)-bsd-amd64 ./src
-
-	# Host system binary
-	@echo "Building for host system..."
-	@$(GOBUILD) $(LDFLAGS) -o $(BINARY_DIR)/$(BINARY_NAME) ./src
-
-	@echo "Build complete! Binaries in $(BINARY_DIR)/"
-
-release:
-	@echo "Creating release for v$(VERSION)..."
-	@if command -v gh >/dev/null 2>&1; then \
-		gh release delete v$(VERSION) -y 2>/dev/null || true; \
-		git tag -d v$(VERSION) 2>/dev/null || true; \
-		git push origin :refs/tags/v$(VERSION) 2>/dev/null || true; \
-		gh release create v$(VERSION) --title "Release v$(VERSION)" --notes "Release $(VERSION)" \
-			$(BINARY_DIR)/$(BINARY_NAME)-* || echo "Release creation failed"; \
-	else \
-		echo "GitHub CLI (gh) not found. Please install it to create releases."; \
-	fi
-
-test:
-	@echo "Running tests..."
-	@$(GOTEST) -v ./tests/unit/...
-	@$(GOTEST) -v ./tests/integration/...
-	@$(GOTEST) -bench=. -benchmem ./...
-
-docker:
-	@echo "Building Docker image..."
-	@docker build -t $(PROJECTNAME):dev .
-	@docker tag $(PROJECTNAME):dev ghcr.io/$(PROJECTORG)/$(PROJECTNAME):latest
-	@docker tag $(PROJECTNAME):dev ghcr.io/$(PROJECTORG)/$(PROJECTNAME):$(VERSION)
-	@echo "Pushing to GitHub Container Registry..."
-	@docker push ghcr.io/$(PROJECTORG)/$(PROJECTNAME):latest
-	@docker push ghcr.io/$(PROJECTORG)/$(PROJECTNAME):$(VERSION)
+.PHONY: dev local build test release docker clean help
 
 dev:
-	@echo "Building development version..."
-	@mkdir -p $(BINARY_DIR)
-	@$(GOBUILD) -tags development -o $(BINARY_DIR)/$(BINARY_NAME)-dev ./src
-	@echo "Development build complete: $(BINARY_DIR)/$(BINARY_NAME)-dev"
+	@mkdir -p "$(GO_CACHE)" "$(GO_BUILD)" "$${TMPDIR:-/tmp}/$(PROJECT_ORG)"
+	@$(CONTAINER) go mod tidy
+	@tmpdir=$$(mktemp -d "$${TMPDIR:-/tmp}/$(PROJECT_ORG)/$(INTERNAL_NAME)-XXXXXX") && \
+	docker run --rm --name $(PROJECT_NAME)-$$(tr -dc 'a-z0-9' </dev/urandom | head -c8) --memory=$(DOCKER_MEM) --cpus=$(DOCKER_CPUS) -v "$(PWD):/app" -v "$$tmpdir:/out" -v "$(GO_CACHE):/usr/local/share/go/pkg/mod" -v "$(GO_BUILD):/usr/local/share/go/cache" -w /app -e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false casjaysdev/go:latest sh -c 'go build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o /out/$(PROJECT_NAME) ./src && go build -buildvcs=false -trimpath -ldflags "$(CLIENT_LDFLAGS)" -o /out/$(PROJECT_NAME)-cli ./src/client' && echo "Development binaries: $$tmpdir/$(PROJECT_NAME) and $$tmpdir/$(PROJECT_NAME)-cli"
 
-run-dev: dev
-	@echo "Running in development mode with hot reload..."
-	@$(BINARY_DIR)/$(BINARY_NAME)-dev --dev
+local:
+	@mkdir -p $(BINDIR) $(GO_CACHE) $(GO_BUILD)
+	@$(CONTAINER) go mod tidy
+	@$(CONTAINER) sh -c 'go build -buildvcs=false -trimpath -ldflags "$(LDFLAGS)" -o $(BINDIR)/$(PROJECT_NAME) ./src && go build -buildvcs=false -trimpath -ldflags "$(CLIENT_LDFLAGS)" -o $(BINDIR)/$(PROJECT_NAME)-cli ./src/client'
 
-test-watch:
-	@echo "Running tests in watch mode..."
-	@while true; do \
-		$(GOTEST) -v ./tests/unit/...; \
-		inotifywait -qre close_write ./src ./tests; \
+build:
+	@mkdir -p $(BINDIR) $(GO_CACHE) $(GO_BUILD)
+	@$(CONTAINER) go mod tidy
+	@for platform in $$(echo "$(PLATFORMS)" | tr ',' ' '); do \
+		os=$${platform%/*}; arch=$${platform#*/}; ext=; [ "$$os" = windows ] && ext=.exe; \
+		$(CONTAINER) sh -c "GOOS=$$os GOARCH=$$arch go build -buildvcs=false -trimpath -ldflags \"$(LDFLAGS)\" -o $(BINDIR)/$(PROJECT_NAME)-$$os-$$arch$$ext ./src && GOOS=$$os GOARCH=$$arch go build -buildvcs=false -trimpath -ldflags \"$(CLIENT_LDFLAGS)\" -o $(BINDIR)/$(PROJECT_NAME)-cli-$$os-$$arch$$ext ./src/client" || exit 1; \
 	done
 
-mock-data:
-	@echo "Generating mock data..."
-	@$(BINARY_DIR)/$(BINARY_NAME) --dev --generate-mock-data || echo "Binary not built yet. Run 'make dev' first."
+test:
+	@mkdir -p $(GO_CACHE) $(GO_BUILD) "$${TMPDIR:-/tmp}/$(PROJECT_ORG)"
+	@$(CONTAINER) sh -c '		mkdir -p "$${TMPDIR:-/tmp}/$(PROJECT_ORG)" && 		covdir=$$(mktemp -d "$${TMPDIR:-/tmp}/$(PROJECT_ORG)/$(INTERNAL_NAME)-XXXXXX") && 		trap "rm -rf $$covdir" EXIT && 		go vet ./... && govulncheck ./... && 		go test -timeout 5m -covermode=atomic -coverprofile=$$covdir/coverage.out ./... && 		go tool cover -func=$$covdir/coverage.out && 		coverage=$$(go tool cover -func=$$covdir/coverage.out | awk "/^total:/ {gsub(/%/, \"\", \$$3); print \$$3}") && 		awk -v coverage="$$coverage" "BEGIN { if (coverage+0 < 60) exit 1 }" 	'
 
-reset-dev:
-	@echo "Resetting development environment..."
-	@rm -f *.db *.sqlite *.sqlite3
-	@echo "Development environment reset complete."
+release: build
+	@mkdir -p $(RELDIR)
+	@cp $(BINDIR)/* $(RELDIR)/
+	@tar --exclude=.git --exclude=binaries --exclude=releases -czf $(RELDIR)/$(PROJECT_NAME)-$(VERSION)-source.tar.gz .
+
+docker:
+	@docker buildx build --platform linux/amd64,linux/arm64 --file docker/Dockerfile --build-arg VERSION=$(VERSION) --build-arg BUILD_EPOCH=$(BUILD_EPOCH) --build-arg COMMIT_ID=$(COMMIT_ID) --build-arg OFFICIAL_SITE=$(OFFICIAL_SITE) --tag $(REGISTRY):$(VERSION) --tag $(REGISTRY):latest --push .
 
 clean:
-	@echo "Cleaning..."
-	@$(GOCLEAN)
-	@rm -rf $(BINARY_DIR)
-	@rm -rf release
-	@echo "Clean complete."
+	@rm -rf $(BINDIR) $(RELDIR)
 
-# Dependencies
-deps:
-	@echo "Downloading dependencies..."
-	@$(GOMOD) download
-	@$(GOMOD) tidy
-
-# Format code
-fmt:
-	@echo "Formatting code..."
-	@$(GOCMD) fmt ./...
-
-# Lint
-lint:
-	@echo "Linting..."
-	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run; \
-	else \
-		echo "golangci-lint not found. Install it from https://golangci-lint.run/"; \
-	fi
+help:
+	@printf '%s\n' 'dev local build test release docker clean'

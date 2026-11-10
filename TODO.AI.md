@@ -12,3 +12,4 @@ IDEA.md features are implemented. These shared AI.md requirements are not yet co
 - [ ] PARTs 7–24: complete applicable service/privilege handling, operational metrics, update metadata, and system integration.
   - [x] Record why database, email, GeoIP, scheduled jobs, and backup features do not apply to the immutable, stateless catalog in IDEA.md.
 - [ ] PART 28: add isolated Docker/Incus and browser/E2E test runners plus endpoint coverage scripts; current unit tests do not satisfy the shared integration test requirements.
+- [ ] Server src/main.go lacks -h/-v short flags and --debug/--color/--lang/--shell shared flags, and uses log.Fatal (exit 1) in many places (found by go-lint, pre-existing)

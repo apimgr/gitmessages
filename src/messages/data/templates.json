@@ -1,0 +1,7 @@
+[
+  {"name":"feature","message":"feat({scope}): add {description}","category":"feature"},
+  {"name":"bugfix","message":"fix({scope}): correct {description}","category":"bugfix"},
+  {"name":"release","message":"chore(release): prepare {description}","category":"release"},
+  {"name":"hotfix","message":"fix({scope})!: resolve {description}\n\nBREAKING CHANGE: {details}","category":"hotfix"},
+  {"name":"documentation","message":"docs({scope}): document {description}","category":"documentation"}
+]

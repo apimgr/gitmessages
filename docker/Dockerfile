@@ -1,93 +1,41 @@
-# =============================================================================
-# Build Stage - Compile Go binary
-# =============================================================================
-FROM golang:alpine AS builder
+FROM casjaysdev/go:latest AS builder
 
 ARG TARGETARCH
-ARG VERSION=dev
-ARG BUILD_DATE
-ARG VCS_REF
-
-WORKDIR /build
-
-# Copy go.mod first for layer caching
+ARG VERSION=devel
+ARG COMMIT_ID=N/A
+WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
-
-# Copy source and build
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
-    -ldflags "-s -w -X 'main.Version=${VERSION}' -X 'main.CommitID=${VCS_REF}' -X 'main.BuildDate=${BUILD_DATE}'" \
-    -o /app ./src
+RUN mkdir -p /out && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -buildvcs=false -trimpath -ldflags "-s -w -X main.Version=${VERSION} -X main.CommitID=${COMMIT_ID}" -o /out/gitmessages ./src
 
-# =============================================================================
-# Runtime Stage - Minimal Alpine image
-# =============================================================================
-FROM alpine:latest
+FROM alpine:3.22
 
-# ARGs for build-time values (set by docker build --build-arg)
-ARG VERSION=dev
+ARG VERSION=devel
+ARG COMMIT_ID=N/A
 ARG BUILD_DATE
-ARG VCS_REF
-ARG LICENSE=MIT
 
-# Static Labels
-LABEL maintainer="apimgr <apimgr@casjay.pro>" \
-      org.opencontainers.image.vendor="apimgr" \
-      org.opencontainers.image.authors="apimgr" \
-      org.opencontainers.image.title="gitmessages" \
-      org.opencontainers.image.base.name="gitmessages" \
-      org.opencontainers.image.description="Containerized version of gitmessages" \
+LABEL org.opencontainers.image.vendor="apimgr" \
+      org.opencontainers.image.title="Git Messages" \
+      org.opencontainers.image.description="Curated git commit message conventions and builder" \
       org.opencontainers.image.url="https://github.com/apimgr/gitmessages" \
       org.opencontainers.image.source="https://github.com/apimgr/gitmessages" \
       org.opencontainers.image.documentation="https://github.com/apimgr/gitmessages" \
-      org.opencontainers.image.vcs-type="Git" \
-      com.github.containers.toolbox="false"
-
-# Dynamic Labels (from ARGs)
-LABEL org.opencontainers.image.licenses="${LICENSE}" \
-      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.schema-version="${VERSION}" \
-      org.opencontainers.image.revision="${VCS_REF}"
+      org.opencontainers.image.revision="${COMMIT_ID}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 
-# Install required packages including Tor
-RUN apk add --no-cache \
-    curl \
-    bash \
-    tini \
-    tor
-
-# Create directories with proper structure
-RUN mkdir -p /config /data/db /data/logs /data/tor /data/geoip /data/backup
-
-# Copy binary from builder stage (multi-stage build)
-COPY --from=builder /app /usr/local/bin/gitmessages
-
-# Copy entrypoint script from ./docker/rootfs/
+RUN apk add --no-cache ca-certificates tini \
+    && addgroup -S -g 10001 gitmessages \
+    && adduser -S -D -H -u 10001 -G gitmessages gitmessages \
+    && mkdir -p /config /data /logs \
+    && chown -R gitmessages:gitmessages /config /data /logs
+COPY --from=builder /out/gitmessages /usr/local/bin/gitmessages
 COPY docker/rootfs/ /
-
-# Copy Dockerfile to image (for reference and backup)
-COPY docker/Dockerfile /root/Dockerfile
-
-# Make all binaries/scripts in /usr/local/bin executable (755)
-RUN chmod 755 /usr/local/bin/*
-
-# Set environment
-ENV MODE=development \
-    TZ=America/New_York \
-    ENABLE_TOR=true
-
-# Expose internal port (always 80)
-EXPOSE 80
-
-# Stop signal for graceful shutdown
+RUN chmod 755 /usr/local/bin/gitmessages /usr/local/bin/entrypoint.sh
+USER 10001:10001
+EXPOSE 8080
 STOPSIGNAL SIGRTMIN+3
-
-# Health check (long start period for services that need initialization)
-HEALTHCHECK --start-period=10m --interval=5m --timeout=15s --retries=3 \
-    CMD /usr/local/bin/gitmessages --status || exit 1
-
-# Use tini as init with signal propagation
-# -p SIGTERM: propagate SIGTERM to child processes
-ENTRYPOINT [ "tini", "-p", "SIGTERM", "--", "/usr/local/bin/entrypoint.sh" ]
+HEALTHCHECK --start-period=10m --interval=5m --timeout=15s --retries=3 CMD ["/usr/local/bin/gitmessages", "--port", "8080", "--status"]
+ENTRYPOINT ["tini", "-p", "SIGTERM", "--", "/usr/local/bin/entrypoint.sh"]

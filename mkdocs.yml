@@ -1,0 +1,58 @@
+site_name: Git Messages
+site_description: A curated reference and builder for git commit message conventions.
+site_author: apimgr
+repo_name: apimgr/gitmessages
+repo_url: https://github.com/apimgr/gitmessages
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: pink
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+extra_css:
+  - stylesheets/dark.css
+  - stylesheets/light.css
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Configuration: configuration.md
+  - Browser: browser.md
+  - API: api.md
+  - CLI: cli.md
+  - Security: security.md
+  - Integrations: integrations.md
+  - Development: development.md

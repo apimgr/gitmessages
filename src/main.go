@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,20 +12,32 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/messages"
 	"github.com/apimgr/gitmessages/src/paths"
+	"github.com/apimgr/gitmessages/src/web"
 )
 
 // Version information (set by build flags)
 var (
-	Version   = "dev"
-	Commit    = "unknown"
-	BuildDate = "unknown"
+	Version      = "dev"
+	CommitID     = "unknown"
+	BuildEpoch   = "0"
+	OfficialSite = ""
 )
+
+// buildDate derives the RFC 3339 UTC build date from the embedded BuildEpoch; N/A when unset or invalid
+func buildDate() string {
+	seconds, err := strconv.ParseInt(BuildEpoch, 10, 64)
+	if err != nil || seconds <= 0 {
+		return "N/A"
+	}
+	return time.Unix(seconds, 0).UTC().Format(time.RFC3339)
+}
 
 var msgManager *messages.Manager
 var cfg *config.Config
@@ -60,13 +73,13 @@ func main() {
 
 	// Handle --help
 	if *showHelp {
-		printHelp()
+		printHelp(filepath.Base(os.Args[0]))
 		return
 	}
 
 	// Handle --version
 	if *showVersion {
-		fmt.Println(Version)
+		fmt.Printf("%s %s (%s)\n", filepath.Base(os.Args[0]), Version, CommitID)
 		return
 	}
 
@@ -98,6 +111,11 @@ func main() {
 	// Handle --status (health check)
 	if *showStatus {
 		checkPort := cfg.Server.Port
+		if *port != "" {
+			checkPort = *port
+		} else if envPort := os.Getenv("PORT"); envPort != "" {
+			checkPort = envPort
+		}
 		if checkPort == "" {
 			checkPort = "8080"
 		}
@@ -167,7 +185,7 @@ func main() {
 	}
 
 	// Log startup information
-	log.Printf("gitmessages %s (commit: %s, built: %s)", Version, Commit, BuildDate)
+	log.Printf("gitmessages %s (commit: %s, built: %s)", Version, CommitID, buildDate())
 
 	// Load messages
 	log.Println("Loading git commit messages...")
@@ -187,27 +205,13 @@ func main() {
 
 	server := &http.Server{
 		Addr:         listen,
-		Handler:      corsMiddleware(mux),
+		Handler:      mux,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Log endpoints
-	log.Printf("")
-	log.Printf("API Endpoints:")
-	log.Printf("  GET /                        - Home page")
-	log.Printf("  GET /api/v1/random           - Random message (JSON)")
-	log.Printf("  GET /api/v1/random.txt       - Random message (text)")
-	log.Printf("  GET /api/v1/messages         - All messages (JSON)")
-	log.Printf("  GET /api/v1/stats            - Statistics")
-	log.Printf("  POST /api/v1/reset           - Reset cycle")
-	log.Printf("")
-	log.Printf("Special Files:")
-	log.Printf("  GET /robots.txt              - Robots file")
-	log.Printf("  GET /security.txt            - Security contact")
-	log.Printf("  GET /manifest.json           - PWA manifest")
-	log.Printf("")
+	log.Printf("Public endpoints: /types, /templates, /builder, /api/v1/*, /graphql")
 	log.Printf("Listening on %s", listen)
 
 	// Start server in goroutine
@@ -232,37 +236,20 @@ func main() {
 				}
 			default:
 				log.Printf("Received signal %v, shutting down...", sig)
-				os.Exit(0)
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				if err := server.Shutdown(shutdownCtx); err != nil {
+					log.Printf("Graceful shutdown failed: %v", err)
+					_ = server.Close()
+				}
+				cancel()
+				return
 			}
 		}
 	}
 }
 
 func setupRoutes(mux *http.ServeMux) {
-	// Health checks
-	mux.HandleFunc("/healthz", handleHealthz)
-	mux.HandleFunc("/api/v1/healthz", handleHealthz)
-	mux.HandleFunc("/api/v1/healthz.txt", handleHealthzText)
-
-	// Special files
-	mux.HandleFunc("/robots.txt", handleRobotsTxt)
-	mux.HandleFunc("/security.txt", handleSecurityTxt)
-	mux.HandleFunc("/.well-known/security.txt", handleSecurityTxt)
-	mux.HandleFunc("/manifest.json", handleManifest)
-	mux.HandleFunc("/sw.js", handleServiceWorker)
-
-	// API endpoints
-	mux.HandleFunc("/api/v1/", handleAPIInfo)
-	mux.HandleFunc("/api/v1/random", handleRandom)
-	mux.HandleFunc("/api/v1/random.txt", handleRandomText)
-	mux.HandleFunc("/api/v1/messages", handleMessages)
-	mux.HandleFunc("/api/v1/messages.txt", handleMessagesText)
-	mux.HandleFunc("/api/v1/stats", handleStats)
-	mux.HandleFunc("/api/v1/stats.txt", handleStatsText)
-	mux.HandleFunc("/api/v1/reset", handleReset)
-
-	// Home page
-	mux.HandleFunc("/", handleHome)
+	mux.Handle("/", web.Handler(Version))
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
@@ -489,10 +476,10 @@ self.addEventListener('fetch', function(event) {
 `)
 }
 
-func printHelp() {
-	fmt.Printf(`GitMessages Server v%s
+func printHelp(binary string) {
+	fmt.Printf(`%s Server v%s
 
-Usage: gitmessages [options]
+Usage: %s [options]
 
 Options:
   --port PORT          Server port (default: from config or 8080)
@@ -526,11 +513,11 @@ Configuration:
   User:    ~/.config/apimgr/gitmessages/server.yml
   Docker:  /config/server.yml
 
-`, Version)
+`, binary, Version, binary)
 }
 
 func checkHealth(port string) error {
-	url := fmt.Sprintf("http://127.0.0.1:%s/healthz", port)
+	url := fmt.Sprintf("http://127.0.0.1:%s/api/v1/server/healthz", port)
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {

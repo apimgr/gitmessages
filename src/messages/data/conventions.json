@@ -1,0 +1,4 @@
+[
+  {"name":"conventional-commits","description":"Structured commit messages with a type, optional scope, and concise description.","format":"<type>[optional scope][!]: <description>","example":"feat(api): add message search"},
+  {"name":"angular","description":"Angular-style commit messages using the same recognized types and optional scopes.","format":"<type>(<scope>): <subject>","example":"fix(router): reject unknown routes"}
+]

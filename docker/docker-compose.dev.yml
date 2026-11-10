@@ -1,0 +1,34 @@
+name: gitmessages-dev
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "5m"
+    max-file: "1"
+
+services:
+  gitmessages:
+    image: ghcr.io/apimgr/gitmessages:devel
+    container_name: gitmessages-app
+    hostname: gitmessages
+    restart: always
+    pull_policy: always
+    logging: *default-logging
+    environment:
+      PORT: 8080
+      MODE: development
+      DEBUG: "true"
+      TZ: America/New_York
+    volumes:
+      - ./volumes/config:/config
+      - ./volumes/data:/data
+      - ./volumes/logs:/logs
+    ports:
+      - "127.0.0.1:64080:8080"
+    networks:
+      - gitmessages-dev
+
+networks:
+  gitmessages-dev:
+    name: gitmessages-dev
+    external: false

@@ -391,8 +391,10 @@ func TestSetupRoutes(t *testing.T) {
 	setupRoutes(mux)
 
 	paths := []string{
-		"/", "/healthz", "/robots.txt", "/security.txt", "/manifest.json",
-		"/sw.js", "/api/v1/", "/api/v1/random", "/api/v1/messages", "/api/v1/stats",
+		"/", "/types", "/templates", "/builder", "/server/about",
+		"/server/help", "/server/healthz", "/manifest.json", "/sw.js",
+		"/api/v1", "/api/v1/types", "/api/v1/conventions",
+		"/api/v1/templates", "/api/v1/messages/random", "/api/v1/server/healthz",
 	}
 	for _, p := range paths {
 		req := httptest.NewRequest(http.MethodGet, p, nil)
@@ -408,7 +410,7 @@ func TestSetupRoutes(t *testing.T) {
 // the failure path against a port nothing listens on.
 func TestCheckHealth(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/healthz" {
+		if r.URL.Path != "/api/v1/server/healthz" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -445,7 +447,7 @@ func TestMaintenanceUpdate(t *testing.T) {
 }
 
 func TestPrintHelp(t *testing.T) {
-	printHelp()
+	printHelp("gitmessages")
 }
 
 // TestRunSetupWizard verifies the wizard creates a config file under an
