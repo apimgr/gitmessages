@@ -2,7 +2,7 @@
 
 ## Server
 
-The server reads `server.yml` from the configuration directory. Select the directory with `--config DIR` or `CONFIG_DIR`; the file name is `server.yml`. When no file exists, the application writes defaults.
+The server reads `server.yml` from the configuration directory. Select the directory with `--config DIR` or `CONFIG_DIR`; the file name is `server.yml`. On first run, `PORT` and `LISTEN` seed the saved port and address; later environment changes do not override the saved configuration. Containers default to internal port 80; native installs select an available port in 64000–64999. When no file exists, the application writes these defaults.
 
 Supported settings are `server.port`, `server.address`, `server.mode`, `server.fqdn`, `server.update_branch`, `server.metrics.*`, `server.logging.*`, `web-ui.*`, `web-robots.*`, and `web-security.*`. Defaults are defined by `src/config/config.go`. This product has no database settings, account configuration, or web administration panel.
 
