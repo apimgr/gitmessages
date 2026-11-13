@@ -6,7 +6,7 @@ The server reads `server.yml` from the configuration directory. Select the direc
 
 Supported settings are `server.port`, `server.address`, `server.mode`, `server.fqdn`, `server.update_branch`, `server.metrics.*`, `server.logging.*`, `web-ui.*`, `web-robots.*`, and `web-security.*`. Defaults are defined by `src/config/config.go`. This product has no database settings, account configuration, or web administration panel.
 
-Command-line `--port` and `--address` override the configuration for the current run. `PORT` and `ADDRESS` environment variables are used when their corresponding flags are absent.
+Command-line `--port` and `--address` override the configuration for the current run. `PORT` and `ADDRESS` environment variables are used when their corresponding flags are absent. Mode precedence is `--mode`, `MODE`, `server.mode`, then production. The independent diagnostics switch uses `--debug`, then `DEBUG`, then defaults to enabled only for debug mode; development mode alone does not expose diagnostics. `--lang CODE` selects the process's default interface language, after request query, cookie, and `Accept-Language` preferences.
 
 ## CLI
 

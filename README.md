@@ -25,6 +25,8 @@ gitmessages --port 8080 --address 127.0.0.1
 
 Open `http://127.0.0.1:8080/`. The application uses a read-only embedded catalog; it does not need a database or operator web panel. Server settings are read from `server.yml` in the configuration directory selected by `--config` or `CONFIG_DIR`.
 
+The server supports `-h`/`--help`, `-v`/`--version`, `--debug`, `--color auto|yes|no`, `--lang CODE`, and shell completions/init with `--shell`. See the [CLI reference](docs/cli.md) for details.
+
 ## Web pages
 
 - `/` — product home
