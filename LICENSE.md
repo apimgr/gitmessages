@@ -35,3 +35,12 @@ This software includes the following third-party libraries:
 | golang.org/x/text | v0.32.0 | BSD-3-Clause | 2009 The Go Authors |
 
 Full license texts available at: https://spdx.org/licenses/
+
+## GeoIP Data Sources
+
+| Dataset | Source | License |
+|---------|--------|---------|
+| ASN and country | [iptoasn.com](https://iptoasn.com/) (RouteViews / RIR data) | PDDL |
+| City | [DB-IP](https://db-ip.com/) | CC BY 4.0 |
+
+City data attribution: <a href="https://db-ip.com/">IP Geolocation by DB-IP</a>

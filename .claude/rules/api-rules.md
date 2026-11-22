@@ -9,7 +9,7 @@
 
 ## CRITICAL - ALWAYS DO
 
-- Use `/api/v1` for REST resources and the shared response/error envelope.
+- Use `/api/{api_version}` for canonical REST resources and the shared response/error envelope; clients discover the active value at `/api/autodiscover`.
 - Keep health, OpenAPI, and GraphQL public; recommend TLS termination for deployment.
 
 ## Key rules

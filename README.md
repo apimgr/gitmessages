@@ -4,6 +4,8 @@
 [![License](https://img.shields.io/github/license/apimgr/gitmessages)](LICENSE.md)
 [![CI](https://github.com/apimgr/gitmessages/actions/workflows/ci.yml/badge.svg)](https://github.com/apimgr/gitmessages/actions/workflows/ci.yml)
 
+## About
+
 Git Messages is a curated reference and builder for git commit message conventions. Browse commit types, emoji mappings, templates, and examples, or build a message using Conventional Commits or Angular formatting. The catalog is embedded in the Go binaries. There are no user accounts or submitted catalog content. Anonymous owner tokens support protected API operations, and configured contact/security forms accept reports required by the server specification. The service can provide alternate access through Tor and optional I2P when configured and available.
 
 ## Features
@@ -33,7 +35,7 @@ Download the server and CLI binaries for your operating system and architecture 
 
 ```sh
 docker run --detach --name gitmessages \
-  --publish 64580:80 \
+  --publish 172.17.0.1:64580:80 \
   --volume gitmessages-config:/config \
   --volume gitmessages-data:/data \
   --env PORT=80 \
@@ -43,6 +45,10 @@ docker run --detach --name gitmessages \
 The included Compose deployment is in `docker/docker-compose.yml`. Run it from
 the `docker/` directory with `docker compose up -d`; review its host port
 binding before exposing the service on a network.
+
+### Binary and systemd
+
+Download the server binary for your operating system from [GitHub Releases](https://github.com/apimgr/gitmessages/releases). On Linux, macOS, and FreeBSD, install the executable on `PATH`; Windows releases use `.exe` files. For Linux systemd, create the `gitmessages` service account and private configuration directory, then run `gitmessages --config /etc/apimgr/gitmessages --service --install` as root. See the [installation guide](docs/installation.md#linux-systemd) for all steps.
 
 ### Run the server
 
@@ -78,16 +84,20 @@ Server configuration is optional. Settings are read from `server.yml`, `yaml.d/`
 Catalog reads are public and read-only except for the stateless message builder. Protected routes such as MCP, metrics, and owner-token management require their specified Bearer token. Responses use JSON envelopes with `ok` and `data` fields.
 
 ```sh
-curl -q -LSsf http://127.0.0.1:8080/api/v1/types
-curl -q -LSsf http://127.0.0.1:8080/api/v1/conventions
-curl -q -LSsf http://127.0.0.1:8080/api/v1/templates
-curl -q -LSsf http://127.0.0.1:8080/api/v1/messages/random
-curl -q -LSsf http://127.0.0.1:8080/api/v1/messages \
+SERVER_URL="${GITMESSAGES_SERVER:?set GITMESSAGES_SERVER}"
+API_VERSION="${API_VERSION:-v1}"
+curl -q -LSsf "$SERVER_URL/api/$API_VERSION/types"
+curl -q -LSsf "$SERVER_URL/api/$API_VERSION/conventions"
+curl -q -LSsf "$SERVER_URL/api/$API_VERSION/templates"
+curl -q -LSsf "$SERVER_URL/api/$API_VERSION/messages/random"
+curl -q -LSsf "$SERVER_URL/api/$API_VERSION/messages" \
   -H 'Content-Type: application/json' \
   -d '{"type":"feat","scope":"api","description":"add message search"}'
 ```
 
-OpenAPI JSON is served at `/api/v1/server/swagger` (also `/api/swagger`). GraphQL accepts GET and POST requests at `/graphql`, `/api/v1/server/graphql`, and `/api/graphql`. MCP Streamable HTTP accepts JSON-RPC POST requests at `/api/v1/server/mcp` (also `/api/mcp` and `/mcp`) and requires an owner or operator Bearer token. See the [API reference](docs/api.md).
+
+
+The active API version is available from `GET /api/autodiscover` (default `v1`). OpenAPI JSON is served at `/api/{api_version}/server/swagger` (also `/api/swagger`). GraphQL accepts GET and POST requests at `/graphql`, `/api/{api_version}/server/graphql`, and `/api/graphql`. MCP Streamable HTTP accepts JSON-RPC POST requests at `/api/{api_version}/server/mcp` (also `/api/mcp` and `/mcp`) and requires an owner or operator Bearer token. See the [API reference](docs/api.md).
 
 ## Other
 
@@ -100,6 +110,7 @@ OpenAPI JSON is served at `/api/v1/server/swagger` (also `/api/swagger`). GraphQ
 - `/server/about`, `/server/help`, `/server/healthz`, `/server/privacy`, `/server/terms`, `/server/security`, `/server/security/policy`, `/server/security/thanks`, `/server/dpo` — server information and reporting pages
 - `/server/contact` and `/.well-known/security.txt` — configured contact and security-report entry points
 - `/server/preferences/tokens` — anonymous owner token management
+- `/server/preferences/sync` — export and import browser preferences between devices
 - `/server/metrics[/{service}]` — internal service metrics, protected by per-service Bearer tokens
 - `/server/docs/swagger` — REST API reference
 - `/server/docs/graphql` — GraphQL query guide

@@ -1,10 +1,10 @@
 # Integrations
 
-Git Messages does not query third-party content or data providers. It has no user accounts, but supports anonymous owner tokens and the configured contact/security report flows required by AI.md. When available, the server starts its own Tor process for a v3 onion service. I2P is off by default on bare metal and in VMs; containers enable it by default and use the included `i2pd` provider when available. Both expose the same local reference service.
+Git Messages does not query third-party content providers for catalog or message data. The server downloads operational GeoIP, blocklist, CVE, and optional Trivy security datasets from the configured sources described in [Configuration](configuration.md); these datasets do not alter the curated catalog. It has no user accounts, but supports anonymous owner tokens and the configured contact/security report flows required by AI.md. When available, the server starts its own Tor process for a v3 onion service. I2P is off by default on bare metal and in VMs; containers enable it by default and use the included `i2pd` provider when available. Both expose the same local reference service. Configured hCaptcha or reCAPTCHA performs CAPTCHA verification with that provider, and configured SMTP relays send contact and security-report email; neither integration is required for the public catalog.
 
 ## HTTP clients
 
-Any HTTP client can use the public catalog REST API. The companion CLI uses the configured server and sends a project-specific User-Agent. OpenAPI JSON is available at `/api/v1/server/swagger`; GraphQL is available at `/graphql`; MCP Streamable HTTP is available at `/api/v1/server/mcp` and the `/api/mcp` and `/mcp` aliases and requires an owner or operator Bearer token.
+Any HTTP client can use the public catalog REST API. The companion CLI uses the configured server and sends a project-specific User-Agent. OpenAPI JSON is available at `/api/{api_version}/server/swagger`; GraphQL is available at `/graphql`; MCP Streamable HTTP is available at `/api/{api_version}/server/mcp` and the `/api/mcp` and `/mcp` aliases and requires an owner or operator Bearer token. Health is available at `/api/{api_version}/server/healthz` and its direct `/api/healthz` alias. The optional `/healthz` alias is disabled by default and enabled with `server.healthz.root.enabled`.
 
 ## Discovery and security reporting
 
@@ -17,5 +17,6 @@ MCP exposes tools for the REST operations and GET/POST GraphQL. The tools includ
 The CLI prints a single commit example from `random`, suitable for shell pipelines:
 
 ```sh
-git commit -m "$(gitmessages-cli random)"
+GITMESSAGES_SERVER=http://127.0.0.1:8080
+git commit -m "$(gitmessages-cli --server "$GITMESSAGES_SERVER" random)"
 ```

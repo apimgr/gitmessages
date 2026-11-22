@@ -38,9 +38,19 @@ Area names are conventions; the loader accepts supported settings in any merged 
 
 | YAML key | Accepted values and behavior |
 |---|---|
-| `server.port` | TCP port from 1–65535. Defaults to `PORT`, port 80 in a detected container, or an available port in 64000–64999 on a host. `--port` overrides the environment and file. |
+| `server.port` | A TCP port from 1–65535, or a comma-separated `HTTP,HTTPS` pair such as `80,443`. Defaults to `PORT`, port 80 in a detected container, or an available port in 64000–64999 on a host. `--port` overrides the environment and file. |
+| `server.ssl.enabled` | Enables TLS for a single configured port. In dual-port mode, the second port is HTTPS. Port 443 is HTTPS-only by default. |
+| `server.ssl.cert`, `server.ssl.key` | Optional paths to an explicit certificate and private key; both must be provided together. Otherwise, the server searches the documented system and config SSL directories. |
+| `server.ssl.min_version` | Minimum TLS version: `TLS1.2` (default) or `TLS1.3`. |
+| `server.ssl.letsencrypt.enabled` | Enables automatic Let's Encrypt certificates for configured `server.fqdn` or `DOMAIN`. |
+| `server.ssl.letsencrypt.email` | Contact email supplied for ACME registration. |
+| `server.ssl.letsencrypt.challenge` | ACME challenge type: `http-01`, `tls-alpn-01`, or `dns-01`. |
+| `server.ssl.letsencrypt.staging` | Requests certificates from the ACME staging endpoint for testing. |
+| `server.ssl.letsencrypt.dns_provider` | Lego DNS provider name used for DNS-01 challenges. |
+| `server.ssl.letsencrypt.dns_credentials` | Flat map of provider environment variable names to values; keep credentials in `secrets.yml`. |
 | `server.address` | IP address to bind. Defaults to `LISTEN`, then `[::]`. `--address` has the highest priority. |
 | `server.fqdn` | Configured public host name; used by URL and MCP origin handling. |
+| `server.api_version` | API route version prefix matching `v` followed by digits; defaults to `v1`. Changing it requires a server restart. The active version is advertised at `GET /api/autodiscover`. |
 | `server.baseurl` | Optional path prefix for public URLs, such as `/messages`. |
 | `server.mode` | `production`, `development`, or `debug`; `--mode` and `MODE` can override it. |
 | `server.token` | Operator bearer token. Keep it in `secrets.yml`; the server creates one when absent. |
@@ -52,6 +62,7 @@ Area names are conventions; the loader accepts supported settings in any merged 
 | `server.url_detection.log_changes` | Logs inferred public URL changes; defaults to `true`. |
 | `server.url_detection.live_reload` | Applies learned URL changes without a restart; defaults to `true`. |
 | `server.cors.allowed_origins` | `*` or a list of HTTP/HTTPS origin URLs. A wildcard does not authorize MCP origins. |
+| `server.healthz.root.enabled` | Enables the direct `/healthz` alias for `/server/healthz`; defaults to `false`. `/api/healthz` is an unversioned alias and is always registered. |
 | `server.rate_limit.read.{requests,window}` | Read request limit and window in seconds. |
 | `server.rate_limit.write.{requests,window}` | Write request limit and window in seconds. |
 | `server.rate_limit.health.{requests,window}` | Health endpoint limit and window in seconds. |
@@ -193,7 +204,7 @@ I2P settings are under `server.i2p`:
 
 The CLI stores `cli.yml` and profile files in the platform user configuration directory under `apimgr/gitmessages`. Select a profile with `--config`. Files are created with owner-only permissions. The server selection order is `--server`, `GITMESSAGES_SERVER_PRIMARY`, then `server.primary`. A valid `--server` argument is saved only when no valid server is already configured.
 
-The CLI config supports `language`, `display.mode` (`auto`, `gui`, or `tui`), and `server.primary`. An explicit `--lang` applies to the current invocation; otherwise language selection uses the config and system locale. GUI mode is available on Linux, macOS, and Windows when a local display is available. FreeBSD builds use the terminal interface; automatic mode selects it when a terminal is available.
+The CLI config supports `language`, `display.mode` (`auto`, `gui`, or `tui`), `server.primary`, and the discovered `server.api_version`. The CLI queries `/api/autodiscover` on startup and records the server's active API version before using versioned routes. An explicit `--lang` applies to the current invocation; otherwise language selection uses the config and system locale. GUI mode is available on Linux, macOS, and Windows when a local display is available. FreeBSD builds use the terminal interface; automatic mode selects it when a terminal is available.
 
 ## Contact CAPTCHA behavior
 

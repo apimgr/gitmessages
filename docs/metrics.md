@@ -11,7 +11,7 @@ All routes accept `GET` and require a service-specific bearer token in the `Auth
 | `/server/metrics` and `/server/metrics/prometheus` | `server.metrics.auth.tokens.prometheus` | Prometheus text exposition |
 | `/server/metrics/grafana` | `server.metrics.auth.tokens.grafana` | Importable Grafana dashboard JSON |
 | `/server/metrics/loki` | `server.metrics.auth.tokens.loki` | Recent request events in Loki push-stream JSON |
-| `/api/v1/server/metrics[/{service}]` | Per service | Versioned aliases |
+| `/api/{api_version}/server/metrics[/{service}]` | Per service | Versioned aliases |
 | `/api/metrics[/{service}]` | Per service | Unversioned aliases |
 | `/metrics[/{service}]` | Per service | Root aliases, controlled by `server.metrics.root.enabled` |
 

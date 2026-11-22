@@ -31,7 +31,7 @@ owner_token: gitmessages_owner_token_7gT2qA
 - CLI client (`gitmessages-cli`) for command-line and shell-pipeline use, with an interactive terminal interface, a desktop GUI on Linux/macOS/Windows when a local display is available, and a first-run server connection flow; FreeBSD uses the terminal interface: `git commit -m "$(gitmessages-cli random)"`
 - OpenAPI/Swagger docs at `/api/{api_version}/server/swagger`
 - GraphQL at `/graphql`
-- MCP over Streamable HTTP at `/api/v1/server/mcp`, with direct aliases `/api/mcp` and `/mcp`, exposing the API operations allowed to the caller's Bearer token; token management is never available as an MCP tool
+- MCP over Streamable HTTP at `/api/{api_version}/server/mcp`, with direct aliases `/api/mcp` and `/mcp`, exposing the API operations allowed to the caller's Bearer token; token management is never available as an MCP tool
 - Anonymous owner tokens for resource ownership and MCP access, without user accounts
 - Server contact and security-report forms required by the shared server specification; no submitted commit messages or community conventions are accepted
 
@@ -42,7 +42,7 @@ owner_token: gitmessages_owner_token_7gT2qA
 - No paid tiers or rate-limited access tiers
 - No git repository integration (read-only reference provider only)
 
-**Product data and third-party integrations:** The catalog is immutable release data embedded in the binary, and the message builder is stateless. The service accepts contact and security reports required by the shared server specification, but never accepts user-submitted commit messages or community conventions. It does not query third-party content or data providers at runtime. Tor and optional I2P provide alternate network access to the same local reference service. Shared operational state, owner tokens, contact reports, and security reports may be persisted as required by AI.md. Email is used for configured contact and security-report delivery; no scheduled catalog jobs run. Shared backup and restore cover applicable operational configuration and state, never user accounts or submitted catalog content. Operational availability controls such as health checks and rate limiting remain applicable.
+**Product data and third-party integrations:** The catalog is immutable release data embedded in the binary, and the message builder is stateless. The service accepts contact and security reports required by the shared server specification, but never accepts user-submitted commit messages or community conventions. It does not query third-party content providers for catalog or message data. The shared server security and GeoIP feeds are operational datasets downloaded and refreshed as specified by AI.md; they do not modify the curated catalog. Tor and optional I2P provide alternate network access to the same local reference service. Shared operational state, owner tokens, contact reports, and security reports may be persisted as required by AI.md. Email is used for configured contact and security-report delivery; no scheduled catalog jobs run. Shared backup and restore cover applicable operational configuration and state, never user accounts or submitted catalog content. Operational availability controls such as health checks and rate limiting remain applicable.
 
 ### Roles & permissions
 
@@ -83,7 +83,7 @@ No PII stored or served.
 | Convention and message dataset (embedded at build) | Fully trusted | Static, compiled into binary |
 | Incoming HTTP requests | **Untrusted** | Query and form values, JSON bodies, GraphQL inputs, MCP headers, and origins are validated before use |
 
-No third-party content or data services are called at runtime; Tor and optional I2P are alternate access networks for the local service.
+No third-party content providers supply catalog or message data. AI.md-required security and GeoIP feeds supply operational security datasets only; Tor and optional I2P are alternate access networks for the local service.
 
 ### Threat model & abuse cases
 
@@ -106,28 +106,29 @@ No third-party content or data services are called at runtime; Tor and optional 
 
 | Method | Path | Auth | Purpose and response |
 |---|---|---|---|
-| GET | `/api/v1` | None | API discovery and route index |
-| GET | `/api/v1/types` | None | Curated commit types with descriptions, emoji, and examples |
-| GET | `/api/v1/conventions` | None | Supported convention definitions |
-| GET | `/api/v1/templates` | None | Curated message templates |
-| GET | `/api/v1/templates/random` | None | One random template |
-| GET | `/api/v1/messages/random` | None | One random example message |
-| POST | `/api/v1/messages` | None | Statelessly validate and format the supplied message fields |
-| GET | `/api/v1/server/healthz` | None | Public service health and version |
-| GET | `/api/v1/server/about` | None | Localized service description |
-| GET | `/api/v1/server/help` | None | Localized usage and documentation links |
-| GET | `/api/v1/server/privacy` | None | Localized privacy policy |
-| GET | `/api/v1/server/terms` | None | Localized terms |
-| GET | `/api/v1/server/security` | None | Localized security reporting guidance and links |
-| GET | `/api/v1/server/dpo` | None | Privacy contact information |
-| GET | `/api/v1/server/preferences` | None | Current request language and theme preference |
-| GET, POST | `/api/v1/server/contact` | None | Contact/security report form descriptors and submission flow |
-| GET | `/api/v1/server/help/mcp` | None | Localized MCP connection instructions |
-| GET | `/api/v1/server/swagger` | None | OpenAPI JSON document |
-| GET | `/api/v1/server/metrics[/{service}]` | Service Bearer token | Internal metrics |
-| GET | `/api/v1/server/preferences/tokens` | Owner token when managing an existing identity | Owner-token page data |
-| POST | `/api/v1/server/preferences/tokens/primary` | None | Issue an owner and primary token |
-| POST | `/api/v1/server/mcp`, `/api/mcp`, `/mcp` | Owner or operator Bearer token | MCP JSON-RPC tools for public catalog reads and stateless message building |
-| GET, POST | `/graphql`, `/api/graphql`, `/api/v1/server/graphql` | None | Read the catalog or statelessly build a commit message |
+| GET | `/api/autodiscover` | None | Machine-only server and CLI configuration/version discovery |
+| GET | `/api/{api_version}` | None | API discovery and route index |
+| GET | `/api/{api_version}/types` | None | Curated commit types with descriptions, emoji, and examples |
+| GET | `/api/{api_version}/conventions` | None | Supported convention definitions |
+| GET | `/api/{api_version}/templates` | None | Curated message templates |
+| GET | `/api/{api_version}/templates/random` | None | One random template |
+| GET | `/api/{api_version}/messages/random` | None | One random example message |
+| POST | `/api/{api_version}/messages` | None | Statelessly validate and format the supplied message fields |
+| GET | `/api/{api_version}/server/healthz` | None | Public service health and version |
+| GET | `/api/{api_version}/server/about` | None | Localized service description |
+| GET | `/api/{api_version}/server/help` | None | Localized usage and documentation links |
+| GET | `/api/{api_version}/server/privacy` | None | Localized privacy policy |
+| GET | `/api/{api_version}/server/terms` | None | Localized terms |
+| GET | `/api/{api_version}/server/security` | None | Localized security reporting guidance and links |
+| GET | `/api/{api_version}/server/dpo` | None | Privacy contact information |
+| GET | `/api/{api_version}/server/preferences` | None | Current request language and theme preference |
+| GET, POST | `/api/{api_version}/server/contact` | None | Contact/security report form descriptors and submission flow |
+| GET | `/api/{api_version}/server/help/mcp` | None | Localized MCP connection instructions |
+| GET | `/api/{api_version}/server/swagger` | None | OpenAPI JSON document |
+| GET | `/api/{api_version}/server/metrics[/{service}]` | Service Bearer token | Internal metrics |
+| GET | `/api/{api_version}/server/preferences/tokens` | Owner token when managing an existing identity | Owner-token page data |
+| POST | `/api/{api_version}/server/preferences/tokens/primary` | None | Issue an owner and primary token |
+| POST | `/api/{api_version}/server/mcp`, `/api/mcp`, `/mcp` | Owner or operator Bearer token | MCP JSON-RPC tools for public catalog reads and stateless message building |
+| GET, POST | `/graphql`, `/api/graphql`, `/api/{api_version}/server/graphql` | None | Read the catalog or statelessly build a commit message |
 
 All listed API routes accept JSON by default. The GET resources and server pages also support plain text through their `.txt` form or `Accept: text/plain`; the message builder accepts JSON or form-compatible browser input. `/api/swagger` is a compatibility alias for the OpenAPI document. `/.well-known/security.txt` is a public metadata file, not an API route.
