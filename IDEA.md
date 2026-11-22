@@ -13,6 +13,7 @@ repo: https://github.com/apimgr/gitmessages
 license: MIT
 binary: gitmessages
 client_binary: gitmessages-cli
+owner_token: gitmessages_owner_token_7gT2qA
 
 ## Business logic
 
