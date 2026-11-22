@@ -71,6 +71,8 @@ func hasGUI() bool {
 	switch runtime.GOOS {
 	case "windows", "darwin":
 		return true
+	case "freebsd", "netbsd", "openbsd":
+		return false
 	default:
 		return strings.TrimSpace(os.Getenv("DISPLAY")) != "" || strings.TrimSpace(os.Getenv("WAYLAND_DISPLAY")) != ""
 	}

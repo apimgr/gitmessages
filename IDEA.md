@@ -28,7 +28,7 @@ owner_token: gitmessages_owner_token_7gT2qA
 - Full web frontend (server-side Go templates, dark/light/auto theme, PWA, mobile-first)
 - Server pages: `/server/about`, `/server/help`, `/server/healthz`, `/server/privacy`, `/server/terms`, `/server/security`, `/server/preferences`
 - Alternate public access over a Tor v3 hidden service when Tor is available, with optional I2P eepsite access according to the shared server specification
-- CLI client (`gitmessages-cli`) for command-line and shell-pipeline use, with an interactive terminal interface, a desktop GUI when a local display is available, and a first-run server connection flow: `git commit -m "$(gitmessages-cli random)"`
+- CLI client (`gitmessages-cli`) for command-line and shell-pipeline use, with an interactive terminal interface, a desktop GUI on Linux/macOS/Windows when a local display is available, and a first-run server connection flow; FreeBSD uses the terminal interface: `git commit -m "$(gitmessages-cli random)"`
 - OpenAPI/Swagger docs at `/api/{api_version}/server/swagger`
 - GraphQL at `/graphql`
 - MCP over Streamable HTTP at `/api/v1/server/mcp`, with direct aliases `/api/mcp` and `/mcp`, exposing the API operations allowed to the caller's Bearer token; token management is never available as an MCP tool

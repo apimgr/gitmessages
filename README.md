@@ -56,7 +56,7 @@ The server supports `-h`/`--help`, `-v`/`--version`, `--port`, `--address`, `--c
 
 ## Client
 
-Install `gitmessages-cli` from the same release as the server. It supports command-line requests, an interactive terminal interface, and a desktop GUI when a local display is available. With no configured server, the interactive interface provides a first-run connection flow. Select `display.mode` as `auto`, `gui`, or `tui` in `cli.yml`.
+Install `gitmessages-cli` from the same release as the server. It supports command-line requests, an interactive terminal interface, and a desktop GUI on Linux, macOS, and Windows when a local display is available. FreeBSD builds use the terminal interface because GUI support is not available there. With no configured server, the interactive interface provides a first-run connection flow. Select `display.mode` as `auto`, `gui`, or `tui` in `cli.yml`.
 
 The CLI uses `--server`, `GITMESSAGES_SERVER_PRIMARY`, or its user configuration at `~/.config/apimgr/gitmessages/cli.yml`.
 
