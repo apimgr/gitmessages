@@ -8,6 +8,8 @@ Open `/server/preferences/tokens` and choose **Create token**, or call `POST /ap
 
 The browser stores a primary token in an `HttpOnly`, `Secure`, `SameSite=Strict` cookie. To use another browser, restore the identity by pasting the primary token into the token page. A linked token cannot restore an identity. The **Forget saved token** action removes the browser's copy without revoking the credential or deleting resources.
 
+Token actions use POST forms with a Strict double-submit CSRF cookie. Creation and rotation redirect with `303` and show the new token once on the resulting page; reveal also shows a token only for that response. Rotation, creation, rename, and revocation show a toast. Confirmations are provided for destructive actions. Valid owner cookies refresh their configured lifetime when frontend pages use them, and invalid cookies are cleared on the next frontend response. API and MCP authentication ignore browser cookies.
+
 ## Create and manage linked tokens
 
 Use one linked token per automation client. A linked token has the owner's resource access, but cannot manage tokens. The tokens page supports reveal, rotation, rename, expiry changes and revocation. Available expiries are never, 7, 30 or 90 days, one year, or a chosen date. A maximum of 25 active linked tokens is allowed by default.

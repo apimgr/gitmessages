@@ -15,6 +15,7 @@ Security reports receive a tracking ID even when SMTP is unavailable. When a pro
 - `/server/security`, `/server/security/policy`, `/server/security/thanks`, `/server/security/report/{id}`, and `/server/dpo` provide the public security, disclosure, status, and privacy-contact pages.
 - `/api/v1/server/security`, `/api/v1/server/security/policy`, `/api/v1/server/security/thanks`, and `/api/v1/server/dpo` mirror their public metadata.
 - `/.well-known/security.txt` publishes reporting channels and policy links. `/.well-known/pgp-key.asc` serves the public encryption key when publication is enabled.
+- `/.well-known/llms.txt` and `/llms.txt` publish the service's public route discovery for automated clients. Well-known files support unauthenticated `GET` and `HEAD` requests.
 
 The security report form requires a rotating `security_id` from `/server/security`. The DPO page links to privacy information and security information and does not link directly to the contact form.
 
