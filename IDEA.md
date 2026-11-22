@@ -78,7 +78,7 @@ No PII stored or served.
 | Boundary | Trust level | Notes |
 |----------|-------------|-------|
 | Convention and message dataset (embedded at build) | Fully trusted | Static, compiled into binary |
-| Incoming HTTP requests | **Untrusted** | All query parameters validated |
+| Incoming HTTP requests | **Untrusted** | Query and form values, JSON bodies, GraphQL inputs, MCP headers, and origins are validated before use |
 
 No third-party content or data services are called at runtime; Tor and optional I2P are alternate access networks for the local service.
 

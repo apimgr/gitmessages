@@ -6,7 +6,7 @@ Git Messages does not query third-party content or data providers and has no web
 
 Any HTTP client can use the public REST API. The companion CLI uses the configured server and sends a project-specific User-Agent. OpenAPI JSON is available at `/api/v1/server/swagger`; GraphQL is available at `/graphql`; MCP Streamable HTTP is available at `/api/v1/server/mcp` and the `/api/mcp` and `/mcp` aliases.
 
-MCP offers the same public catalog and stateless message builder without authentication. It supports `list_commit_types`, `list_conventions`, `list_templates`, `get_random_template`, `get_random_example`, and `build_commit_message`. See `/server/help/mcp` for connection details.
+MCP exposes one tool for each public REST operation, plus GET and POST GraphQL query tools: `get_api_index`, `list_commit_types`, `list_conventions`, `list_templates`, `get_random_template`, `get_random_example`, `build_commit_message`, `get_health`, `get_about`, `get_help`, `get_mcp_help`, `get_privacy`, `get_terms`, `get_security`, `get_preferences`, `get_openapi`, `graphql_query_get`, and `graphql_query`. The localized `/server/help/mcp` page and the API tool list are generated from the same operation definitions.
 
 ## Git command pipelines
 
