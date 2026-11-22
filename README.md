@@ -1,6 +1,7 @@
 # Git Messages
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
+[![Documentation](https://readthedocs.org/projects/apimgr-gitmessages/badge/?version=latest)](https://apimgr-gitmessages.readthedocs.io/)
 
 Git Messages is a curated reference and builder for git commit message conventions. Browse commit types, emoji mappings, templates, and examples, or build a message using Conventional Commits or Angular formatting. The catalog is embedded in the Go binaries. The service has no accounts, user submissions, or catalog database; it can provide alternate access through Tor and optional I2P when configured and available.
 
