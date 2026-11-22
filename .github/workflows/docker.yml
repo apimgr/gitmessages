@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   image:
+    outputs:
+      base_image: ${{ steps.tags.outputs.base_image }}
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -29,10 +31,14 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
             echo "tags=$IMAGE:$VERSION,$IMAGE:latest" >> "$GITHUB_OUTPUT"
+            echo "base_image=$IMAGE:$VERSION" >> "$GITHUB_OUTPUT"
           elif [[ "$GITHUB_REF_NAME" == beta ]]; then
             echo "tags=$IMAGE:beta" >> "$GITHUB_OUTPUT"
+            echo "base_image=$IMAGE:beta" >> "$GITHUB_OUTPUT"
           else
-            echo "tags=$IMAGE:$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+            COMMIT_TAG="$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+            echo "tags=$IMAGE:$COMMIT_TAG" >> "$GITHUB_OUTPUT"
+            echo "base_image=$IMAGE:$COMMIT_TAG" >> "$GITHUB_OUTPUT"
           fi
       - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
@@ -66,3 +72,5 @@ jobs:
           push: true
           provenance: false
           tags: ghcr.io/${{ github.repository }}:devel
+          build-args: |
+            BASE_IMAGE=${{ needs.image.outputs.base_image }}

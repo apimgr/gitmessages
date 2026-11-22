@@ -48,11 +48,13 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
+          COMMIT_ID: ${{ github.sha }}
         run: |
-          VERSION="$(git rev-parse --short=7 HEAD)"
+          VERSION="$(printf '%s' "$COMMIT_ID" | cut -c1-7)"
           EXT="${{ matrix.ext }}"
-          go build -buildvcs=false -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.CommitID=$(git rev-parse --short=7 HEAD) -X main.BuildEpoch=$(date -u +%s)" -o "gitmessages-${{ matrix.goos }}-${{ matrix.goarch }}$EXT" ./src
-          go build -buildvcs=false -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.CommitID=$(git rev-parse --short=7 HEAD) -X main.BuildEpoch=$(date -u +%s)" -o "gitmessages-cli-${{ matrix.goos }}-${{ matrix.goarch }}$EXT" ./src/client
+          BUILD_EPOCH="$(date -u +%s)"
+          go build -buildvcs=false -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.CommitID=$COMMIT_ID -X main.BuildEpoch=$BUILD_EPOCH" -o "gitmessages-${{ matrix.goos }}-${{ matrix.goarch }}$EXT" ./src
+          go build -buildvcs=false -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.CommitID=$COMMIT_ID -X main.BuildEpoch=$BUILD_EPOCH" -o "gitmessages-cli-${{ matrix.goos }}-${{ matrix.goarch }}$EXT" ./src/client
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: daily-${{ matrix.goos }}-${{ matrix.goarch }}
