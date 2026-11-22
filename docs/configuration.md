@@ -76,6 +76,68 @@ Area names are conventions; the loader accepts supported settings in any merged 
 | `server.logs.access_format` | Access log format; defaults to `apache`. |
 | `server.logs.level` | Log level; defaults to `info`. |
 
+## Security feeds and GeoIP
+
+These settings are stored in the security configuration area. The public catalog is independent of these operational datasets.
+
+| YAML key | Behavior |
+|---|---|
+| `server.security.allowlist` | Trusted client IP addresses and CIDRs that bypass blocklist, rate-limit, and GeoIP checks; authentication and authorization still apply. |
+| `server.security.blocked_ips` | Explicit IP addresses and CIDRs rejected before rate limiting. |
+| `server.security.blocklists.enabled` | Enables the built-in FireHOL list and configured extra sources. |
+| `server.security.blocklists.extra_sources[]` | Extra HTTPS IP or domain sources with an ID, type, URL, and optional `enabled` flag. |
+| `server.geoip.enabled` | Enables GeoIP checks; defaults to `true`, with no countries blocked by default. |
+| `server.geoip.deny_countries` | ISO country codes denied after blocklists and rate limiting. |
+| `server.geoip.allow_countries` | Country allow policy as defined by the GeoIP configuration; it does not bypass authentication. |
+| `server.geoip.presets` | Named country-code lists used by the country policy. |
+| `data.security_dir` | Optional operational security-data directory; `{data_dir}` is expanded to the configured data path. |
+| `data.cve.source` | NVD API endpoint used for CVE updates. |
+| `data.cve.api_key` | Optional NVD API key; keep it in `secrets.yml`. |
+| `data.cve.filter_by_cpe` | Enables filtering NVD results by configured CPE data. |
+| `data.trivy.enabled` | Enables Trivy vulnerability database updates. |
+| `data.trivy.source` | OCI image reference for the Trivy database. |
+
+GeoIP data is downloaded and refreshed by the built-in scheduler. Lookups fail open when data is unavailable, and private, loopback, and link-local addresses are not country-blocked. See [Security](security.md) for request-check ordering and feed behavior.
+
+## Scheduler
+
+The built-in scheduler uses persistent task state in the server database and always runs while the server is running. Time zone and task settings are stored in `yaml.d/maintenance.yml`.
+
+| YAML key | Behavior |
+|---|---|
+| `server.scheduler.timezone` | IANA time zone for scheduled jobs; defaults to `America/New_York`. |
+| `server.scheduler.catch_up_window` | Maximum delay for running a missed task after startup; defaults to `1h`. |
+| `server.scheduler.tasks.<task>.enabled` | Enables or disables an allowed task. Critical tasks cannot be disabled. |
+| `server.scheduler.tasks.<task>.schedule` | Five-field cron expression or supported `@every` interval. |
+| `server.scheduler.tasks.<task>.retry_on_fail` | Retries a failed task with bounded backoff. |
+| `server.scheduler.tasks.<task>.retry_delay` | Base delay between retries. |
+| `server.scheduler.tasks.backup_daily.retention` | Daily backup retention overrides. |
+
+Built-in task IDs and default schedules are defined in the AI.md scheduler reference. Tor and I2P health tasks are registered only when their corresponding network mode is active.
+
+## Backup and restore limits
+
+Backup policy is stored in `yaml.d/maintenance.yml`; compliance settings are stored with privacy configuration. Backup encryption passwords belong only in `secrets.yml`.
+
+| YAML key | Default | Behavior |
+|---|---:|---|
+| `server.backup.encryption.enabled` | `false` | Enables AES-256-GCM archive encryption when a password is configured. |
+| `server.backup.encryption_password` | unset | Argon2id key material; never expose it through APIs or logs. |
+| `server.backup.retention.max_backups` | `1` | Number of daily full backups retained. |
+| `server.backup.retention.keep_weekly` | `0` | Additional Sunday full backups retained. |
+| `server.backup.retention.keep_monthly` | `0` | Additional first-of-month full backups retained. |
+| `server.backup.retention.keep_yearly` | `0` | Additional January 1 full backups retained. |
+| `server.backup.retention.max_total_size` | `10%` | Maximum backup storage size as a volume percentage or byte size. |
+| `server.backup.disk_threshold` | `90` | Disk-usage percentage above which a scheduled backup is skipped. |
+| `server.restore.max_archive_size` | `1G` | Maximum archive size accepted for restore. |
+| `server.restore.max_expanded_size` | `4G` | Maximum combined extracted size. |
+| `server.restore.max_files` | `10000` | Maximum number of archive entries. |
+| `server.restore.max_file_size` | `512M` | Maximum size of one extracted file. |
+| `server.restore.max_ratio` | `100` | Maximum expanded-to-compressed size ratio. |
+| `server.compliance.enabled` | `false` | Requires encrypted backups when enabled. |
+
+Backups include configuration, the SQLite database, and applicable referenced files. See [Security](security.md) for sensitive-data handling and the maintenance commands in the [CLI reference](cli.md).
+
 ## Web and browser settings
 
 | YAML key | Accepted values and behavior |
