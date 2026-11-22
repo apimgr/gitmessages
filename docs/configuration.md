@@ -84,6 +84,7 @@ Security and GeoIP settings are stored in the security configuration area. The p
 |---|---|
 | `server.security.allowlist` | Trusted client IP addresses and CIDRs that bypass blocklist, rate-limit, and GeoIP checks; authentication and authorization still apply. |
 | `server.security.blocked_ips` | Explicit IP addresses and CIDRs rejected before rate limiting. |
+| `server.security.reports.retention_days` | Days to retain closed security reports; defaults to `365`. Open reports are never purged. |
 | `server.security.blocklists.enabled` | Enables the built-in FireHOL list and configured extra sources. |
 | `server.security.blocklists.extra_sources[]` | Extra HTTPS IP or domain sources with an ID, type, URL, and optional `enabled` flag. |
 | `server.geoip.enabled` | Enables GeoIP checks; defaults to `true`, with no countries blocked by default. |
