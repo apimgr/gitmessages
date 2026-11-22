@@ -32,25 +32,27 @@ owner_token: gitmessages_owner_token_7gT2qA
 - OpenAPI/Swagger docs at `/api/{api_version}/server/swagger`
 - GraphQL at `/graphql`
 - MCP over Streamable HTTP at `/api/v1/server/mcp`, with direct aliases `/api/mcp` and `/mcp`, exposing only the public catalog and stateless message builder
+- Anonymous owner tokens for resource ownership and MCP access, without user accounts
+- Server contact and security-report forms required by the shared server specification; no submitted commit messages or community conventions are accepted
 
 **Non-goals:**
-- No user accounts, registration, or login of any kind
+- No user accounts, registration, passwords, or profile login
 - No admin web panel (server configured via `server.yml` only)
 - No user-submitted messages or community conventions (curated dataset only, updated via releases)
-- No paid tiers, no API keys, no rate-limited access tiers
+- No paid tiers or rate-limited access tiers
 - No git repository integration (read-only reference provider only)
 
-**Product data and third-party integrations:** The catalog is immutable release data embedded in the binary, the message builder is stateless, and no user-submitted data is collected. The service does not query third-party content or data providers at runtime. Tor and optional I2P provide alternate network access to the same local public reference service, as required by the shared server specification. The product has no catalog or user-data database; shared operational state may be persisted as required by AI.md. Email and GeoIP are not product integrations, and no scheduled catalog jobs run. Shared backup and restore cover applicable operational configuration and state, never user accounts or submissions. Operational availability controls such as health checks and rate limiting remain applicable.
+**Product data and third-party integrations:** The catalog is immutable release data embedded in the binary, and the message builder is stateless. The service accepts contact and security reports required by the shared server specification, but never accepts user-submitted commit messages or community conventions. It does not query third-party content or data providers at runtime. Tor and optional I2P provide alternate network access to the same local reference service. Shared operational state, owner tokens, contact reports, and security reports may be persisted as required by AI.md. Email is used for configured contact and security-report delivery; no scheduled catalog jobs run. Shared backup and restore cover applicable operational configuration and state, never user accounts or submitted catalog content. Operational availability controls such as health checks and rate limiting remain applicable.
 
 ### Roles & permissions
 
-There are no user roles. All endpoints are public and require no authentication.
+There are no user accounts or human login roles. Public catalog and web pages are available without a token; owner-token and operator-only routes follow AI.md authentication requirements.
 
 | Actor | Access |
 |-------|--------|
 | **Anonymous visitor (browser)** | Full read access to all web pages and API endpoints |
-| **Anonymous API client (curl/CLI)** | Full read access to all API endpoints |
-| **Server operator** | Configures server via `server.yml` only; no web management interface |
+| **Anonymous API client (curl/CLI)** | Public catalog access; may use an owner token for MCP and owned resources |
+| **Server operator** | Configures server via `server.yml` and uses the operator token for protected operations; no admin web panel |
 
 ### Data model & sensitivity
 
@@ -85,7 +87,7 @@ No third-party content or data services are called at runtime; Tor and optional 
 
 ### Threat model & abuse cases
 
-**Primary assets:** service availability.
+**Primary assets:** service availability, operator credentials, owner tokens, and confidential contact/security report content.
 
 **Attacker/abuser goals:**
 - DoS via high-rate requests
@@ -97,7 +99,7 @@ No third-party content or data services are called at runtime; Tor and optional 
 
 ### Security decisions & exceptions
 
-- **No authentication on any endpoint**: intentional. Public read-only reference API.
+- **Public catalog access**: intentional. The curated reference remains publicly readable; protected operations follow AI.md.
 - **All responses include `Access-Control-Allow-Origin: *`**: intentional. Public data API designed for cross-origin browser use.
 
 ### API routes

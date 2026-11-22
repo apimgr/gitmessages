@@ -1,6 +1,6 @@
 # API reference
 
-All REST routes use `/api/v1`. JSON responses use an `{ "ok": true, "data": ... }` success envelope and a structured error envelope. No authentication is required; the catalog is public and the builder stores no state.
+REST resources use `/api/v1`. JSON responses use an `{ "ok": true, "data": ... }` success envelope and a structured error envelope. The catalog, ordinary server pages, health, OpenAPI, and GraphQL are public. MCP, metrics, owner-token management, and operator-only routes require the Bearer credentials defined by the server specification. The message builder stores no state.
 
 | Method | Route | Purpose |
 |---|---|---|
@@ -19,12 +19,19 @@ All REST routes use `/api/v1`. JSON responses use an `{ "ok": true, "data": ... 
 | GET | `/api/v1/server/security` | Return localized security reporting instructions and canonical policy links |
 | GET | `/api/v1/server/preferences` | Return the current request language and theme preference |
 | GET | `/api/v1/server/help/mcp` | Return localized MCP connection instructions |
+| GET, POST | `/api/v1/server/preferences/tokens/*` | Issue or manage anonymous owner tokens; protected by owner/operator credentials as specified |
+| GET | `/api/v1/server/metrics[/{service}]` | Internal service metrics; requires its per-service Bearer token |
+| GET | `/api/v1/server/contact` | Return contact form descriptors and reporting information |
+| POST | `/api/v1/server/contact` | Submit the selected contact or security report; form and security anti-spam requirements apply |
+| GET | `/api/v1/server/dpo` | Return the configured privacy contact |
+| GET | `/api/v1/server/security/policy` | Return the disclosure policy |
+| GET | `/api/v1/server/security/thanks` | Return public researcher acknowledgments |
 | GET | `/api/v1/server/swagger` | Return OpenAPI JSON |
 | POST | `/api/v1/server/mcp`, `/api/mcp`, `/mcp` | MCP JSON-RPC tools for the public catalog and stateless message builder |
 
 `/.well-known/security.txt` publishes the security contact, expiration, preferred languages, canonical URL, and reporting policy.
 
-Server-page APIs mirror the public page content. The preferences endpoint returns the current request language and theme. `.txt` variants return plain text when needed by command-line clients. The `lang` query parameter, saved language cookie, or `Accept-Language` header selects the response language.
+Server-page APIs mirror public page content. The preferences endpoint returns the current request language and theme. `.txt` variants return plain text when available. A `?lang=` link pins the language in a cookie; otherwise a saved language cookie or `Accept-Language` selects it.
 
 Example builder input:
 
@@ -69,4 +76,4 @@ OpenAPI JSON is available at `/api/v1/server/swagger` and its direct alias `/api
 
 ## Model Context Protocol
 
-The Streamable HTTP endpoint accepts JSON-RPC `POST` requests at `/api/v1/server/mcp`. `/api/mcp` and `/mcp` are direct aliases. It exposes each public REST operation and GraphQL queries without authentication; it has no user resources or token-management tools. MCP clients must send the negotiated protocol version in `MCP-Protocol-Version`, the JSON-RPC method in `Mcp-Method`, and (for `tools/call`) the tool name in `Mcp-Name`. The version must also match `params._meta.io.modelcontextprotocol/protocolVersion`. The endpoint validates `Origin` when supplied. See `/server/help/mcp` for the localized tool list and connection details.
+The Streamable HTTP endpoint accepts JSON-RPC `POST` requests at `/api/v1/server/mcp`; `/api/mcp` and `/mcp` are direct aliases. Every request requires `Authorization: Bearer …` using an operator or owner token. It exposes the public catalog and stateless message builder, never token-management tools. MCP clients send `MCP-Protocol-Version`, `Mcp-Method`, and for named operations `Mcp-Name`; values must match the JSON-RPC body. Origin, authentication, protocol version, and headers are checked in the order specified by AI.md. See `/server/help/mcp` for connection details.

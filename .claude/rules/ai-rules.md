@@ -6,7 +6,7 @@
 
 - Never edit AI.md; never invent product behavior outside IDEA.md.
 - Never run Go on the host; never use generated user content as executable input.
-- Never add accounts, user submissions, or paid access tiers to this project.
+- Never add user accounts, user-submitted commit messages or conventions, or paid access tiers. Shared AI.md server features such as anonymous owner tokens and contact/security reporting remain required.
 
 ## CRITICAL - ALWAYS DO
 

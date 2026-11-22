@@ -4,7 +4,7 @@
 
 ## CRITICAL - NEVER DO
 
-- Never add a database for the immutable embedded catalog or store user data without IDEA.md authorization.
+- Never add a database for the immutable embedded catalog. Persist only operational, owner-token, contact, and security-report data required by AI.md.
 - Never expose secrets, internal paths, raw panic details, or unbounded request bodies.
 
 ## CRITICAL - ALWAYS DO
@@ -14,4 +14,4 @@
 
 ## Key rules
 
-This product intentionally has no accounts or submissions. For complete details, see AI.md PART 9, PART 10, PART 11, and PART 31.
+This product has no user accounts or submitted catalog content. Shared AI.md owner-token and contact/security-report features apply. For complete details, see AI.md PART 9, PART 10, PART 11, and PART 31.

@@ -6,9 +6,10 @@ The site uses server-rendered HTML and remains usable without JavaScript. Pages 
 - `/types` lists all supported commit types and examples.
 - `/templates` lists reusable feature, bug-fix, release, hotfix, and documentation templates.
 - `/builder` accepts a type, optional scope, description, body, convention, and breaking-change marker. The server validates and renders the resulting message.
-- `/server/about`, `/server/help`, `/server/healthz`, `/server/privacy`, `/server/terms`, and `/server/security` provide service information and security reporting guidance. Their public API representations are under `/api/v1/server/`.
+- `/server/about`, `/server/help`, `/server/healthz`, `/server/privacy`, `/server/terms`, and `/server/security` provide service information and reporting guidance. `/server/contact` handles the configured contact and security-report flows; `/server/dpo`, `/server/security/policy`, and `/server/security/thanks` expose the related public information. Their API mirrors are under `/api/v1/server/` where defined.
 - `/server/preferences` lets visitors save a language and theme in browser cookies. `/api/v1/server/preferences` reports the current request's language and theme.
-- `/server/help/mcp` explains the public MCP connection and tools; `/api/v1/server/help/mcp` mirrors that help data.
+- `/server/preferences/tokens` manages the anonymous owner's tokens without requiring a JavaScript client; `/api/v1/server/preferences/tokens/*` provides its API mirror.
+- `/server/help/mcp` explains the Bearer-authenticated MCP connection and tools; `/api/v1/server/help/mcp` mirrors that help data.
 - `/.well-known/security.txt` publishes the security reporting contact, supported languages, expiry, canonical URL, and policy link.
 - `/manifest.json`, `/icon.svg`, and `/sw.js` provide installable PWA metadata and offline navigation fallback.
 

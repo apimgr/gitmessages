@@ -4,7 +4,7 @@
 
 ## CRITICAL - NEVER DO
 
-- Never add email, GeoIP, analytics, backup, update, or scheduling behavior not defined by IDEA.md.
+- Never add email, GeoIP, analytics, backup, update, or scheduling behavior outside AI.md's shared server requirements.
 
 ## CRITICAL - ALWAYS DO
 
@@ -13,4 +13,4 @@
 
 ## Key rules
 
-No external runtime services or persisted product data are in scope. For complete details, see AI.md PART 17 through PART 22.
+The embedded catalog remains immutable; implement shared server features defined by AI.md. For complete details, see AI.md PART 17 through PART 22.

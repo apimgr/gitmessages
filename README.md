@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
 [![Documentation](https://readthedocs.org/projects/apimgr-gitmessages/badge/?version=latest)](https://apimgr-gitmessages.readthedocs.io/)
 
-Git Messages is a curated reference and builder for git commit message conventions. Browse commit types, emoji mappings, templates, and examples, or build a message using Conventional Commits or Angular formatting. The catalog is embedded in the Go binaries. The service has no accounts, user submissions, or catalog database; it can provide alternate access through Tor and optional I2P when configured and available.
+Git Messages is a curated reference and builder for git commit message conventions. Browse commit types, emoji mappings, templates, and examples, or build a message using Conventional Commits or Angular formatting. The catalog is embedded in the Go binaries. There are no user accounts or submitted catalog content. Anonymous owner tokens support protected API operations, and configured contact/security forms accept reports required by the server specification. The service can provide alternate access through Tor and optional I2P when configured and available.
 
 ## Features
 
@@ -13,7 +13,10 @@ Git Messages is a curated reference and builder for git commit message conventio
 - Random example messages
 - Server-rendered, mobile-friendly web UI and installable PWA
 - Eight embedded interface languages: English, Spanish, French, German, Italian, Arabic, Chinese, and Japanese
-- Versioned REST API, OpenAPI JSON, GraphQL, and public MCP tools
+- Versioned REST API, OpenAPI JSON, GraphQL, and Bearer-authenticated MCP tools
+- Owner tokens for MCP access and owner-scoped API resources
+- Contact and coordinated security-report pages
+- Internal Prometheus, Grafana, and Loki-compatible metrics endpoints
 - Companion `gitmessages-cli` for shell use
 - Interactive terminal menu when `gitmessages-cli` starts without a command in a TTY
 - Optional Tor v3 onion service and I2P eepsite support
@@ -55,15 +58,17 @@ The server supports `-h`/`--help`, `-v`/`--version`, `--port`, `--address`, `--c
 - `/types` — commit type reference
 - `/templates` — message templates
 - `/builder` — interactive commit message builder
-- `/server/about`, `/server/help`, `/server/healthz`, `/server/privacy`, `/server/terms`, `/server/security`, `/server/preferences` — server information and display preference pages
-- `/.well-known/security.txt` — security reporting metadata
+- `/server/about`, `/server/help`, `/server/healthz`, `/server/privacy`, `/server/terms`, `/server/security`, `/server/security/policy`, `/server/security/thanks`, `/server/dpo` — server information and reporting pages
+- `/server/contact` and `/.well-known/security.txt` — configured contact and security-report entry points
+- `/server/preferences/tokens` — anonymous owner token management
+- `/server/metrics[/{service}]` — internal service metrics, protected by per-service Bearer tokens
 - `/server/docs/swagger` — REST API reference
 - `/server/docs/graphql` — GraphQL query guide
 - `/server/help/mcp` — MCP connection guide for the public catalog and stateless message builder
 
 ## REST API
 
-The API is public and read-only except for its stateless message builder. Responses use JSON envelopes with `ok` and `data` fields.
+Catalog reads are public and read-only except for the stateless message builder. Protected routes such as MCP and metrics require their specified Bearer token. Responses use JSON envelopes with `ok` and `data` fields.
 
 ```sh
 curl -q -LSsf http://127.0.0.1:8080/api/v1/types
@@ -77,7 +82,7 @@ curl -q -LSsf http://127.0.0.1:8080/api/v1/messages \
   -d '{"type":"feat","scope":"api","description":"add message search"}'
 ```
 
-OpenAPI JSON is served at `/api/v1/server/swagger` (also `/api/swagger`). GraphQL accepts GET and POST requests at `/graphql`, `/api/v1/server/graphql`, and `/api/graphql`. MCP Streamable HTTP accepts JSON-RPC POST requests at `/api/v1/server/mcp` (also `/api/mcp` and `/mcp`). API responses support JSON and plain text through `.txt` suffixes or `Accept` headers.
+OpenAPI JSON is served at `/api/v1/server/swagger` (also `/api/swagger`). GraphQL accepts GET and POST requests at `/graphql`, `/api/v1/server/graphql`, and `/api/graphql`. MCP Streamable HTTP accepts JSON-RPC POST requests at `/api/v1/server/mcp` (also `/api/mcp` and `/mcp`) and requires an owner or operator Bearer token. API responses support JSON and plain text through `.txt` suffixes or `Accept` headers.
 
 ## CLI
 
@@ -109,7 +114,7 @@ Configuration is optional. Server defaults are documented in `src/config/config.
 
 ## Security and privacy
 
-The catalog is embedded and no user-submitted content is stored. All builder fields are validated on the server. Public endpoints include security headers, CORS, request size limits, and per-client rate limiting. Tor and I2P provide alternate access; the service does not query third-party content or data providers. Tor starts when its binary is available. I2P is opt-in on native systems and enabled by default in containers.
+The catalog is embedded and user-submitted commit messages or conventions are not accepted. Contact and security reports follow the configured validation, encryption, access, and retention rules. Builder fields are validated on the server. Public endpoints include security headers, CORS, request size limits, and per-client rate limiting. Tor and I2P provide alternate access; the service does not query third-party content or data providers. Tor starts when its binary is available. I2P is opt-in on bare metal and in VMs and enabled by default in containers.
 
 ## Development
 
