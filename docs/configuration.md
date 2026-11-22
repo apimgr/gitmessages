@@ -32,13 +32,22 @@ The server reads `{config_dir}/server.yml`; choose the directory with `--config 
 | `server.logs.level` | Log level; defaults to `info`. |
 | `server.tor.*` | Configure the Tor binary, networking, startup/bootstrap timeouts, circuit and stream limits, bandwidth limits, introduction points, and virtual HTTP port. Tor starts automatically when available. |
 | `server.i2p.*` | Configure enablement, i2pd binary or SAM bridge, virtual HTTP port, tunnel lengths and quantities, signature type, and bootstrap timeout. |
+| `server.tokens.max_linked` | Maximum linked tokens per owner; defaults to 25. |
+| `server.tokens.cookie_max_age` | Sliding owner-cookie lifetime; defaults to one year. |
+| `server.tokens.idle_purge_days` | Idle owner purge interval when the owner has no resources; 0 disables purging. |
+| `server.contact.*` | Recipient addresses and webhooks for admin, security, abuse, DPO, and general reporting roles. Role addresses fall back according to the Contact Configuration rules in AI.md. |
+| `server.pages.contact.enabled` | Enable the contact and report form; defaults to `true`. Disabled form routes return 404. |
+| `server.pages.contact.captcha` | Captcha provider: `simple`, `recaptcha`, or `hcaptcha`; defaults to `simple`. Overlay requests always use the simple challenge. |
+| `server.pages.contact.antispam.*` | Fill-time, honeypot, review, rate, link, markup, blocked-word/domain, strike, and duplicate controls. Defaults are conservative and documented in AI.md. |
+| `server.notifications.email.smtp.*` | SMTP host/port/credentials/TLS. An empty host triggers startup autodetection; email features stay disabled if no relay is found. |
+| `server.notifications.email.from.*` | Sender name/address; default address is `no-reply@{fqdn}`. |
 | `web.ui.theme` | Default theme: `dark`, `light`, or `auto`. A visitor's `theme` cookie takes precedence. |
 | `web.ui.accent` | UI accent color. |
 | `web.robots.allow` | Paths published as allowed in `robots.txt`. |
 | `web.robots.deny` | Paths published as disallowed in `robots.txt`. |
 | `web.security.contact` | Optional security contact setting. |
 
-Tor v3 hosting starts automatically when a Tor binary is available. I2P is enabled by default in containers and is opt-in elsewhere; use `server.i2p.enabled`, `I2P_ENABLED`, or `--i2p`. The server prefers its own `i2pd` process and can use an available local SAM bridge. Both overlays serve the same local public reference service.
+Tor v3 hosting starts automatically when a Tor binary is available. I2P is enabled by default in containers and is opt-in elsewhere; use `server.i2p.enabled`, `I2P_ENABLED`, or `--i2p`. The server prefers its own `i2pd` process and can use an available local SAM bridge. Both overlays serve the same local reference service. For owner tokens, contact/report delivery, SMTP, and metrics configuration, see the linked token and security/metrics references and the matching AI.md sections.
 
 Legacy `server.logging.*`, `web-ui.*`, `web-robots.*`, and `web-security.*` keys are migrated where recognized. The generated sample config and this table describe the settings currently accepted by the binary; unrecognized YAML keys do not enable features.
 

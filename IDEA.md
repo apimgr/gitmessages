@@ -119,10 +119,15 @@ No third-party content or data services are called at runtime; Tor and optional 
 | GET | `/api/v1/server/privacy` | None | Localized privacy policy |
 | GET | `/api/v1/server/terms` | None | Localized terms |
 | GET | `/api/v1/server/security` | None | Localized security reporting guidance and links |
+| GET | `/api/v1/server/dpo` | None | Privacy contact information |
 | GET | `/api/v1/server/preferences` | None | Current request language and theme preference |
+| GET, POST | `/api/v1/server/contact` | None | Contact/security report form descriptors and submission flow |
 | GET | `/api/v1/server/help/mcp` | None | Localized MCP connection instructions |
 | GET | `/api/v1/server/swagger` | None | OpenAPI JSON document |
-| POST | `/api/v1/server/mcp`, `/api/mcp`, `/mcp` | None | MCP JSON-RPC tools for public catalog reads and stateless message building |
+| GET | `/api/v1/server/metrics[/{service}]` | Service Bearer token | Internal metrics |
+| GET | `/api/v1/server/preferences/tokens` | Owner token when managing an existing identity | Owner-token page data |
+| POST | `/api/v1/server/preferences/tokens/primary` | None | Issue an owner and primary token |
+| POST | `/api/v1/server/mcp`, `/api/mcp`, `/mcp` | Owner or operator Bearer token | MCP JSON-RPC tools for public catalog reads and stateless message building |
 | GET, POST | `/graphql`, `/api/graphql`, `/api/v1/server/graphql` | None | Read the catalog or statelessly build a commit message |
 
 All listed API routes accept JSON by default. The GET resources and server pages also support plain text through their `.txt` form or `Accept: text/plain`; the message builder accepts JSON or form-compatible browser input. `/api/swagger` is a compatibility alias for the OpenAPI document. `/.well-known/security.txt` is a public metadata file, not an API route.

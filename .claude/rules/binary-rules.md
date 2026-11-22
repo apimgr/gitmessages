@@ -11,7 +11,7 @@
 
 - Build static server and companion CLI binaries with matching release versions.
 - Respect the actual invoked binary name in help/version output; use `NO_COLOR` where color is added.
-- Keep API clients unauthenticated because the catalog is public.
+- Keep public catalog clients unauthenticated; require Bearer tokens only on AI.md routes whose Auth rule requires them.
 
 ## Key rules
 
