@@ -15,7 +15,7 @@ All routes accept `GET` and require a service-specific bearer token in the `Auth
 | `/api/metrics[/{service}]` | Per service | Unversioned aliases |
 | `/metrics[/{service}]` | Per service | Root aliases, controlled by `server.metrics.root.enabled` |
 
-The aliases invoke the same handler and do not redirect. The Prometheus endpoint includes application uptime/build information, HTTP request count, request duration and size, active requests, rate-limit totals, metrics-token authentication attempts, zero-valued owner-token gauges, Tor status, Go runtime values, and host memory, CPU, and data-directory disk values on supported platforms. Database, cache, and scheduler metrics are not emitted because Git Messages has none of those systems. The Loki route serves bounded application log lines and request events; credentials are redacted, and request events omit headers, query strings, and client IP addresses.
+The aliases invoke the same handler and do not redirect. The Prometheus endpoint includes application uptime/build information, HTTP request count, request duration and size, active requests, rate-limit totals, metrics-token authentication attempts, zero-valued owner-token gauges, Tor status, Go runtime values, and host memory, CPU, and data-directory disk values on supported platforms. Git Messages has a SQLite database and a built-in persistent scheduler, but their required database and scheduler metrics are not yet exported. The Loki route serves bounded application log lines and request events; credentials are redacted, and request events omit headers, query strings, and client IP addresses.
 
 ## Configuration
 
