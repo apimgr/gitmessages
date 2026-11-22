@@ -4,6 +4,7 @@ All REST routes use `/api/v1`. JSON responses use an `{ "ok": true, "data": ... 
 
 | Method | Route | Purpose |
 |---|---|---|
+| GET | `/api/v1` | List API resources and server page endpoints |
 | GET | `/api/v1/types` | List commit types and emoji mappings |
 | GET | `/api/v1/conventions` | List Conventional Commits and Angular conventions |
 | GET | `/api/v1/templates` | List message templates |
@@ -13,7 +14,17 @@ All REST routes use `/api/v1`. JSON responses use an `{ "ok": true, "data": ... 
 | GET | `/api/v1/server/healthz` | Return service health |
 | GET | `/api/v1/server/about` | Return service description |
 | GET | `/api/v1/server/help` | Return API documentation links |
+| GET | `/api/v1/server/privacy` | Return the localized privacy policy text |
+| GET | `/api/v1/server/terms` | Return the localized terms text |
+| GET | `/api/v1/server/security` | Return localized security reporting instructions and canonical policy links |
+| GET | `/api/v1/server/preferences` | Return the current request language and theme preference |
+| GET | `/api/v1/server/help/mcp` | Return localized MCP connection instructions |
 | GET | `/api/v1/server/swagger` | Return OpenAPI JSON |
+| POST | `/api/v1/server/mcp`, `/api/mcp`, `/mcp` | MCP JSON-RPC tools for the public catalog and stateless message builder |
+
+`/.well-known/security.txt` publishes the security contact, expiration, preferred languages, canonical URL, and reporting policy.
+
+Server-page APIs mirror the public page content. The preferences endpoint returns the current request language and theme. `.txt` variants return plain text when needed by command-line clients. The `lang` query parameter, saved language cookie, or `Accept-Language` header selects the response language.
 
 Example builder input:
 
@@ -54,4 +65,8 @@ Provide `variables.input` with the same fields as the REST builder request.
 
 ## OpenAPI
 
-OpenAPI JSON is available at `/api/v1/server/swagger` and its direct alias `/api/swagger`. The browser reference is `/server/docs/swagger`.
+OpenAPI JSON is available at `/api/v1/server/swagger` and its direct alias `/api/swagger`; descriptions follow the request language. The browser reference is `/server/docs/swagger`.
+
+## Model Context Protocol
+
+The Streamable HTTP endpoint accepts JSON-RPC `POST` requests at `/api/v1/server/mcp`. `/api/mcp` and `/mcp` are direct aliases. It exposes catalog reads and the stateless message builder without authentication; it has no user resources or token-management tools. MCP clients must send the negotiated protocol version in `MCP-Protocol-Version`, the JSON-RPC method in `Mcp-Method`, and (for `tools/call`) the tool name in `Mcp-Name`. The version must also match `params._meta.io.modelcontextprotocol/protocolVersion`. The endpoint validates `Origin` when supplied. See `/server/help/mcp` for the localized tool list and connection details.

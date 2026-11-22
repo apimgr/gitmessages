@@ -25,10 +25,12 @@ client_binary: gitmessages-cli
 - Random commit message retrieval
 - Interactive commit message builder (select type, scope, description, body)
 - Full web frontend (server-side Go templates, dark/light/auto theme, PWA, mobile-first)
-- Server pages: `/server/about`, `/server/help`, `/server/healthz`, `/server/privacy`, `/server/terms`
+- Server pages: `/server/about`, `/server/help`, `/server/healthz`, `/server/privacy`, `/server/terms`, `/server/security`, `/server/preferences`
+- Alternate public access over a Tor v3 hidden service when Tor is available, with optional I2P eepsite access according to the shared server specification
 - CLI client (`gitmessages-cli`) for shell-pipeline use: `git commit -m "$(gitmessages-cli random)"`
 - OpenAPI/Swagger docs at `/api/{api_version}/server/swagger`
 - GraphQL at `/graphql`
+- MCP over Streamable HTTP at `/api/v1/server/mcp`, with direct aliases `/api/mcp` and `/mcp`, exposing only the public catalog and stateless message builder
 
 **Non-goals:**
 - No user accounts, registration, or login of any kind
@@ -37,7 +39,7 @@ client_binary: gitmessages-cli
 - No paid tiers, no API keys, no rate-limited access tiers
 - No git repository integration (read-only reference provider only)
 
-**Shared server capabilities outside this product's scope:** database persistence, email, GeoIP, scheduled catalog jobs, and backup/restore do not apply. The catalog is immutable release data embedded in the binary, the message builder is stateless, no user data is collected, and no external runtime services are called. Operational availability controls such as health checks and rate limiting remain applicable.
+**Product data and third-party integrations:** The catalog is immutable release data embedded in the binary, the message builder is stateless, and no user-submitted data is collected. The service does not query third-party content or data providers at runtime. Tor and optional I2P provide alternate network access to the same local public reference service, as required by the shared server specification. The product has no catalog or user-data database; shared operational state may be persisted as required by AI.md. Email and GeoIP are not product integrations, and no scheduled catalog jobs run. Shared backup and restore cover applicable operational configuration and state, never user accounts or submissions. Operational availability controls such as health checks and rate limiting remain applicable.
 
 ### Roles & permissions
 
@@ -78,7 +80,7 @@ No PII stored or served.
 | Convention and message dataset (embedded at build) | Fully trusted | Static, compiled into binary |
 | Incoming HTTP requests | **Untrusted** | All query parameters validated |
 
-No external services called at runtime.
+No third-party content or data services are called at runtime; Tor and optional I2P are alternate access networks for the local service.
 
 ### Threat model & abuse cases
 
@@ -96,3 +98,28 @@ No external services called at runtime.
 
 - **No authentication on any endpoint**: intentional. Public read-only reference API.
 - **All responses include `Access-Control-Allow-Origin: *`**: intentional. Public data API designed for cross-origin browser use.
+
+### API routes
+
+| Method | Path | Auth | Purpose and response |
+|---|---|---|---|
+| GET | `/api/v1` | None | API discovery and route index |
+| GET | `/api/v1/types` | None | Curated commit types with descriptions, emoji, and examples |
+| GET | `/api/v1/conventions` | None | Supported convention definitions |
+| GET | `/api/v1/templates` | None | Curated message templates |
+| GET | `/api/v1/templates/random` | None | One random template |
+| GET | `/api/v1/messages/random` | None | One random example message |
+| POST | `/api/v1/messages` | None | Statelessly validate and format the supplied message fields |
+| GET | `/api/v1/server/healthz` | None | Public service health and version |
+| GET | `/api/v1/server/about` | None | Localized service description |
+| GET | `/api/v1/server/help` | None | Localized usage and documentation links |
+| GET | `/api/v1/server/privacy` | None | Localized privacy policy |
+| GET | `/api/v1/server/terms` | None | Localized terms |
+| GET | `/api/v1/server/security` | None | Localized security reporting guidance and links |
+| GET | `/api/v1/server/preferences` | None | Current request language and theme preference |
+| GET | `/api/v1/server/help/mcp` | None | Localized MCP connection instructions |
+| GET | `/api/v1/server/swagger` | None | OpenAPI JSON document |
+| POST | `/api/v1/server/mcp`, `/api/mcp`, `/mcp` | None | MCP JSON-RPC tools for public catalog reads and stateless message building |
+| GET, POST | `/graphql`, `/api/graphql`, `/api/v1/server/graphql` | None | Read the catalog or statelessly build a commit message |
+
+All listed API routes accept JSON by default. The GET resources and server pages also support plain text through their `.txt` form or `Accept: text/plain`; the message builder accepts JSON or form-compatible browser input. `/api/swagger` is a compatibility alias for the OpenAPI document. `/.well-known/security.txt` is a public metadata file, not an API route.

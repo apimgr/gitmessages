@@ -7,12 +7,14 @@ Git Messages is a full-stack reference for Conventional Commits and Angular comm
 - [Install and run the server](installation.md)
 - [Configure the server and CLI](configuration.md)
 - [Browse the web application](browser.md)
-- [Use the REST and GraphQL APIs](api.md)
+- [Use the REST, GraphQL, and MCP APIs](api.md)
 - [Use the companion CLI](cli.md)
 - [Security and privacy model](security.md)
+- [Browser pages](browser.md)
 - [Integrations](integrations.md)
 - [Contribute and develop](development.md)
+- [Translate the interface](translating.md)
 
 ## Product boundaries
 
-The catalog is curated and embedded into each release. The service has no user accounts, submissions, paid tiers, API keys, database, or runtime external-service calls. Changes to the catalog ship through application releases.
+The catalog is curated and embedded into each release. The service has no user accounts, submissions, paid tiers, or API keys. It does not query third-party content or data providers; a dedicated Tor process and optional I2P provider supply alternate access to the same local service. Changes to the catalog ship through application releases.
