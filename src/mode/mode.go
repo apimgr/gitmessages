@@ -3,6 +3,7 @@ package mode
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -12,13 +13,16 @@ type Mode string
 const (
 	// Production mode - optimized for production use
 	Production Mode = "production"
-	// Development mode - optimized for development with debugging features
+	// Development mode enables development-oriented logging and reload behavior.
 	Development Mode = "development"
+	// Debug mode explicitly opts in to maximum diagnostics.
+	Debug Mode = "debug"
 )
 
 var (
-	currentMode Mode = Production
-	mu          sync.RWMutex
+	currentMode  Mode = Production
+	debugEnabled bool
+	mu           sync.RWMutex
 )
 
 // Get returns the current application mode
@@ -35,13 +39,29 @@ func Set(m Mode) {
 	currentMode = m
 }
 
+// SetDebugEnabled sets the independent debug diagnostics switch.
+func SetDebugEnabled(enabled bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	debugEnabled = enabled
+}
+
+// IsDebugEnabled reports whether debug diagnostics were explicitly enabled.
+func IsDebugEnabled() bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	return debugEnabled
+}
+
 // ParseMode converts a string to a Mode constant
 // Accepts: "dev", "development", "prod", "production"
 // Returns Production mode for unrecognized values
 func ParseMode(s string) Mode {
-	switch s {
-	case "dev", "development":
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "dev", "devel", "development":
 		return Development
+	case "debug":
+		return Debug
 	case "prod", "production":
 		return Production
 	default:
@@ -78,6 +98,45 @@ func Initialize(flagMode string) {
 	}
 
 	Set(m)
+	if value, exists := os.LookupEnv("DEBUG"); exists {
+		SetDebugEnabled(isTruthy(value))
+	} else {
+		SetDebugEnabled(m == Debug)
+	}
+}
+
+// InitializeWithConfig applies the documented CLI, environment, config, default priority.
+func InitializeWithConfig(flagMode, configMode string, debugFlag *bool) {
+	selected := flagMode
+	if selected == "" {
+		selected = os.Getenv("MODE")
+	}
+	if selected == "" {
+		selected = configMode
+	}
+	if selected == "" {
+		selected = string(Production)
+	}
+	m := ParseMode(selected)
+	Set(m)
+	if debugFlag != nil {
+		SetDebugEnabled(*debugFlag)
+		return
+	}
+	if value, exists := os.LookupEnv("DEBUG"); exists {
+		SetDebugEnabled(isTruthy(value))
+		return
+	}
+	SetDebugEnabled(m == Debug)
+}
+
+func isTruthy(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on", "enable", "enabled":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetErrorDetail returns error details based on the current mode
@@ -88,7 +147,7 @@ func GetErrorDetail(err error) string {
 		return ""
 	}
 
-	if IsDevelopment() {
+	if IsDevelopment() || Get() == Debug {
 		// In development, return full error details
 		return err.Error()
 	}
@@ -97,18 +156,16 @@ func GetErrorDetail(err error) string {
 	return "An internal error occurred"
 }
 
-// ShouldShowDebugEndpoints returns whether debug endpoints should be enabled
-// Development: true (enables /debug/pprof/*, /debug/vars)
-// Production: false (returns 404 for /debug/* routes)
+// ShouldShowDebugEndpoints returns whether the explicit debug flag is enabled.
 func ShouldShowDebugEndpoints() bool {
-	return IsDevelopment()
+	return IsDebugEnabled()
 }
 
 // GetCacheHeaders returns appropriate cache control headers based on mode
 // Development: no-cache headers to ensure fresh content
 // Production: cache headers for optimal performance
 func GetCacheHeaders() map[string]string {
-	if IsDevelopment() {
+	if IsDevelopment() || Get() == Debug {
 		return map[string]string{
 			"Cache-Control": "no-cache, no-store, must-revalidate",
 			"Pragma":        "no-cache",
@@ -140,7 +197,7 @@ func ShouldCacheStaticFiles() bool {
 // Development: "debug"
 // Production: "info"
 func GetLogLevel() string {
-	if IsDevelopment() {
+	if IsDevelopment() || Get() == Debug {
 		return "debug"
 	}
 	return "info"
@@ -150,21 +207,19 @@ func GetLogLevel() string {
 // Development: true (watch for file changes)
 // Production: false (no file watching)
 func ShouldEnableAutoReload() bool {
-	return IsDevelopment()
+	return IsDevelopment() || Get() == Debug
 }
 
-// ShouldEnableProfiling returns whether profiling endpoints should be available
-// Development: true (profiling available at /debug/pprof/*)
-// Production: false (profiling disabled)
+// ShouldEnableProfiling returns whether profiling is explicitly enabled.
 func ShouldEnableProfiling() bool {
-	return IsDevelopment()
+	return IsDebugEnabled()
 }
 
 // GetPanicRecoveryMode returns how panics should be handled
 // Development: "verbose" (full stack trace in response)
 // Production: "graceful" (log error, return 500, continue)
 func GetPanicRecoveryMode() string {
-	if IsDevelopment() {
+	if IsDevelopment() || Get() == Debug {
 		return "verbose"
 	}
 	return "graceful"

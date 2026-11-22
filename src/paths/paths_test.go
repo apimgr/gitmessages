@@ -32,8 +32,8 @@ func TestGetDefaultDirs_Container(t *testing.T) {
 	for _, root := range []bool{true, false} {
 		withForcedDetection(t, true, root)
 		configDir, dataDir, logsDir := GetDefaultDirs("gitmessages")
-		if configDir != "/config" || dataDir != "/data" || logsDir != "/logs" {
-			t.Errorf("GetDefaultDirs() (root=%v) = (%q, %q, %q), want (/config, /data, /logs)", root, configDir, dataDir, logsDir)
+		if configDir != filepath.Join("/config", "gitmessages") || dataDir != filepath.Join("/data", "gitmessages") || logsDir != filepath.Join("/data", "log", "gitmessages") {
+			t.Errorf("GetDefaultDirs() (root=%v) = (%q, %q, %q), want project-scoped container paths", root, configDir, dataDir, logsDir)
 		}
 	}
 }
@@ -81,7 +81,7 @@ func TestGetDefaultDirs_NonRootLinux(t *testing.T) {
 	if dataDir != wantData {
 		t.Errorf("dataDir = %q, want %q", dataDir, wantData)
 	}
-	wantLogs := filepath.Join(tmp, OrgName, "gitmessages", "logs")
+	wantLogs := filepath.Join(userHome(t), ".local", "log", OrgName, "gitmessages")
 	if logsDir != wantLogs {
 		t.Errorf("logsDir = %q, want %q", logsDir, wantLogs)
 	}
@@ -97,8 +97,8 @@ func TestGetDefaultDirs_NonRootLinux_NoXDG(t *testing.T) {
 
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("XDG_DATA_HOME", "")
-	os.Unsetenv("XDG_CONFIG_HOME")
-	os.Unsetenv("XDG_DATA_HOME")
+	_ = os.Unsetenv("XDG_CONFIG_HOME")
+	_ = os.Unsetenv("XDG_DATA_HOME")
 
 	currentUser, err := user.Current()
 	if err != nil {
@@ -115,24 +115,53 @@ func TestGetDefaultDirs_NonRootLinux_NoXDG(t *testing.T) {
 	if dataDir != wantData {
 		t.Errorf("dataDir = %q, want %q", dataDir, wantData)
 	}
-	wantLogs := filepath.Join(currentUser.HomeDir, ".local", "share", OrgName, "gitmessages", "logs")
+	wantLogs := filepath.Join(currentUser.HomeDir, ".local", "log", OrgName, "gitmessages")
 	if logsDir != wantLogs {
 		t.Errorf("logsDir = %q, want %q", logsDir, wantLogs)
 	}
+}
+
+func userHome(t *testing.T) string {
+	t.Helper()
+	currentUser, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return currentUser.HomeDir
 }
 
 // TestGetDirectories is a smoke test: it must return non-empty paths for
 // all three directories regardless of environment.
 func TestGetDirectories(t *testing.T) {
 	dirs := GetDirectories()
-	if dirs.Config == "" {
-		t.Error("Config dir is empty")
+	for name, value := range map[string]string{"Config": dirs.Config, "Data": dirs.Data, "Cache": dirs.Cache, "Logs": dirs.Logs, "Backup": dirs.Backup} {
+		if value == "" {
+			t.Errorf("%s directory is empty", name)
+		}
 	}
-	if dirs.Data == "" {
-		t.Error("Data dir is empty")
+	if !isContainer() && dirs.PID == "" {
+		t.Error("PID path is empty outside a container")
 	}
-	if dirs.Logs == "" {
-		t.Error("Logs dir is empty")
+}
+
+func TestDefaultDirsMacOSAndBSD(t *testing.T) {
+	macRoot := defaultDirs("darwin", ProjectName, false, true, "")
+	if want := filepath.Join("/Library/Application Support", OrgName, ProjectName); macRoot.Config != want {
+		t.Errorf("macOS root config = %q, want %q", macRoot.Config, want)
+	}
+	if want := filepath.Join("/Library/Caches", OrgName, ProjectName); macRoot.Cache != want {
+		t.Errorf("macOS root cache = %q, want %q", macRoot.Cache, want)
+	}
+	macUser := defaultDirs("darwin", ProjectName, false, false, "/Users/example")
+	if want := filepath.Join("/Users/example", "Library", "Application Support", OrgName, ProjectName); macUser.Data != want {
+		t.Errorf("macOS user data = %q, want %q", macUser.Data, want)
+	}
+	bsdRoot := defaultDirs("freebsd", ProjectName, false, true, "")
+	if want := filepath.Join("/usr/local/etc", OrgName, ProjectName); bsdRoot.Config != want {
+		t.Errorf("BSD root config = %q, want %q", bsdRoot.Config, want)
+	}
+	if want := filepath.Join("/var/db", OrgName, ProjectName); bsdRoot.Data != want {
+		t.Errorf("BSD root data = %q, want %q", bsdRoot.Data, want)
 	}
 }
 
@@ -188,9 +217,8 @@ func TestEnsureDirectories(t *testing.T) {
 // includes the org/project names.
 func TestGetBackupDir(t *testing.T) {
 	got := GetBackupDir()
-	want := filepath.Join("/mnt/Backups", OrgName, ProjectName)
-	if got != want {
-		t.Errorf("GetBackupDir() = %q, want %q", got, want)
+	if got == "" || filepath.IsAbs(got) == false {
+		t.Errorf("GetBackupDir() = %q, want a non-empty absolute path", got)
 	}
 }
 

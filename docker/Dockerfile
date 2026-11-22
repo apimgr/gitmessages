@@ -13,29 +13,18 @@ FROM alpine:3.22
 
 ARG VERSION=devel
 ARG COMMIT_ID=N/A
-ARG BUILD_DATE
-
-LABEL org.opencontainers.image.vendor="apimgr" \
-      org.opencontainers.image.title="Git Messages" \
-      org.opencontainers.image.description="Curated git commit message conventions and builder" \
-      org.opencontainers.image.url="https://github.com/apimgr/gitmessages" \
-      org.opencontainers.image.source="https://github.com/apimgr/gitmessages" \
-      org.opencontainers.image.documentation="https://github.com/apimgr/gitmessages" \
-      org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.revision="${COMMIT_ID}" \
-      org.opencontainers.image.created="${BUILD_DATE}"
-
-RUN apk add --no-cache ca-certificates tini \
+RUN apk add --no-cache bash ca-certificates curl git i2pd libcap-utils tini tor \
     && addgroup -S -g 10001 gitmessages \
     && adduser -S -D -H -u 10001 -G gitmessages gitmessages \
     && mkdir -p /config /data /logs \
     && chown -R gitmessages:gitmessages /config /data /logs
 COPY --from=builder /out/gitmessages /usr/local/bin/gitmessages
 COPY docker/rootfs/ /
-RUN chmod 755 /usr/local/bin/gitmessages /usr/local/bin/entrypoint.sh
+COPY docker/Dockerfile /root/Dockerfile
+RUN chmod 755 /usr/local/bin/gitmessages /usr/local/bin/entrypoint.sh \
+    && setcap 'cap_net_bind_service=+ep' /usr/local/bin/gitmessages
 USER 10001:10001
-EXPOSE 8080
+EXPOSE 80
 STOPSIGNAL SIGRTMIN+3
-HEALTHCHECK --start-period=10m --interval=5m --timeout=15s --retries=3 CMD ["/usr/local/bin/gitmessages", "--port", "8080", "--status"]
+HEALTHCHECK --start-period=10m --interval=5m --timeout=15s --retries=3 CMD ["/usr/local/bin/gitmessages", "--status"]
 ENTRYPOINT ["tini", "-p", "SIGTERM", "--", "/usr/local/bin/entrypoint.sh"]

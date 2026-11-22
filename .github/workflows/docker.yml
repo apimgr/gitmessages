@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   image:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
@@ -40,6 +40,7 @@ jobs:
           file: docker/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: false
           tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             VERSION=${{ github.ref_name }}
@@ -47,7 +48,7 @@ jobs:
   devel:
     needs: image
     if: github.ref_type != 'tag'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
@@ -63,4 +64,5 @@ jobs:
           file: docker/Dockerfile.dev
           platforms: linux/amd64,linux/arm64
           push: true
+          provenance: false
           tags: ghcr.io/${{ github.repository }}:devel

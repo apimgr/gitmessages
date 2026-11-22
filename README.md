@@ -1,7 +1,8 @@
 # Git Messages
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
-[![Documentation](https://readthedocs.org/projects/apimgr-gitmessages/badge/?version=latest)](https://apimgr-gitmessages.readthedocs.io/)
+[![Release](https://img.shields.io/github/v/release/apimgr/gitmessages)](https://github.com/apimgr/gitmessages/releases)
+[![License](https://img.shields.io/github/license/apimgr/gitmessages)](LICENSE.md)
+[![CI](https://github.com/apimgr/gitmessages/actions/workflows/ci.yml/badge.svg)](https://github.com/apimgr/gitmessages/actions/workflows/ci.yml)
 
 Git Messages is a curated reference and builder for git commit message conventions. Browse commit types, emoji mappings, templates, and examples, or build a message using Conventional Commits or Angular formatting. The catalog is embedded in the Go binaries. There are no user accounts or submitted catalog content. Anonymous owner tokens support protected API operations, and configured contact/security forms accept reports required by the server specification. The service can provide alternate access through Tor and optional I2P when configured and available.
 
@@ -18,10 +19,11 @@ Git Messages is a curated reference and builder for git commit message conventio
 - Contact and coordinated security-report pages
 - Internal Prometheus, Grafana, and Loki-compatible metrics endpoints
 - Companion `gitmessages-cli` for shell use
-- Interactive terminal menu when `gitmessages-cli` starts without a command in a TTY
+- Interactive terminal interface and desktop GUI when `gitmessages-cli` starts without a command
+- First-run server connection flow and saved client profiles
 - Optional Tor v3 onion service and I2P eepsite support
 
-## Install
+## Production
 
 ### Linux, macOS, Windows, and FreeBSD
 
@@ -42,7 +44,7 @@ The included Compose deployment is in `docker/docker-compose.yml`. Run it from
 the `docker/` directory with `docker compose up -d`; review its host port
 binding before exposing the service on a network.
 
-## Run the server
+### Run the server
 
 ```sh
 gitmessages --port 8080 --address 127.0.0.1
@@ -50,9 +52,46 @@ gitmessages --port 8080 --address 127.0.0.1
 
 Open `http://127.0.0.1:8080/`. The application uses a read-only embedded catalog and has no operator web panel. Server settings are read from `server.yml` in the configuration directory selected by `--config` or `CONFIG_DIR`.
 
-The server supports `-h`/`--help`, `-v`/`--version`, `--port`, `--address`, `--config`, `--mode`, `--update`, `--service`, `--maintenance`, `--debug`, `--color auto|yes|no`, `--lang CODE`, and shell completions/init with `--shell`. The CLI supports command mode and an interactive terminal menu when launched without a command in a TTY. See the [CLI reference](docs/cli.md) and [configuration reference](docs/configuration.md) for details.
+The server supports `-h`/`--help`, `-v`/`--version`, `--port`, `--address`, `--config`, `--mode`, `--update`, `--service`, `--maintenance`, `--debug`, `--color auto|yes|no`, `--lang CODE`, and shell completions/init with `--shell`. Server settings are documented in the [configuration reference](docs/configuration.md).
 
-## Web pages
+## Client
+
+Install `gitmessages-cli` from the same release as the server. It supports command-line requests, an interactive terminal interface, and a desktop GUI when a local display is available. With no configured server, the interactive interface provides a first-run connection flow. Select `display.mode` as `auto`, `gui`, or `tui` in `cli.yml`.
+
+The CLI uses `--server`, `GITMESSAGES_SERVER_PRIMARY`, or its user configuration at `~/.config/apimgr/gitmessages/cli.yml`.
+
+```sh
+gitmessages-cli --server http://127.0.0.1:8080 types
+gitmessages-cli --server http://127.0.0.1:8080 random
+git commit -m "$(gitmessages-cli --server http://127.0.0.1:8080 random)"
+gitmessages-cli --server http://127.0.0.1:8080 build --type feat --scope api --description 'add message search'
+```
+
+Use `--json` before the command to print JSON output. Run `gitmessages-cli --shell bash` (or `zsh`, `fish`, or `powershell`) to print completions. Select a language with `--lang`, `GITMESSAGES_LANG`, the `language` setting in `cli.yml`, or `LANG`. See the [CLI reference](docs/cli.md) for all options.
+
+## Configuration
+
+Server configuration is optional. Settings are read from `server.yml`, `yaml.d/` area files, and `secrets.yml`; the [configuration reference](docs/configuration.md) describes precedence, supported settings, and defaults. The CLI creates its config directory with user-only permissions and writes `cli.yml` with mode `0600`.
+
+## API
+
+Catalog reads are public and read-only except for the stateless message builder. Protected routes such as MCP, metrics, and owner-token management require their specified Bearer token. Responses use JSON envelopes with `ok` and `data` fields.
+
+```sh
+curl -q -LSsf http://127.0.0.1:8080/api/v1/types
+curl -q -LSsf http://127.0.0.1:8080/api/v1/conventions
+curl -q -LSsf http://127.0.0.1:8080/api/v1/templates
+curl -q -LSsf http://127.0.0.1:8080/api/v1/messages/random
+curl -q -LSsf http://127.0.0.1:8080/api/v1/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"feat","scope":"api","description":"add message search"}'
+```
+
+OpenAPI JSON is served at `/api/v1/server/swagger` (also `/api/swagger`). GraphQL accepts GET and POST requests at `/graphql`, `/api/v1/server/graphql`, and `/api/graphql`. MCP Streamable HTTP accepts JSON-RPC POST requests at `/api/v1/server/mcp` (also `/api/mcp` and `/mcp`) and requires an owner or operator Bearer token. See the [API reference](docs/api.md).
+
+## Other
+
+### Web pages
 
 - `/` — product home
 - `/types` — commit type reference
@@ -66,52 +105,6 @@ The server supports `-h`/`--help`, `-v`/`--version`, `--port`, `--address`, `--c
 - `/server/docs/graphql` — GraphQL query guide
 - `/server/help/mcp` — MCP connection guide for the public catalog and stateless message builder
 
-## REST API
-
-Catalog reads are public and read-only except for the stateless message builder. Protected routes such as MCP and metrics require their specified Bearer token. Responses use JSON envelopes with `ok` and `data` fields.
-
-```sh
-curl -q -LSsf http://127.0.0.1:8080/api/v1/types
-curl -q -LSsf http://127.0.0.1:8080/api/v1/conventions
-curl -q -LSsf http://127.0.0.1:8080/api/v1/templates
-curl -q -LSsf http://127.0.0.1:8080/api/v1/messages/random
-curl -q -LSsf http://127.0.0.1:8080/api/v1/types \
-  -H 'Accept-Language: es'
-curl -q -LSsf http://127.0.0.1:8080/api/v1/messages \
-  -H 'Content-Type: application/json' \
-  -d '{"type":"feat","scope":"api","description":"add message search"}'
-```
-
-OpenAPI JSON is served at `/api/v1/server/swagger` (also `/api/swagger`). GraphQL accepts GET and POST requests at `/graphql`, `/api/v1/server/graphql`, and `/api/graphql`. MCP Streamable HTTP accepts JSON-RPC POST requests at `/api/v1/server/mcp` (also `/api/mcp` and `/mcp`) and requires an owner or operator Bearer token. API responses support JSON and plain text through `.txt` suffixes or `Accept` headers.
-
-## CLI
-
-The CLI uses `--server`, `GITMESSAGES_SERVER_PRIMARY`, or its user configuration at `~/.config/apimgr/gitmessages/cli.yml`.
-
-```sh
-gitmessages-cli --server https://gitmessages.example types
-gitmessages-cli --server https://gitmessages.example random
-git commit -m "$(gitmessages-cli random)"
-gitmessages-cli --server https://gitmessages.example build --type feat --scope api --description 'add message search'
-```
-
-Use `--json` before the command to print JSON output. Run `gitmessages-cli --shell bash` (or `zsh`, `fish`, or `powershell`) to print completions. Select a language with `--lang`, `GITMESSAGES_LANG`, the `language` setting in `cli.yml`, or `LANG`.
-
-## Build and test
-
-Go commands run through the `casjaysdev/go:latest` container using Make targets:
-
-```sh
-make dev
-make local
-make build
-make test
-```
-
-## Configuration
-
-Configuration is optional. Server defaults are documented in `src/config/config.go`; the product has no account settings. The CLI creates its config directory with user-only permissions and writes `cli.yml` with mode `0600`.
-
 ## Security and privacy
 
 The catalog is embedded and user-submitted commit messages or conventions are not accepted. Contact and security reports follow the configured validation, encryption, access, and retention rules. Builder fields are validated on the server. Public endpoints include security headers, CORS, request size limits, and per-client rate limiting. Tor and I2P provide alternate access; the service does not query third-party content or data providers. Tor starts when its binary is available. I2P is opt-in on bare metal and in VMs and enabled by default in containers.
@@ -120,6 +113,15 @@ The catalog is embedded and user-submitted commit messages or conventions are no
 
 See [the developer documentation](docs/development.md) for repository structure and contribution guidance.
 See the [translation guide](docs/translating.md) to update or add a locale.
+
+Go development commands run through the `casjaysdev/go:latest` container using Make targets:
+
+```sh
+make dev
+make local
+make build
+make test
+```
 
 ## Disclaimer
 

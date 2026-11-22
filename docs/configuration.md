@@ -1,6 +1,6 @@
 # Configuration
 
-This reference documents settings currently read by the Git Messages server. The complete implementation specification is [AI.md](../AI.md); see its configuration section for requirements not yet exposed by the current binary.
+This reference documents the server and CLI settings supported by Git Messages. The implementation specification is available in the [project repository](https://github.com/apimgr/gitmessages/blob/main/AI.md).
 
 ## Configuration files and precedence
 
@@ -46,6 +46,11 @@ Area names are conventions; the loader accepts supported settings in any merged 
 | `server.token` | Operator bearer token. Keep it in `secrets.yml`; the server creates one when absent. |
 | `server.trusted_proxies.additional` | List of proxy IP addresses or CIDRs permitted to supply forwarded headers. Private and loopback peers are trusted automatically. |
 | `server.trusted_proxies.client_ip_header` | Configures the client-IP header selection policy. |
+| `server.url_detection.learning` | Enables request-driven domain learning; defaults to `true`. |
+| `server.url_detection.min_samples` | Minimum observations before inferring a wildcard domain; defaults to `3`. |
+| `server.url_detection.sample_window` | Duration used to analyze domain patterns; defaults to `5m`. |
+| `server.url_detection.log_changes` | Logs inferred public URL changes; defaults to `true`. |
+| `server.url_detection.live_reload` | Applies learned URL changes without a restart; defaults to `true`. |
 | `server.cors.allowed_origins` | `*` or a list of HTTP/HTTPS origin URLs. A wildcard does not authorize MCP origins. |
 | `server.rate_limit.read.{requests,window}` | Read request limit and window in seconds. |
 | `server.rate_limit.write.{requests,window}` | Write request limit and window in seconds. |
@@ -116,9 +121,9 @@ See [Tokens](tokens.md) for issuance and management, and [Security](security.md)
 | `server.contact.general.email` | General/privacy contact recipient and fallback where documented. |
 | `server.contact.dpo.{name,email}` | Data protection contact details. |
 | `server.pages.contact.enabled` | Enables the contact/report form; defaults to `true`. |
-| `server.pages.contact.captcha` | `simple`, `recaptcha`, or `hcaptcha`; defaults to `simple`. |
-| `server.pages.contact.captcha_site_key` | Site key for an external CAPTCHA provider. |
-| `server.pages.contact.captcha_secret_key` | External CAPTCHA secret; store in `secrets.yml`. |
+| `server.pages.contact.captcha` | `simple` (default), `recaptcha`, or `hcaptcha`; overlay requests always use `simple`. |
+| `server.pages.contact.captcha_site_key` | Public site key rendered for the selected external CAPTCHA provider. |
+| `server.pages.contact.captcha_secret_key` | External CAPTCHA secret; stored in `secrets.yml` and never returned by the API. |
 | `server.pages.contact.success_message` | Confirmation message shown after an accepted report. |
 | `server.pages.contact.antispam.honeypot` | Enables the hidden-field bot check. |
 | `server.pages.contact.antispam.min_fill_seconds` | Minimum time before a report can be submitted. |
@@ -142,7 +147,7 @@ Email settings use `server.notifications.email`:
 
 | YAML key | Behavior |
 |---|---|
-| `server.notifications.email.enabled` | Runtime email enablement; the current loader enables it when an SMTP host is configured. |
+| `server.notifications.email.enabled` | Runtime state; enabled only after the startup SMTP handshake succeeds. |
 | `server.notifications.email.smtp.host` | SMTP relay hostname. |
 | `server.notifications.email.smtp.port` | TCP port, 1–65535; defaults to 587. |
 | `server.notifications.email.smtp.username` | Optional SMTP username. |
@@ -151,7 +156,7 @@ Email settings use `server.notifications.email`:
 | `server.notifications.email.from.name` | Sender display name. |
 | `server.notifications.email.from.email` | Sender email address. |
 
-SMTP environment overrides are `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_TLS`, `SMTP_FROM_NAME`, and `SMTP_FROM_EMAIL`. An empty SMTP host leaves email delivery disabled.
+SMTP environment overrides are `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_TLS`, `SMTP_FROM_NAME`, and `SMTP_FROM_EMAIL`. A configured host is checked with an SMTP greeting at startup and on reload; an unavailable relay disables email until the next check. When `smtp.host` is empty and `SMTP_HOST` is unset, startup probes `127.0.0.1`, `172.17.0.1`, the default gateway, the server FQDN, a global IPv4 address, `mail.{fqdn}`, and `smtp.{fqdn}` in that order, using ports 25, 465, then 587 for each host. The first working relay is saved to `yaml.d/notifications.yml`. If no relay answers, email remains disabled and the server continues.
 
 ## Tor and I2P
 
@@ -190,6 +195,10 @@ The CLI stores `cli.yml` and profile files in the platform user configuration di
 
 The CLI config supports `language`, `display.mode` (`auto`, `gui`, or `tui`), and `server.primary`. An explicit `--lang` applies to the current invocation; otherwise language selection uses the config and system locale.
 
-## Settings not yet exposed by the current loader
+## Contact CAPTCHA behavior
 
-AI.md also specifies settings that are not represented by the current Go config structs or runtime loader, including configurable `web.llms` and `web.well_known` switches, SMTP discovery/probing and email templates, DNS refresh for trusted proxies, URL-domain learning, and several general server/database/backup sections. Do not rely on those settings being active until the implementation supports them. This implementation gap is tracked for alignment with AI.md.
+The `simple` CAPTCHA is self-hosted. `recaptcha` and `hcaptcha` render their provider widget and keep a simple challenge in a `<noscript>` fallback. Their API descriptor includes that same fallback challenge. Provider verification fails closed, and a failed API submission includes a fresh CAPTCHA descriptor under `details.captcha`. Requests served on `.onion` or `.i2p` always use the simple challenge and do not call a clearnet provider.
+
+## SMTP availability
+
+The server checks a configured SMTP relay with an EHLO handshake at startup and after configuration reload. If no SMTP host is configured, it probes the local relay candidates from AI.md in priority order and saves a successful host and port in `yaml.d/notifications.yml`. Email delivery stays disabled when no relay responds. Credentials are sent only after the configured TLS policy has been satisfied.

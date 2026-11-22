@@ -1,0 +1,14 @@
+* @apimgr
+
+# Build, release, and supply-chain configuration
+/.github/ @apimgr
+/renovate.json @apimgr
+/Dockerfile @apimgr
+/docker/ @apimgr
+/Makefile @apimgr
+
+# Security-sensitive application paths
+/src/config/ @apimgr
+/src/service/ @apimgr
+/src/ssl/ @apimgr
+/src/update/ @apimgr

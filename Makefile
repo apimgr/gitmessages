@@ -2,7 +2,7 @@
 PROJECT_NAME := $(shell remote=$$(git remote get-url origin 2>/dev/null); if [ -n "$$remote" ]; then basename "$$remote" .git; else basename "$(PWD)"; fi)
 PROJECT_ORG := $(shell remote=$$(git remote get-url origin 2>/dev/null); if [ -n "$$remote" ]; then printf "%s\n" "$$remote" | sed -E 's|.*/([^/]+)/[^/]+(\.git)?$$|\1|'; else basename "$(dir $(PWD))"; fi)
 INTERNAL_NAME := gitmessages
-VERSION := $(shell cat release.txt 2>/dev/null || echo "$${VERSION:-devel}")
+VERSION := $(shell version=$$(cat release.txt 2>/dev/null); printf '%s\n' "$${version:-$${VERSION:-devel}}")
 COMMIT_ID := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
 BUILD_EPOCH := $(shell date -u +%s)
 OFFICIAL_SITE ?= $(shell cat site.txt 2>/dev/null)
@@ -41,7 +41,7 @@ build:
 
 test:
 	@mkdir -p $(GO_CACHE) $(GO_BUILD) "$${TMPDIR:-/tmp}/$(PROJECT_ORG)"
-	@$(CONTAINER) sh -c '		mkdir -p "$${TMPDIR:-/tmp}/$(PROJECT_ORG)" && 		covdir=$$(mktemp -d "$${TMPDIR:-/tmp}/$(PROJECT_ORG)/$(INTERNAL_NAME)-XXXXXX") && 		trap "rm -rf $$covdir" EXIT && 		go vet ./... && govulncheck ./... && 		go test -timeout 5m -covermode=atomic -coverprofile=$$covdir/coverage.out ./... && 		go tool cover -func=$$covdir/coverage.out && 		coverage=$$(go tool cover -func=$$covdir/coverage.out | awk "/^total:/ {gsub(/%/, \"\", \$$3); print \$$3}") && 		awk -v coverage="$$coverage" "BEGIN { if (coverage+0 < 60) exit 1 }" 	'
+	@$(CONTAINER) sh -c '		mkdir -p "$${TMPDIR:-/tmp}/$(PROJECT_ORG)" && 		task_tmp=$$(mktemp -d "$${TMPDIR:-/tmp}/$(PROJECT_ORG)/$(INTERNAL_NAME)-XXXXXX") && 		export TMPDIR="$$task_tmp" && trap "rm -rf $$task_tmp" EXIT && 		go vet ./... && govulncheck ./... && 		go test -timeout 5m -covermode=atomic -coverprofile=$$task_tmp/coverage.out ./... && 		go tool cover -func=$$task_tmp/coverage.out && 		coverage=$$(go tool cover -func=$$task_tmp/coverage.out | awk "/^total:/ {gsub(/%/, \"\", \$$3); print \$$3}") && 		awk -v coverage="$$coverage" "BEGIN { if (coverage+0 < 60) exit 1 }" 	'
 
 release: build
 	@mkdir -p $(RELDIR)

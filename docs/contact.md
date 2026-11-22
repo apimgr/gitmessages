@@ -4,7 +4,7 @@ The public contact form at `/server/contact` accepts only abuse reports about a 
 
 ## Submission flow
 
-The form uses a short-lived single-use form token, a simple arithmetic CAPTCHA, request-origin checks, honeypot handling, rate limits, spam-content checks, and a review step. A submission is delivered only after the sender confirms the review page. Submissions fail closed when the shared database or required security encryption key is unavailable. Email-dependent delivery requires configured SMTP; the server does not queue mail when SMTP is unavailable.
+The form uses a short-lived single-use form token, the configured CAPTCHA provider (with a simple arithmetic fallback for no-JavaScript browsers), request-origin checks, honeypot handling, rate limits, spam-content checks, and a review step. A submission is delivered only after the sender confirms the review page. Submissions fail closed when the shared database or required security encryption key is unavailable. Provider tokens are verified server-side; `.onion` and `.i2p` requests always use the simple CAPTCHA and never contact a clearnet provider. Email-dependent delivery requires a working SMTP relay; the server does not queue mail when SMTP is unavailable.
 
 Security reports receive a tracking ID even when SMTP is unavailable. When a project OpenPGP key is installed at `security/pgp.pub.asc`, the report is encrypted to that key before storage and notification. Otherwise, the report uses AES-256-GCM with the configured server security encryption key. Researcher contact details are separately encrypted at rest. Status links are single-use per day and expire after report closure retention. Researchers who provide a public key receive an encrypted acknowledgment when mail delivery is available.
 
@@ -21,6 +21,6 @@ The security report form requires a rotating `security_id` from `/server/securit
 
 ## Configuration
 
-Configure report recipients under `server.contact` and outbound delivery under `server.notifications.email.smtp`. SMTP credentials are sent only after a TLS connection is established. The public contact page can be disabled with `server.pages.contact.enabled`; when disabled, its API is also unavailable. The CAPTCHA provider currently supported by the submission handler is `simple`; unsupported configured providers fail closed.
+Configure report recipients under `server.contact` and outbound delivery under `server.notifications.email.smtp`. The startup SMTP check disables email when the configured relay is unavailable; with an empty SMTP host, the server probes local candidates and saves the first working relay. SMTP credentials are sent only after a TLS connection is established. The public contact page can be disabled with `server.pages.contact.enabled`; when disabled, its API is also unavailable. Select `simple`, `recaptcha`, or `hcaptcha` under `server.pages.contact.captcha`; provider keys are required for external CAPTCHA providers and the secret is kept in `secrets.yml`.
 
 Operators should set the server encryption key in the secrets configuration and protect the configuration directory. Keep the OpenPGP private key outside the web root; only the public key belongs at `security/pgp.pub.asc`.

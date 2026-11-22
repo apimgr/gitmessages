@@ -3,15 +3,17 @@ name: Beta Build
 on:
   push:
     branches: [beta]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     container:
       image: casjaysdev/go:latest
+      options: "--user 0:0"
     strategy:
       matrix:
         include:
@@ -52,7 +54,7 @@ jobs:
           if-no-files-found: error
   publish:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:
@@ -63,7 +65,7 @@ jobs:
           merge-multiple: true
       - name: Generate checksums
         run: cd binaries && sha256sum gitmessages-* > sha256.txt
-      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: beta
           name: Beta Build

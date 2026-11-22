@@ -15,16 +15,14 @@ services:
     pull_policy: always
     logging: *default-logging
     environment:
-      PORT: 8080
+      PORT: 80
       MODE: development
-      DEBUG: "true"
       TZ: America/New_York
     tmpfs:
       - /config
       - /data
-      - /logs
     ports:
-      - "127.0.0.1:64081:8080"
+      - "127.0.0.1:64081:80"
     networks:
       - gitmessages-test
 

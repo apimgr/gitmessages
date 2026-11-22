@@ -1,7 +1,8 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -10,383 +11,132 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/config"
-	"github.com/apimgr/gitmessages/src/messages"
 )
 
-// setupTestState initializes the package-level msgManager and cfg used by
-// the handlers, restoring the previous values afterward so tests stay
-// hermetic and order-independent.
-func setupTestState(t *testing.T) {
-	t.Helper()
-
-	savedManager := msgManager
-	savedCfg := cfg
+func TestConfigureOutputFallsBackToEnglish(t *testing.T) {
+	previous, existed := os.LookupEnv("GITMESSAGES_LANG")
 	t.Cleanup(func() {
-		msgManager = savedManager
-		cfg = savedCfg
-	})
-
-	m, err := messages.New()
-	if err != nil {
-		t.Fatalf("messages.New() error: %v", err)
-	}
-	msgManager = m
-	cfg = config.DefaultConfig()
-}
-
-// TestHandleHome covers the root path and the 404 fallback for any other
-// path routed to it directly.
-func TestHandleHome(t *testing.T) {
-	setupTestState(t)
-
-	t.Run("root path renders page", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		rec := httptest.NewRecorder()
-		handleHome(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rec.Code)
-		}
-		if !strings.Contains(rec.Body.String(), "GitMessages API") {
-			t.Error("expected home page to mention GitMessages API")
+		if existed {
+			_ = os.Setenv("GITMESSAGES_LANG", previous)
+		} else {
+			_ = os.Unsetenv("GITMESSAGES_LANG")
 		}
 	})
-
-	t.Run("non-root path 404s", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/nope", nil)
-		rec := httptest.NewRecorder()
-		handleHome(rec, req)
-
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want 404", rec.Code)
-		}
-	})
-}
-
-// TestHandleHealthz covers both the JSON and plain-text health handlers.
-func TestHandleHealthz(t *testing.T) {
-	setupTestState(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	rec := httptest.NewRecorder()
-	handleHealthz(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
+	if !i18n.IsSupported("en") {
+		t.Fatal("English locale is unavailable")
 	}
-	var body map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("response is not valid JSON: %v", err)
+	if err := configureOutput("auto", "unsupported"); err != nil {
+		t.Fatalf("unsupported language should fall back silently: %v", err)
 	}
-	if body["status"] != "healthy" {
-		t.Errorf("status field = %v, want healthy", body["status"])
+	if got := os.Getenv("GITMESSAGES_LANG"); got != "en" {
+		t.Fatalf("unsupported language fallback = %q, want en", got)
 	}
 }
 
-func TestHandleHealthzText(t *testing.T) {
-	setupTestState(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/healthz.txt", nil)
-	rec := httptest.NewRecorder()
-	handleHealthzText(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	if rec.Body.String() != "OK" {
-		t.Errorf("body = %q, want OK", rec.Body.String())
+func TestConfigureSMTPDisablesEmailWithoutConfiguredRelay(t *testing.T) {
+	t.Setenv("SMTP_HOST", "")
+	configuration := config.DefaultConfig()
+	configuration.Server.Notifications.Email.Enabled = true
+	configureSMTP(configuration)
+	if configuration.Server.Notifications.Email.Enabled {
+		t.Fatal("email remained enabled when SMTP_HOST was explicitly empty")
 	}
 }
 
-// TestHandleAPIInfo covers the info endpoint and its 404 fallback.
-func TestHandleAPIInfo(t *testing.T) {
-	setupTestState(t)
-
-	t.Run("exact path returns info", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/", nil)
-		rec := httptest.NewRecorder()
-		handleAPIInfo(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rec.Code)
-		}
-		var body map[string]interface{}
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Fatalf("response is not valid JSON: %v", err)
-		}
-		if body["name"] != "GitMessages API" {
-			t.Errorf("name field = %v, want GitMessages API", body["name"])
-		}
-	})
-
-	t.Run("other path 404s", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/other", nil)
-		rec := httptest.NewRecorder()
-		handleAPIInfo(rec, req)
-
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want 404", rec.Code)
-		}
-	})
-}
-
-// TestHandleRandom_JSONAndText verifies both success responses carry a
-// non-empty message and correct content types.
-func TestHandleRandom_JSONAndText(t *testing.T) {
-	setupTestState(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/random", nil)
-	rec := httptest.NewRecorder()
-	handleRandom(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	var body map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("response is not valid JSON: %v", err)
-	}
-	if body["success"] != true {
-		t.Errorf("success field = %v, want true", body["success"])
-	}
-
-	reqText := httptest.NewRequest(http.MethodGet, "/api/v1/random.txt", nil)
-	recText := httptest.NewRecorder()
-	handleRandomText(recText, reqText)
-
-	if recText.Code != http.StatusOK {
-		t.Fatalf("text status = %d, want 200", recText.Code)
-	}
-	if recText.Body.Len() == 0 {
-		t.Error("expected non-empty random message text")
+func TestConfigureSMTPDisablesUnavailableConfiguredRelay(t *testing.T) {
+	t.Setenv("SMTP_HOST", "127.0.0.1")
+	configuration := config.DefaultConfig()
+	configuration.Server.Notifications.Email.Enabled = true
+	configuration.Server.Notifications.Email.SMTP.Host = "127.0.0.1"
+	configuration.Server.Notifications.Email.SMTP.Port = 1
+	configuration.Server.Notifications.Email.SMTP.TLS = "none"
+	configureSMTP(configuration)
+	if configuration.Server.Notifications.Email.Enabled {
+		t.Fatal("email remained enabled after configured SMTP probe failed")
 	}
 }
 
-// TestHandleMessages_JSONAndText verifies both list endpoints succeed and
-// return the full message set.
-func TestHandleMessages_JSONAndText(t *testing.T) {
-	setupTestState(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/messages", nil)
-	rec := httptest.NewRecorder()
-	handleMessages(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
+func TestServerShellIntegrationOutputsAndDetection(t *testing.T) {
+	oldArgs := os.Args
+	os.Args = []string{"gitmessages-test"}
+	t.Cleanup(func() { os.Args = oldArgs })
+	capture := func(call func() error) (string, error) {
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous := os.Stdout
+		os.Stdout = writer
+		callErr := call()
+		_ = writer.Close()
+		os.Stdout = previous
+		output, readErr := io.ReadAll(reader)
+		_ = reader.Close()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		return string(output), callErr
 	}
-	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
-		t.Errorf("Content-Type = %q, want application/json", ct)
+	if output, err := capture(func() error { return printShellIntegration("help", "") }); err != nil || !strings.Contains(output, "completions") {
+		t.Fatalf("shell help = %q, %v", output, err)
 	}
-
-	reqText := httptest.NewRequest(http.MethodGet, "/api/v1/messages.txt", nil)
-	recText := httptest.NewRecorder()
-	handleMessagesText(recText, reqText)
-
-	if recText.Code != http.StatusOK {
-		t.Fatalf("text status = %d, want 200", recText.Code)
+	for _, shell := range []string{"bash", "zsh", "fish", "sh", "powershell"} {
+		output, err := capture(func() error { return printShellIntegration("completions", shell) })
+		if err != nil || !strings.Contains(output, "gitmessages-test") {
+			t.Fatalf("%s completions = %q, %v", shell, output, err)
+		}
+		output, err = capture(func() error { return printShellIntegration("init", shell) })
+		if err != nil || !strings.Contains(output, "gitmessages-test") {
+			t.Fatalf("%s init = %q, %v", shell, output, err)
+		}
 	}
-	if recText.Body.Len() == 0 {
-		t.Error("expected non-empty messages text body")
+	if _, err := capture(func() error { return printShellIntegration("completions", "unknown") }); err == nil {
+		t.Fatal("unsupported shell was accepted")
+	}
+	if _, err := capture(func() error { return printShellIntegration("unknown", "bash") }); err == nil {
+		t.Fatal("unsupported shell integration action was accepted")
+	}
+	t.Setenv("SHELL", "/bin/zsh")
+	if got := detectShell(); got != "zsh" {
+		t.Fatalf("detectShell() = %q, want zsh", got)
+	}
+	t.Setenv("SHELL", "")
+	t.Setenv("ComSpec", "powershell.exe")
+	if got := detectShell(); got != "powershell" {
+		t.Fatalf("detectShell() = %q, want powershell", got)
+	}
+	t.Setenv("ComSpec", "")
+	if got := detectShell(); got != "bash" {
+		t.Fatalf("detectShell() = %q, want bash", got)
 	}
 }
 
-// TestHandleStats_JSONAndText verifies both stats endpoints report a
-// cycle/total shape.
-func TestHandleStats_JSONAndText(t *testing.T) {
-	setupTestState(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
-	rec := httptest.NewRecorder()
-	handleStats(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	var body map[string]interface{}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("response is not valid JSON: %v", err)
-	}
-	if body["success"] != true {
-		t.Errorf("success field = %v, want true", body["success"])
-	}
-
-	reqText := httptest.NewRequest(http.MethodGet, "/api/v1/stats.txt", nil)
-	recText := httptest.NewRecorder()
-	handleStatsText(recText, reqText)
-
-	if recText.Code != http.StatusOK {
-		t.Fatalf("text status = %d, want 200", recText.Code)
-	}
-	if !strings.Contains(recText.Body.String(), "Cycle:") {
-		t.Error("expected stats text to contain Cycle:")
-	}
-}
-
-// TestHandleReset covers the method-not-allowed branch and the successful
-// POST branch, verifying it actually resets the cycle state.
-func TestHandleReset(t *testing.T) {
-	setupTestState(t)
-
-	t.Run("GET is not allowed", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/reset", nil)
-		rec := httptest.NewRecorder()
-		handleReset(rec, req)
-
-		if rec.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("status = %d, want 405", rec.Code)
+func TestConfiguredTokenCookieAge(t *testing.T) {
+	for _, input := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"", 365 * 24 * time.Hour},
+		{" 1y ", 365 * 24 * time.Hour},
+		{"2y", 2 * 365 * 24 * time.Hour},
+		{"720h", 30 * 24 * time.Hour},
+		{"0", 365 * 24 * time.Hour},
+		{"invalid", 365 * 24 * time.Hour},
+		{"0y", 365 * 24 * time.Hour},
+	} {
+		if got := configuredTokenCookieAge(input.value); got != input.want {
+			t.Errorf("configuredTokenCookieAge(%q) = %s, want %s", input.value, got, input.want)
 		}
-	})
-
-	t.Run("POST resets cycle", func(t *testing.T) {
-		// Draw a message first so used-in-cycle is nonzero before reset.
-		if _, err := msgManager.GetRandom(); err != nil {
-			t.Fatalf("GetRandom() error: %v", err)
-		}
-
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/reset", nil)
-		rec := httptest.NewRecorder()
-		handleReset(rec, req)
-
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rec.Code)
-		}
-
-		stats := msgManager.Stats()
-		if stats["used_in_cycle"] != 0 {
-			t.Errorf("used_in_cycle after reset = %v, want 0", stats["used_in_cycle"])
-		}
-	})
-}
-
-// TestHandleRobotsTxt covers both the configured-allow/deny case and the
-// nil-config fallback.
-func TestHandleRobotsTxt(t *testing.T) {
-	setupTestState(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/robots.txt", nil)
-	rec := httptest.NewRecorder()
-	handleRobotsTxt(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "Allow:") {
-		t.Error("expected robots.txt to contain an Allow directive")
-	}
-
-	savedCfg := cfg
-	cfg = nil
-	t.Cleanup(func() { cfg = savedCfg })
-
-	req2 := httptest.NewRequest(http.MethodGet, "/robots.txt", nil)
-	rec2 := httptest.NewRecorder()
-	handleRobotsTxt(rec2, req2)
-	if !strings.Contains(rec2.Body.String(), "Allow: /") {
-		t.Error("expected nil-config fallback to allow everything")
-	}
-}
-
-// TestHandleSecurityTxt verifies the contact email defaults when config is
-// nil or has no explicit admin address, and honors it when set.
-func TestHandleSecurityTxt(t *testing.T) {
-	setupTestState(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/security.txt", nil)
-	rec := httptest.NewRecorder()
-	handleSecurityTxt(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "Contact: mailto:security@apimgr.us") {
-		t.Error("expected default security contact address")
-	}
-
-	cfg.WebSecurity.Admin = "custom@example.com"
-	rec2 := httptest.NewRecorder()
-	handleSecurityTxt(rec2, req)
-	if !strings.Contains(rec2.Body.String(), "Contact: mailto:custom@example.com") {
-		t.Error("expected configured security contact address")
-	}
-}
-
-// TestHandleManifestAndServiceWorker are smoke tests for the two static
-// asset handlers.
-func TestHandleManifestAndServiceWorker(t *testing.T) {
-	setupTestState(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/manifest.json", nil)
-	rec := httptest.NewRecorder()
-	handleManifest(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("manifest status = %d, want 200", rec.Code)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "application/manifest+json" {
-		t.Errorf("manifest Content-Type = %q, want application/manifest+json", ct)
-	}
-
-	req2 := httptest.NewRequest(http.MethodGet, "/sw.js", nil)
-	rec2 := httptest.NewRecorder()
-	handleServiceWorker(rec2, req2)
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("sw.js status = %d, want 200", rec2.Code)
-	}
-	if !strings.Contains(rec2.Body.String(), "CACHE_NAME") {
-		t.Error("expected service worker body to define CACHE_NAME")
-	}
-}
-
-// TestCorsMiddleware verifies the security/CORS headers are set and that
-// an OPTIONS request short-circuits without reaching the wrapped handler.
-func TestCorsMiddleware(t *testing.T) {
-	setupTestState(t)
-
-	called := false
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-		w.WriteHeader(http.StatusOK)
-	})
-	wrapped := corsMiddleware(next)
-
-	t.Run("OPTIONS short-circuits", func(t *testing.T) {
-		called = false
-		req := httptest.NewRequest(http.MethodOptions, "/", nil)
-		rec := httptest.NewRecorder()
-		wrapped.ServeHTTP(rec, req)
-
-		if called {
-			t.Error("wrapped handler should not run for OPTIONS")
-		}
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rec.Code)
-		}
-	})
-
-	t.Run("GET sets security headers and passes through", func(t *testing.T) {
-		called = false
-		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		rec := httptest.NewRecorder()
-		wrapped.ServeHTTP(rec, req)
-
-		if !called {
-			t.Error("wrapped handler should run for GET")
-		}
-		if rec.Header().Get("X-Frame-Options") != "DENY" {
-			t.Error("expected X-Frame-Options: DENY")
-		}
-		if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
-			t.Error("expected default CORS origin *")
-		}
-	})
 }
 
 // TestSetupRoutes is a mux smoke test verifying routes dispatch instead of
 // falling through to a 404.
 func TestSetupRoutes(t *testing.T) {
-	setupTestState(t)
-
 	mux := http.NewServeMux()
 	setupRoutes(mux)
 
@@ -433,17 +183,83 @@ func TestCheckHealth(t *testing.T) {
 		t.Fatalf("failed to allocate a free port: %v", err)
 	}
 	_, freePort, _ := net.SplitHostPort(ln.Addr().String())
-	ln.Close()
+	_ = ln.Close()
 
 	if err := checkHealth(freePort); err == nil {
 		t.Error("checkHealth against a closed port: expected error, got nil")
 	}
 }
 
-// TestMaintenanceUpdate and TestPrintHelp are no-panic smoke tests for the
-// pure stdout-printing informational commands.
-func TestMaintenanceUpdate(t *testing.T) {
-	maintenanceUpdate()
+func TestNormalizeUpdateBranch(t *testing.T) {
+	for input, want := range map[string]string{
+		"stable":      "stable",
+		"beta":        "beta",
+		"devel":       "devel",
+		"daily":       "devel",
+		"rolling":     "devel",
+		"development": "devel",
+		"invalid":     "",
+	} {
+		if got := normalizeUpdateBranch(input); got != want {
+			t.Errorf("normalizeUpdateBranch(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestApplyI2POverrides(t *testing.T) {
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"gitmessages"}
+	current := config.DefaultConfig()
+	current.Server.I2P.Enabled = false
+	t.Setenv("I2P_ENABLED", "oui")
+	if err := applyI2POverrides(current, false); err != nil || !current.Server.I2P.Enabled {
+		t.Fatalf("truthy I2P_ENABLED result = %v, %v", current.Server.I2P.Enabled, err)
+	}
+	t.Setenv("I2P_ENABLED", "not-a-boolean")
+	if err := applyI2POverrides(current, false); err == nil {
+		t.Fatal("invalid I2P_ENABLED was accepted")
+	}
+	t.Setenv("I2P_ENABLED", "true")
+	os.Args = []string{"gitmessages", "--i2p=false"}
+	if err := applyI2POverrides(current, false); err != nil || current.Server.I2P.Enabled {
+		t.Fatalf("explicit --i2p=false did not override env: enabled=%v err=%v", current.Server.I2P.Enabled, err)
+	}
+	if err := applyI2POverrides(nil, false); err == nil {
+		t.Fatal("nil configuration was accepted")
+	}
+}
+
+func TestConfigurationFingerprintAndWatcher(t *testing.T) {
+	directory := t.TempDir()
+	configPath := filepath.Join(directory, "server.yml")
+	if err := os.WriteFile(configPath, []byte("server:\n  mode: production\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	first := configurationFingerprint(directory)
+	if first == "" {
+		t.Fatal("configuration fingerprint is empty")
+	}
+	if err := os.WriteFile(configPath, []byte("server:\n  mode: development\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if configurationFingerprint(directory) == first {
+		t.Fatal("configuration fingerprint did not change after an edit")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	changed := make(chan struct{}, 1)
+	go watchConfiguration(ctx, directory, changed)
+	time.Sleep(50 * time.Millisecond)
+	if err := os.WriteFile(configPath, []byte("server:\n  mode: debug\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("configuration watcher did not observe the change")
+	}
+	cancel()
 }
 
 func TestPrintHelp(t *testing.T) {
@@ -498,8 +314,8 @@ func TestHandleUpdateCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("config.Load() error: %v", err)
 	}
-	if reloaded.Server.UpdateBranch != "beta" {
-		t.Errorf("Server.UpdateBranch = %q, want beta", reloaded.Server.UpdateBranch)
+	if reloaded.Server.Update.Branch != "beta" {
+		t.Errorf("Server.Update.Branch = %q, want beta", reloaded.Server.Update.Branch)
 	}
 }
 
@@ -556,7 +372,7 @@ func TestMaintenanceBackupRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
-	defer os.RemoveAll(srcDir)
+	defer func() { _ = os.RemoveAll(srcDir) }()
 
 	want := "mode: test\n"
 	if err := os.WriteFile(filepath.Join(srcDir, "config.yaml"), []byte(want), 0644); err != nil {
@@ -570,12 +386,9 @@ func TestMaintenanceBackupRestore(t *testing.T) {
 		t.Fatalf("backup file missing after maintenanceBackup: %v", err)
 	}
 
-	restoredDir := "/" + filepath.Base(srcDir)
-	t.Cleanup(func() { os.RemoveAll(restoredDir) })
-
 	maintenanceRestore(backupFile, srcDir)
 
-	data, err := os.ReadFile(filepath.Join(restoredDir, "config.yaml"))
+	data, err := os.ReadFile(filepath.Join(srcDir, "config.yaml"))
 	if err != nil {
 		t.Fatalf("restored file missing after maintenanceRestore: %v", err)
 	}

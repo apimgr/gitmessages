@@ -41,7 +41,8 @@ func Handler() http.Handler {
 			writeTransportError(w, r, http.StatusBadRequest, i18n.T(language(r), "graphql.error.required"))
 			return
 		}
-		result := gql.Do(gql.Params{Schema: schema, RequestString: request.Query, VariableValues: request.Variables, OperationName: request.OperationName, Context: WithLanguage(r.Context(), language(r))})
+		lang := language(r)
+		result := gql.Do(gql.Params{Schema: Schema(lang), RequestString: request.Query, VariableValues: request.Variables, OperationName: request.OperationName, Context: WithLanguage(r.Context(), lang)})
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(result)
 	})

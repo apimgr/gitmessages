@@ -15,16 +15,15 @@ services:
     pull_policy: always
     logging: *default-logging
     environment:
-      PORT: 8080
+      PORT: 80
       TZ: America/New_York
     volumes:
       - ./volumes/config:/config
       - ./volumes/data:/data
-      - ./volumes/logs:/logs
     ports:
-      - "172.17.0.1:64580:8080"
+      - "172.17.0.1:64580:80"
     healthcheck:
-      test: ["CMD", "/usr/local/bin/gitmessages", "--port", "8080", "--status"]
+      test: ["CMD", "/usr/local/bin/gitmessages", "--port", "80", "--status"]
       interval: 10s
       timeout: 5s
       retries: 3

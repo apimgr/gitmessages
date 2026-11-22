@@ -12,6 +12,7 @@ func resetMode(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
 		Set(Production)
+		SetDebugEnabled(false)
 	})
 }
 
@@ -24,12 +25,14 @@ func TestParseMode(t *testing.T) {
 		want Mode
 	}{
 		{"dev short", "dev", Development},
+		{"devel short", "devel", Development},
 		{"dev long", "development", Development},
+		{"debug", "debug", Debug},
 		{"prod short", "prod", Production},
 		{"prod long", "production", Production},
 		{"empty defaults to production", "", Production},
 		{"unknown defaults to production", "bogus", Production},
-		{"case sensitive - uppercase not matched", "DEV", Production},
+		{"case insensitive", "DEV", Development},
 	}
 
 	for _, tt := range tests {
@@ -100,7 +103,7 @@ func TestInitialize_Priority(t *testing.T) {
 	})
 
 	t.Run("default production when neither set", func(t *testing.T) {
-		os.Unsetenv("MODE")
+		_ = os.Unsetenv("MODE")
 		Initialize("")
 		if Get() != Production {
 			t.Fatalf("Get() = %v, want %v (default)", Get(), Production)
@@ -141,11 +144,11 @@ func TestModeGatedBehaviors(t *testing.T) {
 		dev  bool
 		prod bool
 	}{
-		{"ShouldShowDebugEndpoints", ShouldShowDebugEndpoints, true, false},
+		{"ShouldShowDebugEndpoints", ShouldShowDebugEndpoints, false, false},
 		{"ShouldCacheTemplates", ShouldCacheTemplates, false, true},
 		{"ShouldCacheStaticFiles", ShouldCacheStaticFiles, false, true},
 		{"ShouldEnableAutoReload", ShouldEnableAutoReload, true, false},
-		{"ShouldEnableProfiling", ShouldEnableProfiling, true, false},
+		{"ShouldEnableProfiling", ShouldEnableProfiling, false, false},
 	}
 
 	for _, tt := range tests {
@@ -159,6 +162,57 @@ func TestModeGatedBehaviors(t *testing.T) {
 				t.Errorf("%s() in prod = %v, want %v", tt.name, got, tt.prod)
 			}
 		})
+	}
+}
+
+func TestInitializeWithConfigPriority(t *testing.T) {
+	resetMode(t)
+	t.Setenv("MODE", "")
+	previousDebug, hadDebug := os.LookupEnv("DEBUG")
+	_ = os.Unsetenv("DEBUG")
+	t.Cleanup(func() {
+		if hadDebug {
+			_ = os.Setenv("DEBUG", previousDebug)
+		} else {
+			_ = os.Unsetenv("DEBUG")
+		}
+	})
+	InitializeWithConfig("", "development", nil)
+	if Get() != Development || IsDebugEnabled() {
+		t.Fatalf("config mode initialization = %s, debug=%v", Get(), IsDebugEnabled())
+	}
+	InitializeWithConfig("debug", "production", nil)
+	if Get() != Debug || !IsDebugEnabled() {
+		t.Fatalf("CLI mode initialization = %s, debug=%v", Get(), IsDebugEnabled())
+	}
+	t.Setenv("DEBUG", "false")
+	InitializeWithConfig("debug", "production", nil)
+	if Get() != Debug || IsDebugEnabled() {
+		t.Fatalf("explicit DEBUG=false initialization = %s, debug=%v", Get(), IsDebugEnabled())
+	}
+	debugFlag := true
+	InitializeWithConfig("production", "development", &debugFlag)
+	if Get() != Production || !IsDebugEnabled() {
+		t.Fatalf("explicit CLI values = %s, debug=%v", Get(), IsDebugEnabled())
+	}
+}
+
+func TestDebugFlagIsIndependentOfMode(t *testing.T) {
+	resetMode(t)
+	Set(Development)
+	if ShouldShowDebugEndpoints() {
+		t.Fatal("development mode enabled debug endpoints without the debug flag")
+	}
+	SetDebugEnabled(true)
+	if !ShouldShowDebugEndpoints() || !ShouldEnableProfiling() {
+		t.Fatal("explicit debug flag did not enable diagnostic routes")
+	}
+	Set(Production)
+	if !ShouldShowDebugEndpoints() {
+		t.Fatal("debug flag should enable diagnostics independently of app mode")
+	}
+	if GetLogLevel() != "info" {
+		t.Fatalf("production log level with debug flag = %q, want info", GetLogLevel())
 	}
 }
 

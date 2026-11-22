@@ -5,15 +5,26 @@ on:
     tags:
       - 'v*'
       - '[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     container:
       image: casjaysdev/go:latest
+      options: "--user 0:0"
     strategy:
       matrix:
         include:
@@ -37,13 +48,16 @@ jobs:
             goarch: arm64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - name: Build server and CLI
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
           EXT="${{ matrix.ext }}"
           go build -buildvcs=false -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.CommitID=$(git rev-parse --short=7 HEAD) -X main.BuildEpoch=$(date -u +%s)" -o "gitmessages-${{ matrix.goos }}-${{ matrix.goarch }}$EXT" ./src
           go build -buildvcs=false -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.CommitID=$(git rev-parse --short=7 HEAD) -X main.BuildEpoch=$(date -u +%s)" -o "gitmessages-cli-${{ matrix.goos }}-${{ matrix.goarch }}$EXT" ./src/client
@@ -54,7 +68,7 @@ jobs:
           if-no-files-found: error
   publish:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:
@@ -64,7 +78,7 @@ jobs:
           merge-multiple: true
       - name: Generate checksums
         run: cd binaries && sha256sum gitmessages-* > sha256.txt
-      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: binaries/*
           generate_release_notes: true

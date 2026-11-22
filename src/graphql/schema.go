@@ -4,16 +4,26 @@ import (
 	"context"
 	"errors"
 	"math/rand/v2"
+	"sync"
 
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/messages"
 	gql "github.com/graphql-go/graphql"
 )
 
-var schema gql.Schema
+var schemas sync.Map
 
-func init() {
-	typeObject := gql.NewObject(gql.ObjectConfig{Name: "CommitType", Description: "A commit type used by the supported conventions.", Fields: gql.Fields{
+func Schema(language string) gql.Schema {
+	if cached, ok := schemas.Load(language); ok {
+		return cached.(gql.Schema)
+	}
+	schema := buildSchema(language)
+	actual, _ := schemas.LoadOrStore(language, schema)
+	return actual.(gql.Schema)
+}
+
+func buildSchema(language string) gql.Schema {
+	typeObject := gql.NewObject(gql.ObjectConfig{Name: "CommitType", Description: i18n.T(language, "graphql.schema.type.commit_type"), Fields: gql.Fields{
 		"type":        &gql.Field{Type: gql.NewNonNull(gql.String), Resolve: func(p gql.ResolveParams) (any, error) { return p.Source.(messages.CommitType).Type, nil }},
 		"description": &gql.Field{Type: gql.String, Resolve: func(p gql.ResolveParams) (any, error) { return p.Source.(messages.CommitType).Description, nil }},
 		"emoji":       &gql.Field{Type: gql.String, Resolve: func(p gql.ResolveParams) (any, error) { return p.Source.(messages.CommitType).Emoji, nil }},
@@ -21,24 +31,24 @@ func init() {
 		"breaking":    &gql.Field{Type: gql.Boolean, Resolve: func(p gql.ResolveParams) (any, error) { return p.Source.(messages.CommitType).Breaking, nil }},
 	}})
 
-	conventionObject := gql.NewObject(gql.ObjectConfig{Name: "Convention", Description: "A supported commit message convention.", Fields: gql.Fields{
+	conventionObject := gql.NewObject(gql.ObjectConfig{Name: "Convention", Description: i18n.T(language, "graphql.schema.type.convention"), Fields: gql.Fields{
 		"name":        &gql.Field{Type: gql.NewNonNull(gql.String), Resolve: func(p gql.ResolveParams) (any, error) { return p.Source.(messages.Convention).Name, nil }},
 		"description": &gql.Field{Type: gql.String, Resolve: func(p gql.ResolveParams) (any, error) { return p.Source.(messages.Convention).Description, nil }},
 		"format":      &gql.Field{Type: gql.String, Resolve: func(p gql.ResolveParams) (any, error) { return p.Source.(messages.Convention).Format, nil }},
 		"example":     &gql.Field{Type: gql.String, Resolve: func(p gql.ResolveParams) (any, error) { return p.Source.(messages.Convention).Example, nil }},
 	}})
 
-	templateObject := gql.NewObject(gql.ObjectConfig{Name: "MessageTemplate", Description: "A reusable message template.", Fields: gql.Fields{
+	templateObject := gql.NewObject(gql.ObjectConfig{Name: "MessageTemplate", Description: i18n.T(language, "graphql.schema.type.message_template"), Fields: gql.Fields{
 		"name":     &gql.Field{Type: gql.NewNonNull(gql.String), Resolve: func(p gql.ResolveParams) (any, error) { return p.Source.(messages.Template).Name, nil }},
 		"message":  &gql.Field{Type: gql.String, Resolve: func(p gql.ResolveParams) (any, error) { return p.Source.(messages.Template).Message, nil }},
 		"category": &gql.Field{Type: gql.String, Resolve: func(p gql.ResolveParams) (any, error) { return p.Source.(messages.Template).Category, nil }},
 	}})
 
-	builtObject := gql.NewObject(gql.ObjectConfig{Name: "BuiltMessage", Fields: gql.Fields{
+	builtObject := gql.NewObject(gql.ObjectConfig{Name: "BuiltMessage", Description: i18n.T(language, "graphql.schema.type.built_message"), Fields: gql.Fields{
 		"message": &gql.Field{Type: gql.String, Resolve: func(p gql.ResolveParams) (any, error) { return p.Source.(map[string]string)["message"], nil }},
 	}})
 
-	inputObject := gql.NewInputObject(gql.InputObjectConfig{Name: "BuildMessageInput", Fields: gql.InputObjectConfigFieldMap{
+	inputObject := gql.NewInputObject(gql.InputObjectConfig{Name: "BuildMessageInput", Description: i18n.T(language, "graphql.schema.type.build_input"), Fields: gql.InputObjectConfigFieldMap{
 		"type":        &gql.InputObjectFieldConfig{Type: gql.NewNonNull(gql.String)},
 		"scope":       &gql.InputObjectFieldConfig{Type: gql.String},
 		"description": &gql.InputObjectFieldConfig{Type: gql.NewNonNull(gql.String)},
@@ -47,24 +57,24 @@ func init() {
 		"convention":  &gql.InputObjectFieldConfig{Type: gql.String},
 	}})
 
-	query := gql.NewObject(gql.ObjectConfig{Name: "Query", Fields: gql.Fields{
-		"types": &gql.Field{Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(typeObject))), Description: "List all supported commit types.", Resolve: func(p gql.ResolveParams) (any, error) {
+	query := gql.NewObject(gql.ObjectConfig{Name: "Query", Description: i18n.T(language, "graphql.schema.type.query"), Fields: gql.Fields{
+		"types": &gql.Field{Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(typeObject))), Description: i18n.T(language, "graphql.schema.field.types"), Resolve: func(p gql.ResolveParams) (any, error) {
 			return messages.TypesForLocale(localeFromContext(p.Context)), nil
 		}},
-		"conventions": &gql.Field{Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(conventionObject))), Description: "List supported commit conventions.", Resolve: func(p gql.ResolveParams) (any, error) {
+		"conventions": &gql.Field{Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(conventionObject))), Description: i18n.T(language, "graphql.schema.field.conventions"), Resolve: func(p gql.ResolveParams) (any, error) {
 			return messages.ConventionsForLocale(localeFromContext(p.Context)), nil
 		}},
-		"templates": &gql.Field{Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(templateObject))), Description: "List curated commit message templates.", Resolve: func(p gql.ResolveParams) (any, error) {
+		"templates": &gql.Field{Type: gql.NewNonNull(gql.NewList(gql.NewNonNull(templateObject))), Description: i18n.T(language, "graphql.schema.field.templates"), Resolve: func(p gql.ResolveParams) (any, error) {
 			return messages.TemplatesForLocale(localeFromContext(p.Context)), nil
 		}},
-		"random": &gql.Field{Type: gql.NewNonNull(typeObject), Description: "Get a random commit type and example message.", Resolve: func(p gql.ResolveParams) (any, error) {
+		"random": &gql.Field{Type: gql.NewNonNull(typeObject), Description: i18n.T(language, "graphql.schema.field.random"), Resolve: func(p gql.ResolveParams) (any, error) {
 			all := messages.TypesForLocale(localeFromContext(p.Context))
 			return all[rand.IntN(len(all))], nil
 		}},
 	}})
 
-	mutation := gql.NewObject(gql.ObjectConfig{Name: "Mutation", Fields: gql.Fields{
-		"buildMessage": &gql.Field{Type: builtObject, Description: "Validate and format a commit message.", Args: gql.FieldConfigArgument{"input": &gql.ArgumentConfig{Type: gql.NewNonNull(inputObject)}}, Resolve: func(p gql.ResolveParams) (any, error) {
+	mutation := gql.NewObject(gql.ObjectConfig{Name: "Mutation", Description: i18n.T(language, "graphql.schema.type.mutation"), Fields: gql.Fields{
+		"buildMessage": &gql.Field{Type: builtObject, Description: i18n.T(language, "graphql.schema.field.build_message"), Args: gql.FieldConfigArgument{"input": &gql.ArgumentConfig{Type: gql.NewNonNull(inputObject)}}, Resolve: func(p gql.ResolveParams) (any, error) {
 			inputMap, ok := p.Args["input"].(map[string]any)
 			if !ok {
 				return nil, nil
@@ -79,11 +89,11 @@ func init() {
 		}},
 	}})
 
-	var err error
-	schema, err = gql.NewSchema(gql.SchemaConfig{Query: query, Mutation: mutation})
+	schema, err := gql.NewSchema(gql.SchemaConfig{Query: query, Mutation: mutation})
 	if err != nil {
 		panic(err)
 	}
+	return schema
 }
 
 type languageContextKey struct{}
@@ -102,6 +112,3 @@ func stringValue(value any) string {
 	text, _ := value.(string)
 	return text
 }
-
-// Schema returns the executable GraphQL schema used by the endpoint.
-func Schema() gql.Schema { return schema }

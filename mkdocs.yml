@@ -1,4 +1,5 @@
 site_name: Git Messages
+site_url: https://apimgr-gitmessages.readthedocs.io/
 site_description: A curated reference and builder for git commit message conventions.
 site_author: apimgr
 repo_name: apimgr/gitmessages
@@ -19,14 +20,27 @@ theme:
       accent: indigo
       toggle:
         icon: material/brightness-7
+        name: Switch to auto mode
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
         name: Switch to dark mode
   features:
     - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
     - navigation.sections
+    - navigation.expand
     - navigation.top
     - search.suggest
     - search.highlight
     - content.code.copy
+    - content.action.edit
+  font:
+    text: Roboto
+    code: Roboto Mono
+  icon:
+    repo: fontawesome/brands/github
 
 extra_css:
   - stylesheets/dark.css
@@ -38,21 +52,66 @@ plugins:
       minify_html: true
 
 markdown_extensions:
+  - abbr
   - admonition
   - attr_list
   - def_list
   - footnotes
+  - meta
+  - md_in_html
   - tables
   - toc:
       permalink: true
+      toc_depth: 3
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.magiclink:
+      repo_url_shorthand: true
+      user: apimgr
+      repo: gitmessages
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
 
 nav:
   - Home: index.md
   - Installation: installation.md
   - Configuration: configuration.md
   - Browser: browser.md
+  - Owner tokens: tokens.md
   - API: api.md
+  - Internal metrics: metrics.md
   - CLI: cli.md
   - Security: security.md
+  - Contact and security reporting: contact.md
   - Integrations: integrations.md
   - Development: development.md
+  - Translating: translating.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/apimgr/gitmessages
+  generator: false

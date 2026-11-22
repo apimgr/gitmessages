@@ -73,3 +73,13 @@ func TestHandlerLocalizesCatalog(t *testing.T) {
 		t.Fatalf("GraphQL catalog was not localized: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestHandlerLocalizesSchemaDescriptions(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewBufferString(`{"query":"{ __type(name: \"Query\") { description fields { name description } } }"}`))
+	request.Header.Set("X-GitMessages-Language", "es")
+	recorder := httptest.NewRecorder()
+	Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !bytes.Contains(recorder.Body.Bytes(), []byte("Consultas de solo lectura para el catálogo seleccionado.")) || bytes.Contains(recorder.Body.Bytes(), []byte("Read-only queries for the curated catalog.")) {
+		t.Fatalf("GraphQL schema descriptions were not localized: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}

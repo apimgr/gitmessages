@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://gitmessages.apimgr.us/docs/
+    about: Check the Git Messages documentation for usage and configuration help.
+  - name: Community discussion
+    url: https://github.com/apimgr/gitmessages/discussions
+    about: Ask general questions and discuss usage.
+  - name: Report a vulnerability privately
+    url: https://github.com/apimgr/gitmessages/security/advisories/new
+    about: Do not disclose vulnerabilities in a public issue.

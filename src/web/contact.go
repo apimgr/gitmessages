@@ -1,0 +1,1171 @@
+package web
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"html/template"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/apimgr/gitmessages/src/common/i18n"
+	"github.com/apimgr/gitmessages/src/config"
+	"github.com/apimgr/gitmessages/src/contact"
+	"github.com/apimgr/gitmessages/src/database"
+	"github.com/apimgr/gitmessages/src/email"
+	"github.com/apimgr/gitmessages/src/paths"
+)
+
+var contactStoreMu sync.RWMutex
+var contactStore *database.Store
+
+// ConfigureContact binds contact processing to the shared application database.
+func ConfigureContact(store *database.Store) {
+	contactStoreMu.Lock()
+	contactStore = store
+	contactStoreMu.Unlock()
+}
+
+func registerContactRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("/server/contact", contactPage)
+	mux.HandleFunc(apiBase+"/server/contact", apiContact)
+	mux.HandleFunc("/server/security", contactSecurityPage)
+	mux.HandleFunc("/server/security/policy", securityPolicyPage)
+	mux.HandleFunc("/server/security/thanks", securityThanksPage)
+	mux.HandleFunc("/server/security/report/", securityReportPage)
+	mux.HandleFunc("/server/dpo", dpoPage)
+	mux.HandleFunc("/.well-known/security.txt", contactSecurityTxt)
+	mux.HandleFunc("/.well-known/llms.txt", llmsTxt)
+	mux.HandleFunc("/llms.txt", llmsTxt)
+	mux.HandleFunc("/.well-known/pgp-key.asc", pgpKeyPage)
+	mux.HandleFunc(apiBase+"/server/security", apiContactSecurity)
+	mux.HandleFunc(apiBase+"/server/security/policy", apiSecurityPolicy)
+	mux.HandleFunc(apiBase+"/server/security/thanks", apiSecurityThanks)
+	mux.HandleFunc(apiBase+"/server/dpo", apiDPO)
+}
+
+func contactInputSchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{"type": map[string]any{"type": "string", "enum": []string{"abuse", "dmca", "privacy", "security"}}, "name": map[string]any{"type": "string", "maxLength": 100}, "email": map[string]any{"type": "string", "format": "email", "maxLength": 254}, "form_token": map[string]any{"type": "string"}, "captcha_id": map[string]any{"type": "string"}, "captcha_answer": map[string]any{"type": "string"}, "step": map[string]any{"type": "string", "enum": []string{"submit", "confirm", "edit"}}, "review_token": map[string]any{"type": "string"}, "confirmed": map[string]any{"type": "boolean"}}, "required": []string{"type", "name", "email", "form_token"}, "additionalProperties": true}
+}
+
+func currentContactService() (*contact.Service, error) {
+	cfg := config.Get()
+	contactStoreMu.RLock()
+	store := contactStore
+	contactStoreMu.RUnlock()
+	if store == nil {
+		return nil, errors.New("contact database is unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	secret, err := contact.InstallationSecret(ctx, store)
+	if err != nil {
+		return nil, err
+	}
+	keyText := strings.TrimSpace(cfg.Server.Security.EncryptionKey)
+	key, err := hex.DecodeString(keyText)
+	if err != nil || len(key) != 32 {
+		key, err = base64.RawURLEncoding.DecodeString(keyText)
+	}
+	if err != nil || len(key) != 32 {
+		key, err = base64.StdEncoding.DecodeString(keyText)
+	}
+	if err != nil || len(key) != 32 {
+		return nil, errors.New("security encryption key is unavailable")
+	}
+	antispam := cfg.Server.Pages.Contact.Antispam
+	window, err := time.ParseDuration(antispam.Window)
+	if err != nil || window <= 0 {
+		window = time.Hour
+	}
+	settings := contact.Settings{MinFill: antispam.MinFillSeconds, MaxAge: antispam.MaxAgeSeconds, ReviewMin: antispam.ReviewMinSeconds, ReviewMax: antispam.ReviewMaxSeconds, PerIP: antispam.PerIP, PerEmail: antispam.PerEmail, Global: antispam.Global, Window: window, MaxLinks: antispam.MaxLinks, Strikes: antispam.Strikes, BanHours: antispam.BanHours, DuplicateHours: antispam.DuplicateWindowHours, RejectMarkup: antispam.RejectMarkup, Honeypot: antispam.Honeypot, BlockedWords: antispam.BlockedWords, BlockedEmailDomains: antispam.BlockedEmailDomains, CaptchaProvider: cfg.Server.Pages.Contact.Captcha, CaptchaSecretKey: cfg.Server.Pages.Contact.CaptchaSecretKey}
+	if configDir := config.ConfigDirectory(); configDir != "" {
+		if key, readErr := os.ReadFile(filepath.Join(configDir, "security", "pgp.pub.asc")); readErr == nil {
+			settings.ProjectPGPKey = key
+		}
+	}
+	return contact.New(store, secret, key, settings, contactEmailSender{})
+}
+
+type contactEmailSender struct{}
+
+func (contactEmailSender) SendContact(role, from, name, subject, body string) error {
+	cfg := config.Get().Server
+	mailcfg := cfg.Notifications.Email
+	if !mailcfg.Enabled || mailcfg.SMTP.Host == "" {
+		return errors.New("email features require SMTP configuration")
+	}
+	to := contactRecipient(cfg.Contact, role)
+	if to == "" {
+		return errors.New("contact recipient is not configured")
+	}
+	_ = name
+	if role != "security" {
+		subject = "[Git Messages contact] " + subject
+	}
+	mailer := contactMailer(cfg)
+	return mailer.Send(context.Background(), email.Message{To: to, ReplyTo: from, Subject: subject, Text: body})
+}
+
+func contactMailer(cfg config.ServerConfig) email.Mailer {
+	mailcfg := cfg.Notifications.Email
+	fromAddress := mailcfg.From.Email
+	if fromAddress == "" {
+		host := cfg.FQDN
+		if host == "" {
+			host = "localhost"
+		}
+		fromAddress = "no-reply@" + host
+	}
+	fromName := mailcfg.From.Name
+	if fromName == "" {
+		fromName = "Git Messages"
+	}
+	return email.Mailer{SMTP: email.SMTPConfig{Host: mailcfg.SMTP.Host, Port: mailcfg.SMTP.Port, Username: mailcfg.SMTP.Username, Password: mailcfg.SMTP.Password, TLS: mailcfg.SMTP.TLS}, Sender: email.Sender{Name: fromName, Address: fromAddress, FQDN: cfg.FQDN}}
+}
+
+func (contactEmailSender) SendSecurityNotification(_ string, subject, body, filename string, encrypted []byte) error {
+	cfg := config.Get().Server
+	if !cfg.Notifications.Email.Enabled || cfg.Notifications.Email.SMTP.Host == "" {
+		return errors.New("email features require SMTP configuration")
+	}
+	recipient := contactRecipient(cfg.Contact, "security")
+	if recipient == "" {
+		return errors.New("security recipient is not configured")
+	}
+	return contactMailer(cfg).Send(context.Background(), email.Message{To: recipient, Subject: subject, Text: body, Attachments: []email.Attachment{{Name: filename, ContentType: "application/octet-stream", Data: encrypted}}})
+}
+
+func (contactEmailSender) SendResearcher(to, subject, body string) error {
+	cfg := config.Get().Server
+	if !cfg.Notifications.Email.Enabled || cfg.Notifications.Email.SMTP.Host == "" {
+		return errors.New("email features require SMTP configuration")
+	}
+	return contactMailer(cfg).Send(context.Background(), email.Message{To: to, Subject: subject, Text: body})
+}
+
+func (contactEmailSender) SendResearcherEncrypted(to, subject string, encrypted []byte) error {
+	cfg := config.Get().Server
+	if !cfg.Notifications.Email.Enabled || cfg.Notifications.Email.SMTP.Host == "" {
+		return errors.New("email features require SMTP configuration")
+	}
+	return contactMailer(cfg).Send(context.Background(), email.Message{To: to, Subject: subject, Text: string(encrypted)})
+}
+
+func contactRecipient(cfg config.ContactConfig, role string) string {
+	switch role {
+	case "security":
+		if cfg.Security.Email != "" {
+			return cfg.Security.Email
+		}
+		return cfg.Admin.Email
+	case "abuse", "dmca":
+		if cfg.Abuse.Email != "" {
+			return cfg.Abuse.Email
+		}
+		if cfg.General.Email != "" {
+			return cfg.General.Email
+		}
+		return cfg.Admin.Email
+	case "privacy":
+		if cfg.DPO.Email != "" {
+			return cfg.DPO.Email
+		}
+		if cfg.General.Email != "" {
+			return cfg.General.Email
+		}
+		return cfg.Admin.Email
+	default:
+		if cfg.General.Email != "" {
+			return cfg.General.Email
+		}
+		return cfg.Admin.Email
+	}
+}
+
+func contactPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	if !config.Get().Server.Pages.Contact.Enabled {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method == http.MethodGet {
+		renderContactForm(w, r, nil, "")
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", tr(r, "api.method_not_allowed"))
+		return
+	}
+	if !validContactOrigin(r) {
+		contactBlocked(r, "origin")
+		http.Error(w, "Please submit the form from this site", http.StatusBadRequest)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 256<<10)
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	input := messageFromValues(r.Form)
+	input.RequestHost = r.Host
+	input.BaseURL = resolveBaseURL(r)
+	input.Tunneled = strings.HasSuffix(strings.ToLower(r.Host), ".onion") || strings.HasSuffix(strings.ToLower(r.Host), ".i2p")
+	service, err := currentContactService()
+	if err != nil {
+		http.Error(w, "Contact reports are temporarily unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if input.Step == "confirm" {
+		outcome, err := service.Confirm(r.Context(), input, requestClientIP(r), time.Now())
+		if err != nil {
+			contactBlocked(r, "review")
+			renderContactForm(w, r, &input, "Please read the details and confirm")
+			return
+		}
+		renderContactOutcome(w, r, outcome)
+		return
+	}
+	if input.Step == "edit" {
+		renderContactForm(w, r, &input, "")
+		return
+	}
+	if input.Step == "" {
+		input.Step = "submit"
+	}
+	if input.Step == "submit" {
+		if err := validateReported(input, r.Host); err != nil {
+			contactBlocked(r, "content")
+			renderContactForm(w, r, &input, "Your message could not be sent")
+			return
+		}
+	}
+	review, err := service.Prepare(r.Context(), input, requestClientIP(r), time.Now())
+	if err != nil {
+		contactBlocked(r, reasonFor(err))
+		renderContactForm(w, r, &input, "Your message could not be sent")
+		return
+	}
+	if review.Silent {
+		review.Silent = true
+	}
+	renderContactReview(w, r, input, review)
+}
+
+func apiContact(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	if !config.Get().Server.Pages.Contact.Enabled {
+		http.NotFound(w, r)
+		return
+	}
+	service, err := currentContactService()
+	if err != nil {
+		writeError(w, r, http.StatusServiceUnavailable, "CONTACT_UNAVAILABLE", "Contact reports are temporarily unavailable")
+		return
+	}
+	if r.Method == http.MethodGet {
+		token, err := service.IssueFormToken(time.Now())
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "CONTACT_UNAVAILABLE", "Contact reports are temporarily unavailable")
+			return
+		}
+		captchaDescriptor, err := contactCaptchaDescriptor(r, service)
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "CONTACT_UNAVAILABLE", "Contact reports are temporarily unavailable")
+			return
+		}
+		kind := r.URL.Query().Get("type")
+		security := contact.ValidSecurityID(mustInstallationSecret(r, service), r.URL.Query().Get("security_id"), time.Now())
+		if kind == "security" && !security {
+			writeError(w, r, http.StatusForbidden, "SECURITY_ID_REQUIRED", "A valid security report link is required")
+			return
+		}
+		fields := contact.Fields(kind, security)
+		types := []string{"abuse", "dmca", "privacy"}
+		if security {
+			types = append(types, "security")
+		}
+		if kind == "" {
+			fields = append(contact.Fields("abuse", false), contact.Fields("dmca", false)...)
+			fields = append(fields, contact.Fields("privacy", false)...)
+		}
+		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]any{"fields": fields, "captcha": captchaDescriptor, "form_token": token, "types": types, "security_url": buildURL(r, "/server/security"), "abuse_email": publicAbuseEmail()}})
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		writeError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Method not allowed")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 256<<10)
+	var raw map[string]json.RawMessage
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&raw); err != nil {
+		writeError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "Invalid request")
+		return
+	}
+	values := url.Values{}
+	for key, value := range raw {
+		var text string
+		if err := json.Unmarshal(value, &text); err != nil {
+			var boolean bool
+			if err := json.Unmarshal(value, &boolean); err == nil {
+				text = strconv.FormatBool(boolean)
+			} else {
+				var number json.Number
+				if err := json.Unmarshal(value, &number); err != nil {
+					writeError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "Invalid request")
+					return
+				}
+				text = number.String()
+			}
+		}
+		values.Set(key, text)
+	}
+	if values.Has("website") {
+		writeError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "Invalid request")
+		return
+	}
+	input := messageFromValues(values)
+	input.RequestHost = r.Host
+	input.BaseURL = resolveBaseURL(r)
+	input.Tunneled = strings.HasSuffix(strings.ToLower(r.Host), ".onion") || strings.HasSuffix(strings.ToLower(r.Host), ".i2p")
+	if input.Step == "confirm" {
+		outcome, err := service.Confirm(r.Context(), input, requestClientIP(r), time.Now())
+		if err != nil {
+			contactBlocked(r, "review")
+			writeError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "Please read the details and confirm")
+			return
+		}
+		if outcome.Silent {
+			writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]any{"tracking_id": ""}})
+			return
+		}
+		if outcome.TrackingID != "" {
+			writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]any{"tracking_id": outcome.TrackingID, "message": "We received your report. Your tracking ID is " + outcome.TrackingID + ackMessage(outcome.Sent)}})
+			return
+		}
+		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]any{"message": config.Get().Server.Pages.Contact.SuccessMessage}})
+		return
+	}
+	if err := validateReported(input, r.Host); err != nil {
+		contactBlocked(r, "content")
+		writeError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "Your message could not be sent")
+		return
+	}
+	review, err := service.Prepare(r.Context(), input, requestClientIP(r), time.Now())
+	if err != nil {
+		reason := reasonFor(err)
+		contactBlocked(r, reason)
+		if reason == "captcha" {
+			writeContactCaptchaError(w, r, service)
+			return
+		}
+		writeError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "Your message could not be sent")
+		return
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]any{"review": map[string]string{"type": review.Type, "email": review.Email, "subject": review.Subject}, "review_token": review.Token, "confirm_after_seconds": review.ConfirmAfter}})
+}
+
+func writeContactCaptchaError(w http.ResponseWriter, r *http.Request, service *contact.Service) {
+	descriptor, err := contactCaptchaDescriptor(r, service)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "Your message could not be sent")
+		return
+	}
+	writeJSON(w, r, http.StatusBadRequest, map[string]any{"ok": false, "error": "VALIDATION_FAILED", "message": "Your message could not be sent", "details": map[string]any{"field": "captcha", "captcha": descriptor}})
+}
+
+func mustInstallationSecret(r *http.Request, service *contact.Service) []byte {
+	store := getContactStore()
+	if store == nil {
+		return nil
+	}
+	secret, err := contact.InstallationSecret(r.Context(), store)
+	if err != nil {
+		return nil
+	}
+	return secret
+}
+func getContactStore() *database.Store {
+	contactStoreMu.RLock()
+	defer contactStoreMu.RUnlock()
+	return contactStore
+}
+
+func messageFromValues(values url.Values) contact.Message {
+	fields := map[string]string{}
+	metadata := map[string]bool{"type": true, "name": true, "email": true, "subject": true, "message": true, "website": true, "form_token": true, "captcha_id": true, "captcha_answer": true, "captcha_response": true, "g-recaptcha-response": true, "h-captcha-response": true, "step": true, "review_token": true, "confirmed": true, "security_id": true}
+	for key, items := range values {
+		if len(items) > 0 && !metadata[key] {
+			fields[key] = items[0]
+		}
+	}
+	response := values.Get("captcha_response")
+	if response == "" {
+		response = values.Get("g-recaptcha-response")
+	}
+	if response == "" {
+		response = values.Get("h-captcha-response")
+	}
+	return contact.Message{Type: values.Get("type"), Name: values.Get("name"), Email: values.Get("email"), Subject: values.Get("subject"), Body: values.Get("message"), Fields: fields, Website: values.Get("website"), FormToken: values.Get("form_token"), CaptchaID: values.Get("captcha_id"), CaptchaAnswer: values.Get("captcha_answer"), CaptchaResponse: response, Step: values.Get("step"), ReviewToken: values.Get("review_token"), Confirmed: values.Get("confirmed") == "true" || values.Get("confirmed") == "on", SecurityID: values.Get("security_id")}
+}
+
+func contactCaptchaProvider(r *http.Request) string {
+	provider := strings.ToLower(strings.TrimSpace(config.Get().Server.Pages.Contact.Captcha))
+	host := strings.ToLower(r.URL.Hostname())
+	if host == "" {
+		host = strings.ToLower(r.Host)
+	}
+	if strings.HasSuffix(host, ".onion") || strings.HasSuffix(host, ".i2p") || provider == "" {
+		return "simple"
+	}
+	return provider
+}
+
+func contactCaptchaDescriptor(r *http.Request, service *contact.Service) (map[string]any, error) {
+	id, question, err := service.NewCaptcha(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	fallback := map[string]any{"provider": "simple", "captcha_id": id, "question": question}
+	provider := contactCaptchaProvider(r)
+	if provider == "simple" {
+		return fallback, nil
+	}
+	return map[string]any{"provider": provider, "site_key": config.Get().Server.Pages.Contact.CaptchaSiteKey, "fallback": fallback}, nil
+}
+
+func validContactOrigin(r *http.Request) bool {
+	value := r.Header.Get("Origin")
+	if value == "" {
+		value = r.Header.Get("Referer")
+	}
+	if value == "" && r.Header.Get("Sec-Fetch-Site") == "" {
+		return false
+	}
+	if value != "" {
+		parsed, err := url.Parse(value)
+		if err != nil || !strings.EqualFold(parsed.Host, r.Host) {
+			return false
+		}
+		if parsed.Scheme != "http" && parsed.Scheme != "https" {
+			return false
+		}
+	}
+	return r.Header.Get("Sec-Fetch-Site") == "" || r.Header.Get("Sec-Fetch-Site") == "same-origin"
+}
+
+func validateReported(input contact.Message, host string) error {
+	if input.Type != "abuse" && input.Type != "dmca" {
+		return nil
+	}
+	if !contact.ValidReportedURL(input.Fields["reported_url"], host) {
+		return errors.New("reported URL invalid")
+	}
+	return nil
+}
+func reasonFor(err error) string {
+	switch {
+	case strings.Contains(err.Error(), "captcha"):
+		return "captcha"
+	case strings.Contains(err.Error(), "replay"):
+		return "replay"
+	case strings.Contains(err.Error(), "rate"):
+		return "rate_global"
+	case strings.Contains(err.Error(), "banned"):
+		return "banned"
+	case strings.Contains(err.Error(), "content"):
+		return "content"
+	default:
+		return "shape"
+	}
+}
+func contactBlocked(r *http.Request, reason string) {
+	log.Printf("contact.spam_blocked reason=%s ip=%s", reason, requestClientIP(r))
+}
+func publicAbuseEmail() string {
+	cfg := config.Get().Server.Contact
+	if cfg.Abuse.Email != "" {
+		return cfg.Abuse.Email
+	}
+	return cfg.General.Email
+}
+
+func renderContactForm(w http.ResponseWriter, r *http.Request, input *contact.Message, errorMessage string) {
+	service, err := currentContactService()
+	if err != nil {
+		http.Error(w, "Contact reports are temporarily unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	kind := r.URL.Query().Get("type")
+	if input != nil && input.Type != "" {
+		kind = input.Type
+	}
+	securityID := r.URL.Query().Get("security_id")
+	security := false
+	if secret, err := contact.InstallationSecret(r.Context(), getContactStore()); err == nil && contact.ValidSecurityID(secret, securityID, time.Now()) {
+		security = true
+	}
+	if kind != "" && kind != "abuse" && kind != "dmca" && kind != "privacy" {
+		kind = ""
+	}
+	if security {
+		kind = "security"
+	} else {
+		securityID = ""
+	}
+	if kind == "" {
+		body := `<p>This form is only for security reports, terms violations at a URL on this site, DMCA notices and privacy requests. It cannot be used for support, bug reports, feature requests or general questions.</p><h2>Choose a report type</h2><ul><li><a href="/server/contact?type=abuse">Report abuse</a></li><li><a href="/server/contact?type=dmca">Send a DMCA notice</a></li><li><a href="/server/contact?type=privacy">Make a privacy request</a></li></ul><section><h2>Security Issues</h2><p>To report a security vulnerability, consult our security policy at <a href="/server/security">/server/security</a>.</p></section><section><h2>Abuse Reports</h2><p>To report abusive content or a terms violation, choose the type Abuse above. To send a DMCA notice, choose the type DMCA.`
+		if address := publicAbuseEmail(); address != "" {
+			body += ` Or email <a href="mailto:` + template.HTMLEscapeString(address) + `">` + template.HTMLEscapeString(address) + `</a>.`
+		}
+		body += `</p></section>`
+		page(w, r, "Report form", template.HTML(body))
+		return
+	}
+	token, err := service.IssueFormToken(time.Now())
+	if err != nil {
+		http.Error(w, "Contact reports are temporarily unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	captchaDescriptor, err := contactCaptchaDescriptor(r, service)
+	if err != nil {
+		http.Error(w, "Contact reports are temporarily unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `<p>This form is only for security reports, terms violations at a URL on this site, DMCA notices and privacy requests. It cannot be used for support, bug reports, feature requests or general questions.</p>`)
+	if errorMessage != "" {
+		fmt.Fprintf(&b, `<p role="alert">%s</p>`, template.HTMLEscapeString(errorMessage))
+	}
+	if input == nil {
+		input = &contact.Message{Type: kind, Fields: map[string]string{}}
+	}
+	if input.Fields == nil {
+		input.Fields = map[string]string{}
+	}
+	fallback := captchaDescriptor["fallback"]
+	if fallback == nil {
+		fallback = captchaDescriptor
+	}
+	fallbackMap := fallback.(map[string]any)
+	captchaID := fallbackMap["captcha_id"].(string)
+	question := fallbackMap["question"].(string)
+	fmt.Fprintf(&b, `<form method="post" action="/server/contact"><input type="hidden" name="type" value="%s"><input type="hidden" name="form_token" value="%s"><input type="hidden" name="captcha_id" value="%s"><input type="hidden" name="security_id" value="%s"><div class="contact-honeypot" aria-hidden="true"><label>Leave this field empty<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>`, template.HTMLEscapeString(kind), template.HTMLEscapeString(token), template.HTMLEscapeString(captchaID), template.HTMLEscapeString(securityID))
+	addInput(&b, "name", "Name", "text", input.Name, 100, true)
+	addInput(&b, "email", "Email", "email", input.Email, 254, true)
+	if kind == "security" {
+		for _, field := range []struct {
+			k, l string
+			max  int
+		}{{"component", "Affected component", 255}, {"endpoint", "Affected endpoint / URL", 2048}, {"severity", "Severity", 0}, {"summary", "Vulnerability summary", 200}, {"reproduce", "Steps to reproduce", 10000}, {"impact", "Impact", 5000}, {"suggested_fix", "Suggested fix", 5000}, {"credit_preference", "Credit preference", 0}, {"credit_handle", "Credit handle", 100}} {
+			addInput(&b, field.k, field.l, "text", input.Fields[field.k], field.max, field.k != "suggested_fix" && field.k != "endpoint" && field.k != "credit_handle")
+		}
+		addCheckbox(&b, "cve_requested", "CVE requested", input.Fields["cve_requested"])
+		addCheckbox(&b, "coordinated_disclosure", "I agree to coordinated disclosure", input.Fields["coordinated_disclosure"])
+	} else {
+		switch kind {
+		case "abuse":
+			addInput(&b, "reported_url", "Reported URL", "url", input.Fields["reported_url"], 2048, true)
+			addInput(&b, "reason", "Reason", "text", input.Fields["reason"], 0, true)
+		case "dmca":
+			addInput(&b, "reported_url", "Reported URL", "url", input.Fields["reported_url"], 2048, true)
+			addInput(&b, "copyrighted_work", "Copyrighted work", "text", input.Fields["copyrighted_work"], 2000, true)
+			addCheckbox(&b, "good_faith", "Good-faith statement", input.Fields["good_faith"])
+			addCheckbox(&b, "accuracy", "Accuracy statement", input.Fields["accuracy"])
+			addInput(&b, "signature", "Signature", "text", input.Fields["signature"], 100, true)
+		case "privacy":
+			addInput(&b, "request_kind", "Request kind", "text", input.Fields["request_kind"], 0, true)
+		}
+	}
+	addInput(&b, "subject", "Subject", "text", input.Subject, 200, true)
+	fmt.Fprintf(&b, `<label for="contact-message">Message <span aria-hidden="true">*</span></label><textarea id="contact-message" name="message" required maxlength="5000">%s</textarea><fieldset><legend>Captcha</legend>`, template.HTMLEscapeString(input.Body))
+	provider := captchaDescriptor["provider"].(string)
+	switch provider {
+	case "recaptcha":
+		fmt.Fprintf(&b, `<div class="g-recaptcha" data-sitekey="%s"></div><noscript><label for="captcha-answer">What is %s?</label><input id="captcha-answer" name="captcha_answer" inputmode="numeric" required></noscript><script src="https://www.google.com/recaptcha/api.js" async defer></script>`, template.HTMLEscapeString(config.Get().Server.Pages.Contact.CaptchaSiteKey), template.HTMLEscapeString(question))
+	case "hcaptcha":
+		fmt.Fprintf(&b, `<div class="h-captcha" data-sitekey="%s"></div><noscript><label for="captcha-answer">What is %s?</label><input id="captcha-answer" name="captcha_answer" inputmode="numeric" required></noscript><script src="https://js.hcaptcha.com/1/api.js" async defer></script>`, template.HTMLEscapeString(config.Get().Server.Pages.Contact.CaptchaSiteKey), template.HTMLEscapeString(question))
+	default:
+		fmt.Fprintf(&b, `<label for="captcha-answer">What is %s?</label><input id="captcha-answer" name="captcha_answer" inputmode="numeric" required>`, template.HTMLEscapeString(question))
+	}
+	b.WriteString(`</fieldset><button type="submit">Send</button></form><p>To report a security vulnerability, see <a href="/server/security">/server/security</a>.</p>`)
+	page(w, r, "Report form", template.HTML(b.String()))
+}
+
+func addInput(b *strings.Builder, name, label, kind, value string, max int, required bool) {
+	fmt.Fprintf(b, `<label for="contact-%s">%s%s</label><input id="contact-%s" type="%s" name="%s" value="%s"`, name, label, requiredMark(required), name, kind, name, template.HTMLEscapeString(value))
+	if max > 0 {
+		fmt.Fprintf(b, ` maxlength="%d"`, max)
+	}
+	if required {
+		b.WriteString(` required`)
+	}
+	b.WriteString(`>`)
+}
+func addCheckbox(b *strings.Builder, name, label, value string) {
+	checked := ""
+	if value == "true" || value == "on" {
+		checked = " checked"
+	}
+	fmt.Fprintf(b, `<label><input type="checkbox" name="%s" value="true"%s required>%s <span aria-hidden="true">*</span></label>`, name, checked, label)
+}
+func requiredMark(required bool) string {
+	if !required {
+		return ` <span>(optional)</span>`
+	}
+	return ` <span aria-hidden="true">*</span>`
+}
+
+func renderContactReview(w http.ResponseWriter, r *http.Request, input contact.Message, review contact.Review) {
+	body := fmt.Sprintf(`<div class="contact-review"><h1>Review your report</h1><p><strong>Type:</strong> %s</p><p class="contact-review-email">%s</p><p><strong>Subject:</strong> %s</p><form method="post" action="/server/contact">%s<input type="hidden" name="step" value="confirm"><input type="hidden" name="review_token" value="%s"><label><input type="checkbox" name="confirmed" value="true" required>This email address is correct, and this is a genuine report, not an advertisement, a solicitation or spam</label><button type="submit">Confirm</button></form><form method="post" action="/server/contact">%s<input type="hidden" name="step" value="edit"><button type="submit">Edit</button></form></div>`, template.HTMLEscapeString(input.Type), template.HTMLEscapeString(input.Email), template.HTMLEscapeString(input.Subject), hiddenFields(input), template.HTMLEscapeString(review.Token), hiddenFields(input))
+	page(w, r, "Review report", template.HTML(body))
+}
+func hiddenFields(input contact.Message) string {
+	var b strings.Builder
+	vals := map[string]string{"type": input.Type, "name": input.Name, "email": input.Email, "subject": input.Subject, "message": input.Body, "security_id": input.SecurityID, "website": input.Website}
+	for k, v := range input.Fields {
+		vals[k] = v
+	}
+	for k, v := range vals {
+		fmt.Fprintf(&b, `<input type="hidden" name="%s" value="%s">`, template.HTMLEscapeString(k), template.HTMLEscapeString(v))
+	}
+	return b.String()
+}
+func renderContactSuccess(w http.ResponseWriter, r *http.Request) {
+	page(w, r, "Report received", template.HTML(`<p role="status">`+template.HTMLEscapeString(config.Get().Server.Pages.Contact.SuccessMessage)+`</p>`))
+}
+
+func renderContactOutcome(w http.ResponseWriter, r *http.Request, outcome contact.Outcome) {
+	if outcome.Silent {
+		renderContactSuccess(w, r)
+		return
+	}
+	if outcome.TrackingID != "" {
+		message := "We received your report. Your tracking ID is " + outcome.TrackingID + "." + ackMessage(outcome.Sent)
+		page(w, r, "Report received", template.HTML(`<p role="status">`+template.HTMLEscapeString(message)+`</p>`))
+		return
+	}
+	renderContactSuccess(w, r)
+}
+func ackMessage(sent bool) string {
+	if sent {
+		return " A confirmation email is on its way."
+	}
+	return ""
+}
+
+func contactSecurityPage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/server/security" {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	var body strings.Builder
+	body.WriteString("<dl class=\"security-details\">")
+	for _, line := range strings.Split(securityTextBody(r), "\n") {
+		field, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok || strings.TrimSpace(value) == "" {
+			continue
+		}
+		field, value = strings.TrimSpace(field), strings.TrimSpace(value)
+		fmt.Fprintf(&body, "<dt>%s</dt><dd>", template.HTMLEscapeString(field))
+		parsed, err := url.Parse(value)
+		if err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https" || parsed.Scheme == "mailto") {
+			fmt.Fprintf(&body, `<a href="%s">%s</a>`, template.HTMLEscapeString(value), template.HTMLEscapeString(value))
+		} else {
+			body.WriteString(template.HTMLEscapeString(value))
+		}
+		body.WriteString("</dd>")
+	}
+	body.WriteString("</dl><p>" + template.HTMLEscapeString(tr(r, "security.body")) + "</p>")
+	fmt.Fprintf(&body, `<p><a href="%s">%s</a></p>`, template.HTMLEscapeString(BuildURL(r, "/server/security/policy")), template.HTMLEscapeString(tr(r, "security.policy")))
+	if config.Get().Server.Pages.Contact.Enabled {
+		body.WriteString(`<section><h2>Other reports</h2><p>For terms violations, DMCA notices, and privacy requests, use the <a href="` + template.HTMLEscapeString(BuildURL(r, "/server/contact")) + `">report form</a>.</p></section>`)
+	}
+	page(w, r, tr(r, "security.title"), template.HTML(body.String()))
+}
+
+func wellKnownOverrideAt(dataDir, name string) ([]byte, bool) {
+	if name != "security.txt" {
+		return nil, false
+	}
+	path := filepath.Join(dataDir, "web", ".well-known", name)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		return nil, false
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = file.Close() }()
+	body, err := io.ReadAll(io.LimitReader(file, (1<<20)+1))
+	if err != nil || len(body) > 1<<20 {
+		return nil, false
+	}
+	return body, true
+}
+
+func wellKnownOverride(name string) ([]byte, bool) {
+	return wellKnownOverrideAt(paths.GetDirectories().Data, name)
+}
+
+func validSecurityText(body []byte) bool {
+	contact, policy, expires := false, false, false
+	for _, line := range strings.Split(string(body), "\n") {
+		field, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok || strings.TrimSpace(value) == "" {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(field)) {
+		case "contact":
+			parsed, err := url.Parse(strings.TrimSpace(value))
+			valid := err == nil && ((parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != "" || parsed.Scheme == "mailto" && parsed.Opaque != "")
+			contact = contact || valid
+		case "policy":
+			parsed, err := url.Parse(strings.TrimSpace(value))
+			policy = policy || err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != ""
+		case "expires":
+			_, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+			expires = expires || err == nil
+		}
+	}
+	return contact && policy && expires
+}
+
+func securityTextBody(r *http.Request) string {
+	cfg := config.Get()
+	server := cfg.Server
+	_, fqdn, _ := GetURLVars(r)
+	onion := server.Tor.OnionAddress != "" && strings.EqualFold(fqdn, server.Tor.OnionAddress)
+	if !onion {
+		if body, ok := wellKnownOverride("security.txt"); ok && validSecurityText(body) {
+			return string(body)
+		}
+	}
+	reportURL := strings.TrimSpace(cfg.Web.Security.ReportURL)
+	if reportURL == "" {
+		reportURL = "https://github.com/apimgr/gitmessages/security/advisories/new"
+	}
+	var body strings.Builder
+	fmt.Fprintf(&body, "Contact: %s\n", reportURL)
+	if server.Pages.Contact.Enabled {
+		if store := getContactStore(); store != nil {
+			if secret, err := contact.InstallationSecret(r.Context(), store); err == nil {
+				fmt.Fprintf(&body, "Contact: %s\n", BuildURL(r, "/server/contact?security_id="+url.QueryEscape(contact.SecurityID(secret, time.Now()))))
+			}
+		}
+	}
+	securityEmail := strings.TrimSpace(cfg.Web.Security.Contact)
+	if securityEmail == "" {
+		securityEmail = strings.TrimSpace(server.Contact.Security.Email)
+	}
+	if onion {
+		securityEmail = ""
+	}
+	if securityEmail != "" {
+		fmt.Fprintf(&body, "Contact: mailto:%s\n", securityEmail)
+	}
+	if _, err := os.Stat(pgpKeyPath()); err == nil {
+		fmt.Fprintf(&body, "Encryption: %s\n", BuildURL(r, "/.well-known/pgp-key.asc"))
+	}
+	fmt.Fprintf(&body, "Policy: %s\nExpires: %s\n", BuildURL(r, "/server/security"), time.Now().UTC().AddDate(1, 0, 0).Format("2006-01-02T15:04:05Z"))
+	if !onion {
+		fmt.Fprintf(&body, "Preferred-Languages: %s\n", strings.Join(i18n.Supported(), ", "))
+	}
+	return body.String()
+}
+
+func contactSecurityTxt(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/.well-known/security.txt" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		writeText(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if r.Method == http.MethodGet {
+		_, _ = io.WriteString(w, securityTextBody(r))
+	}
+}
+
+func llmsTextBody(r *http.Request) string {
+	cfg := config.Get()
+	base := BuildURL(r, "/api/v1")
+	var body strings.Builder
+	fmt.Fprintf(&body, "# Git Messages API\n> Curated Git commit conventions, examples, and a stateless commit message builder.\n\n## API\nBase URL: %s\nAuthentication: Public REST reads and stateless message building need no token. An owner token is required for token management and MCP. Create an owner token with POST %s; linked tokens can be created at the token management endpoint.\nMCP: %s (Streamable HTTP; Bearer token required)\nAliases: %s, %s\n", base, BuildURL(r, apiBase+"/server/preferences/tokens/primary"), BuildURL(r, apiBase+"/server/mcp"), BuildURL(r, "/api/mcp"), BuildURL(r, "/mcp"))
+	limit := cfg.Server.RateLimit.Read
+	if limit.Requests <= 0 {
+		limit.Requests = 120
+	}
+	if limit.Window <= 0 {
+		limit.Window = 60
+	}
+	fmt.Fprintf(&body, "Rate limit: %d requests/minute for reads; write limits follow server.rate_limit.write\n", limit.Requests*60/limit.Window)
+	body.WriteString("\n## Endpoints\n")
+	fmt.Fprintf(&body, "- GET %s - Health check page (no auth)\n- GET %s - Server information page (no auth)\n", BuildURL(r, "/server/healthz"), BuildURL(r, "/server/about"))
+	for _, operation := range apiOperationDefinitions(r) {
+		if operation.path == apiBase+"/server/contact" || strings.Contains(operation.path, "/server/metrics") {
+			continue
+		}
+		description := strings.TrimSpace(operation.summary)
+		if description == "" {
+			description = operation.name
+		}
+		fmt.Fprintf(&body, "- %s %s - %s\n", operation.method, BuildURL(r, operation.path), description)
+	}
+	tokenAPI := BuildURL(r, apiBase+"/server/preferences/tokens")
+	primaryAPI := BuildURL(r, apiBase+"/server/preferences/tokens/primary")
+	fmt.Fprintf(&body, "- POST %s - Issue an owner token (no auth)\n- GET %s - List tokens (primary Bearer token)\n- POST %s - Create a linked token (primary Bearer token)\n", primaryAPI, tokenAPI, tokenAPI)
+	fmt.Fprintf(&body, "- POST %s - Reveal the primary token (primary Bearer token)\n- POST %s - Rotate the primary token (primary Bearer token)\n", BuildURL(r, apiBase+"/server/preferences/tokens/primary/reveal"), BuildURL(r, apiBase+"/server/preferences/tokens/primary/rotate"))
+	fmt.Fprintf(&body, "- POST %s - Reveal a linked token (primary Bearer token)\n- POST %s - Rotate a linked token (primary Bearer token)\n- PATCH %s - Rename or change expiry (primary Bearer token)\n- DELETE %s - Revoke a linked token (primary Bearer token)\n", BuildURL(r, apiBase+"/server/preferences/tokens/{id}/reveal"), BuildURL(r, apiBase+"/server/preferences/tokens/{id}/rotate"), BuildURL(r, apiBase+"/server/preferences/tokens/{id}"), BuildURL(r, apiBase+"/server/preferences/tokens/{id}"))
+	fmt.Fprintf(&body, "- POST %s - MCP endpoint (Bearer token required)\n", BuildURL(r, apiBase+"/server/mcp"))
+	body.WriteString("\n## Capabilities\n- Browse commit types, conventions, and templates\n- Retrieve random examples\n- Build a commit message without submitting it to the server\n\n## Contact\nAPI issues: consult the API documentation\n")
+	_, fqdn, _ := GetURLVars(r)
+	securityEmail := strings.TrimSpace(cfg.Web.Security.Contact)
+	if securityEmail == "" {
+		securityEmail = strings.TrimSpace(cfg.Server.Contact.Security.Email)
+	}
+	if cfg.Server.Tor.OnionAddress != "" && strings.EqualFold(fqdn, cfg.Server.Tor.OnionAddress) {
+		securityEmail = ""
+	}
+	if securityEmail != "" {
+		fmt.Fprintf(&body, "Security: mailto:%s\n", securityEmail)
+	} else {
+		body.WriteString("Security: use the private vulnerability reporting URL in security.txt\n")
+	}
+	return body.String()
+}
+
+func llmsTxt(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/.well-known/llms.txt" && r.URL.Path != "/llms.txt" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		writeText(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if r.Method == http.MethodGet {
+		_, _ = io.WriteString(w, llmsTextBody(r))
+	}
+}
+
+func apiContactSecurity(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != apiBase+"/server/security" {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	cfg := config.Get()
+	server := cfg.Server
+	contacts := []map[string]string{{"type": "github", "value": cfg.Web.Security.ReportURL}}
+	if contacts[0]["value"] == "" {
+		contacts[0]["value"] = "https://github.com/apimgr/gitmessages/security/advisories/new"
+	}
+	if server.Pages.Contact.Enabled {
+		if store := getContactStore(); store != nil {
+			if secret, err := contact.InstallationSecret(r.Context(), store); err == nil {
+				securityURL := BuildURL(r, "/server/contact?security_id="+url.QueryEscape(contact.SecurityID(secret, time.Now())))
+				contacts = append(contacts, map[string]string{"type": "contact_form", "value": securityURL})
+			}
+		}
+	}
+	_, fqdn, _ := GetURLVars(r)
+	securityEmail := strings.TrimSpace(cfg.Web.Security.Contact)
+	if securityEmail == "" {
+		securityEmail = strings.TrimSpace(server.Contact.Security.Email)
+	}
+	if server.Tor.OnionAddress != "" && strings.EqualFold(fqdn, server.Tor.OnionAddress) {
+		securityEmail = ""
+	}
+	if securityEmail != "" {
+		contacts = append(contacts, map[string]string{"type": "email", "value": securityEmail})
+	}
+	var pgpURL, fingerprint any
+	pgpAvailable := false
+	if key, err := os.ReadFile(pgpKeyPath()); err == nil {
+		if ring, parseErr := openpgp.ReadArmoredKeyRing(strings.NewReader(string(key))); parseErr == nil && len(ring) > 0 {
+			pgpURL = BuildURL(r, "/.well-known/pgp-key.asc")
+			fingerprint = strings.ToUpper(hex.EncodeToString(ring[0].PrimaryKey.Fingerprint[:]))
+			pgpAvailable = true
+		}
+	}
+	data := map[string]any{
+		"contacts":   contacts,
+		"expires":    time.Now().UTC().AddDate(1, 0, 0).Format(time.RFC3339),
+		"pgp":        map[string]any{"available": pgpAvailable, "url": pgpURL, "fingerprint": fingerprint},
+		"policy_url": BuildURL(r, "/server/security"),
+		"thanks_url": BuildURL(r, "/server/security/thanks"),
+	}
+	if server.Pages.Contact.Enabled {
+		data["report_url"] = BuildURL(r, "/server/contact")
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": data})
+}
+
+func buildURL(r *http.Request, path string) string { return BuildURL(r, path) }
+func resolveBaseURL(r *http.Request) string        { return BuildURL(r, "") }
+
+func pgpKeyPath() string { return filepath.Join(config.ConfigDirectory(), "security", "pgp.pub.asc") }
+
+func pgpKeyPage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/.well-known/pgp-key.asc" {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		writeText(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+	key, err := os.ReadFile(pgpKeyPath())
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/pgp-keys; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(key)
+	}
+}
+
+func disclosurePolicy(r *http.Request) string {
+	if configured := strings.TrimSpace(config.Get().Web.Security.Policy); configured != "" {
+		return configured
+	}
+	_, host, _ := GetURLVars(r)
+	return "## Scope\nThe application served at " + host + ", including its API.\n\n## Out of scope\nDenial of service and volumetric testing, social engineering of operators or users, physical attacks, findings in third-party services or dependencies without an exploitable path here, automated scanner output without demonstrated impact, and missing best-practice headers on non-sensitive pages.\n\n## Coordinated disclosure\nPlease report privately through /server/security and allow 90 days from the report to publish. The window ends early once a fix is released and may be extended by agreement.\n\n## Safe harbor\nGood-faith research that follows this policy, avoids privacy violations and service disruption, accesses only what is needed to show the issue, and stops when it has done so is authorized. No legal action will be taken for it.\n\n## Reporting\nUse /server/security."
+}
+
+func securityPolicyPage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/server/security/policy" {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	content := template.HTMLEscapeString(disclosurePolicy(r))
+	content = strings.ReplaceAll(content, "\n\n", "</p><p>")
+	content = strings.ReplaceAll(content, "\n", "<br>")
+	page(w, r, "Security policy", template.HTML("<article><p>"+content+"</p></article>"))
+}
+
+func apiSecurityPolicy(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != apiBase+"/server/security/policy" {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]string{"policy": disclosurePolicy(r)}})
+}
+
+type thanksEntry struct {
+	Credit   string `json:"credit"`
+	Date     string `json:"date"`
+	Severity string `json:"severity"`
+}
+
+func securityThanks(ctx context.Context) ([]thanksEntry, error) {
+	store := getContactStore()
+	if store == nil {
+		return []thanksEntry{}, nil
+	}
+	rows, err := store.Read().QueryContext(ctx, "SELECT credit, disclosed_on, severity FROM security_thanks ORDER BY disclosed_on DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	entries := []thanksEntry{}
+	for rows.Next() {
+		var entry thanksEntry
+		if err := rows.Scan(&entry.Credit, &entry.Date, &entry.Severity); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
+}
+func apiSecurityThanks(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != apiBase+"/server/security/thanks" {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	entries, err := securityThanks(r.Context())
+	if err != nil {
+		writeError(w, r, http.StatusServiceUnavailable, "SECURITY_UNAVAILABLE", "Security acknowledgments are temporarily unavailable")
+		return
+	}
+	writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]any{"entries": entries}})
+}
+func securityThanksPage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/server/security/thanks" {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	entries, err := securityThanks(r.Context())
+	if err != nil {
+		http.Error(w, "Security acknowledgments are temporarily unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var body strings.Builder
+	body.WriteString(`<p>Researchers who have chosen public credit for responsible disclosures.</p><table><thead><tr><th>Researcher</th><th>Date</th><th>Severity</th></tr></thead><tbody>`)
+	for _, entry := range entries {
+		fmt.Fprintf(&body, "<tr><td>%s</td><td>%s</td><td>%s</td></tr>", template.HTMLEscapeString(entry.Credit), template.HTMLEscapeString(entry.Date), template.HTMLEscapeString(entry.Severity))
+	}
+	body.WriteString("</tbody></table>")
+	page(w, r, "Security acknowledgments", template.HTML(body.String()))
+}
+
+func securityReportPage(w http.ResponseWriter, r *http.Request) {
+	if !strings.HasPrefix(r.URL.Path, "/server/security/report/") {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	id := strings.TrimPrefix(r.URL.Path, "/server/security/report/")
+	if id == "" || strings.Contains(id, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	token := r.URL.Query().Get("token")
+	digest := sha256.Sum256([]byte(token))
+	store := getContactStore()
+	if store == nil {
+		http.NotFound(w, r)
+		return
+	}
+	var expected, status, comment string
+	var lastUsed, closed sql.NullString
+	err := store.Read().QueryRowContext(r.Context(), "SELECT token_hash,status,researcher_comment,token_last_used,closed_at FROM security_reports WHERE tracking_id = ?", id).Scan(&expected, &status, &comment, &lastUsed, &closed)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	actual := hex.EncodeToString(digest[:])
+	if token == "" || subtle.ConstantTimeCompare([]byte(expected), []byte(actual)) != 1 {
+		http.NotFound(w, r)
+		return
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	if lastUsed.Valid && lastUsed.String >= today {
+		http.NotFound(w, r)
+		return
+	}
+	if closed.Valid {
+		closedAt, parseErr := time.Parse(time.RFC3339, closed.String)
+		if parseErr == nil && time.Since(closedAt) > 30*24*time.Hour {
+			http.NotFound(w, r)
+			return
+		}
+	}
+	var affected int64
+	err = store.Write(r.Context(), func(tx *sql.Tx) error {
+		result, updateErr := tx.ExecContext(r.Context(), "UPDATE security_reports SET token_last_used = ? WHERE tracking_id = ? AND (token_last_used IS NULL OR token_last_used < ?)", today, id, today)
+		if updateErr != nil {
+			return updateErr
+		}
+		affected, updateErr = result.RowsAffected()
+		return updateErr
+	})
+	if err != nil || affected != 1 {
+		http.NotFound(w, r)
+		return
+	}
+	labels := map[string]string{"received": "Received", "triaged": "Triaged", "confirmed": "Confirmed", "patching": "Patching", "disclosed": "Disclosed", "wont_fix": "Won't Fix"}
+	label := labels[status]
+	if label == "" {
+		http.NotFound(w, r)
+		return
+	}
+	body := `<p><strong>Status:</strong> ` + template.HTMLEscapeString(label) + `</p>`
+	if comment != "" {
+		body += `<p><strong>Maintainer comment:</strong> ` + template.HTMLEscapeString(comment) + `</p>`
+	}
+	page(w, r, "Security report status", template.HTML(body))
+}
+
+func dpoPage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/server/dpo" {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	cfg := config.Get().Server.Contact.DPO
+	emailAddress := cfg.Email
+	if emailAddress == "" {
+		emailAddress = config.Get().Server.Contact.General.Email
+	}
+	var body strings.Builder
+	if cfg.Name != "" {
+		fmt.Fprintf(&body, "<p>%s</p>", template.HTMLEscapeString(cfg.Name))
+	}
+	if emailAddress != "" {
+		fmt.Fprintf(&body, `<p><a href="mailto:%s">%s</a></p>`, template.HTMLEscapeString(emailAddress), template.HTMLEscapeString(emailAddress))
+	}
+	body.WriteString(`<p><a href="/server/privacy">Privacy policy</a></p><p><a href="/server/security">Privacy request information</a></p>`)
+	page(w, r, "Data protection contact", template.HTML(body.String()))
+}
+func apiDPO(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != apiBase+"/server/dpo" {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	cfg := config.Get().Server.Contact.DPO
+	emailAddress := cfg.Email
+	if emailAddress == "" {
+		emailAddress = config.Get().Server.Contact.General.Email
+	}
+	base := resolveBaseURL(r)
+	writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]string{"name": cfg.Name, "email": emailAddress, "privacy_url": base + "/server/privacy"}})
+}

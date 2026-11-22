@@ -1,0 +1,76 @@
+stages:
+  - build
+  - test
+  - security
+  - release
+
+variables:
+  CGO_ENABLED: "0"
+  GOFLAGS: "-buildvcs=false"
+  GIT_DEPTH: "0"
+
+build:
+  stage: build
+  image: casjaysdev/go:latest
+  script:
+    - go build ./...
+
+test:
+  stage: test
+  image: casjaysdev/go:latest
+  script:
+    - mkdir -p "${TMPDIR:-/tmp}/${CI_PROJECT_NAMESPACE}"
+    - COVDIR="$(mktemp -d "${TMPDIR:-/tmp}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}-XXXXXX")"
+    - go test -p 1 -cover -coverprofile="$COVDIR/coverage.out" ./...
+    - PCT="$(go tool cover -func="$COVDIR/coverage.out" | awk '/^total:/ {gsub("%", "", $3); print int($3)}')"
+    - test "$PCT" -ge 60 || { echo "ERROR: coverage ${PCT}% is below 60%"; exit 1; }
+
+secret-scan:
+  stage: security
+  image: trufflesecurity/trufflehog:latest
+  script:
+    - |
+      if [ "$CI_PIPELINE_SOURCE" = schedule ] || [ "$CI_COMMIT_BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+        trufflehog git file://. --results=verified --exclude-paths=.github/trufflehog-exclude.txt --fail
+      else
+        trufflehog git file://. --since-commit "$CI_COMMIT_BEFORE_SHA" --results=verified,unknown --exclude-paths=.github/trufflehog-exclude.txt --fail
+      fi
+
+vuln-scan:
+  stage: security
+  image: casjaysdev/go:latest
+  script:
+    - govulncheck ./...
+
+workflow-policy:
+  stage: security
+  image: alpine:3.22
+  script:
+    - |
+      if grep -RhnE '^[[:space:]]*-?[[:space:]]*image:' .gitlab-ci.yml | grep -vE '@sha256:[0-9a-f]{64}([[:space:]]|$)'; then
+        echo "ERROR: every production Docker image must be pinned by digest"
+        exit 1
+      fi
+      if grep -nE '\$\{?\s*(CI_MERGE_REQUEST_.*|CI_COMMIT_MESSAGE)' .gitlab-ci.yml; then
+        echo "ERROR: review variable injection in shell commands"
+        exit 1
+      fi
+
+release:
+  stage: release
+  image: casjaysdev/go:latest
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v/'
+  script:
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - mkdir -p dist
+    - for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 freebsd/amd64 freebsd/arm64; do goos="${target%/*}"; goarch="${target#*/}"; ext=""; [ "$goos" = windows ] && ext=".exe"; GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.CommitID=$(git rev-parse --short=7 HEAD) -X main.BuildEpoch=$(date -u +%s)" -o "dist/gitmessages-${goos}-${goarch}${ext}" ./src; done
+    - for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 freebsd/amd64 freebsd/arm64; do goos="${target%/*}"; goarch="${target#*/}"; ext=""; [ "$goos" = windows ] && ext=".exe"; GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.CommitID=$(git rev-parse --short=7 HEAD) -X main.BuildEpoch=$(date -u +%s)" -o "dist/gitmessages-cli-${goos}-${goarch}${ext}" ./src/client; done
+    - cd dist && sha256sum gitmessages-* > sha256.txt
+  artifacts:
+    paths:
+      - dist/
+  release:
+    tag_name: '$CI_COMMIT_TAG'
+    name: 'Release $CI_COMMIT_TAG'
+    description: 'Automated release for $CI_COMMIT_TAG'

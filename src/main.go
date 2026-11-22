@@ -1,25 +1,42 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
-	"encoding/json"
+	"crypto/sha256"
+	"database/sql"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/apimgr/gitmessages/src/auth"
+	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/config"
-	"github.com/apimgr/gitmessages/src/messages"
+	"github.com/apimgr/gitmessages/src/database"
+	"github.com/apimgr/gitmessages/src/email"
+	"github.com/apimgr/gitmessages/src/metrics"
+	"github.com/apimgr/gitmessages/src/mode"
+	"github.com/apimgr/gitmessages/src/overlay"
 	"github.com/apimgr/gitmessages/src/paths"
+	servicepkg "github.com/apimgr/gitmessages/src/service"
+	updatepkg "github.com/apimgr/gitmessages/src/update"
 	"github.com/apimgr/gitmessages/src/web"
+	"golang.org/x/term"
 )
 
 // Version information (set by build flags)
@@ -39,12 +56,27 @@ func buildDate() string {
 	return time.Unix(seconds, 0).UTC().Format(time.RFC3339)
 }
 
-var msgManager *messages.Manager
 var cfg *config.Config
+
+type optionalUpdate string
+
+func (value *optionalUpdate) String() string { return string(*value) }
+
+func (value *optionalUpdate) Set(argument string) error {
+	if argument == "true" {
+		*value = "yes"
+		return nil
+	}
+	*value = optionalUpdate(argument)
+	return nil
+}
+
+func (*optionalUpdate) IsBoolFlag() bool { return true }
 
 func init() {
 	log.SetPrefix("gitmessages: ")
 	log.SetFlags(log.Lshortfile)
+	log.SetOutput(io.MultiWriter(os.Stderr, metrics.LogWriter()))
 }
 
 func main() {
@@ -56,30 +88,60 @@ func main() {
 	address := flag.String("address", "", "Server address (overrides config)")
 	configDirFlag := flag.String("config", "", "Configuration directory")
 	showVersion := flag.Bool("version", false, "Show version information")
+	flag.BoolVar(showVersion, "v", false, "Show version information")
 	showStatus := flag.Bool("status", false, "Check server status (for health checks)")
 	showHelp := flag.Bool("help", false, "Show help")
+	flag.BoolVar(showHelp, "h", false, "Show help")
+	debugFlag := flag.Bool("debug", false, "Enable debug logging")
+	colorFlag := flag.String("color", "auto", "Color output: auto, yes, no")
+	languageFlag := flag.String("lang", "", "Language for output")
+	shellFlag := flag.String("shell", "", "Shell integration: completions or init")
 
 	// Mode and update flags
-	modeFlag := flag.String("mode", "", "Application mode: production, development")
-	updateCmd := flag.String("update", "", "Update commands: check, yes, branch {stable|beta|daily}")
+	modeFlag := flag.String("mode", "", "Application mode: production, development, debug")
+	updateCmd := optionalUpdate("")
+	flag.Var(&updateCmd, "update", "Update commands: check, yes, branch {stable|beta|devel}")
 
 	// Service commands
 	serviceCmd := flag.String("service", "", "Service commands: start, stop, restart, reload, status, --install, --uninstall, --disable")
 
 	// Maintenance commands
-	maintenanceCmd := flag.String("maintenance", "", "Maintenance commands: backup, restore, update, mode, setup")
+	maintenanceCmd := flag.String("maintenance", "", "Maintenance commands: backup, restore, update, mode, setup, token")
+	i2pFlag := flag.Bool("i2p", false, "Enable the I2P eepsite")
 
 	flag.Parse()
+	if updateCmd == "yes" && len(flag.Args()) > 0 {
+		switch flag.Args()[0] {
+		case "check", "yes", "branch":
+			updateCmd = optionalUpdate(flag.Args()[0])
+		}
+	}
+
+	if err := configureOutput(*colorFlag, *languageFlag); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
 
 	// Handle --help
 	if *showHelp {
 		printHelp(filepath.Base(os.Args[0]))
 		return
 	}
+	if *shellFlag != "" {
+		shell := ""
+		if len(flag.Args()) > 0 {
+			shell = flag.Args()[0]
+		}
+		if err := printShellIntegration(*shellFlag, shell); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		return
+	}
 
 	// Handle --version
 	if *showVersion {
-		fmt.Printf("%s %s (%s)\n", filepath.Base(os.Args[0]), Version, CommitID)
+		printVersion(filepath.Base(os.Args[0]))
 		return
 	}
 
@@ -107,17 +169,32 @@ func main() {
 		log.Printf("Warning: Failed to load config: %v, using defaults", err)
 		cfg = config.DefaultConfig()
 	}
+	if err := applyI2POverrides(cfg, *i2pFlag); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	web.SetCORSOrigins(cfg.Server.CORS.AllowedOrigins)
+	web.SetServerFQDN(cfg.Server.FQDN)
+	web.SetDefaultTheme(cfg.Web.UI.Theme)
+	var debugOverride *bool
+	if flagWasProvided("debug") {
+		debugOverride = debugFlag
+	}
+	mode.InitializeWithConfig(*modeFlag, cfg.Server.Mode, debugOverride)
+	modeInfo := string(mode.Get())
+	if mode.IsDebugEnabled() {
+		modeInfo += " [debugging]"
+	}
+	log.Printf("Running in mode: %s", modeInfo)
 
 	// Handle --status (health check)
 	if *showStatus {
 		checkPort := cfg.Server.Port
 		if *port != "" {
 			checkPort = *port
-		} else if envPort := os.Getenv("PORT"); envPort != "" {
-			checkPort = envPort
 		}
 		if checkPort == "" {
-			checkPort = "8080"
+			checkPort = config.DefaultConfig().Server.Port
 		}
 		if err := checkHealth(checkPort); err != nil {
 			fmt.Fprintf(os.Stderr, "Health check failed: %v\n", err)
@@ -134,8 +211,8 @@ func main() {
 	}
 
 	// Handle --update
-	if *updateCmd != "" {
-		handleUpdateCommand(*updateCmd, cfg)
+	if updateCmd != "" {
+		handleUpdateCommand(string(updateCmd), cfg)
 		return
 	}
 
@@ -155,51 +232,78 @@ func main() {
 		flag.Usage()
 		return
 	}
+	configureSMTP(cfg)
 
 	// Determine port (flag > env > config > default)
 	serverPort := cfg.Server.Port
-	if *port != "" {
-		serverPort = *port
-	} else if envPort := os.Getenv("PORT"); envPort != "" {
+	if envPort := strings.TrimSpace(os.Getenv("PORT")); envPort != "" {
 		serverPort = envPort
 	}
+	if *port != "" {
+		serverPort = *port
+	}
 	if serverPort == "" {
-		serverPort = "8080"
+		serverPort = config.DefaultConfig().Server.Port
+	}
+	portNumber, portErr := strconv.Atoi(serverPort)
+	if portErr != nil || portNumber < 1 || portNumber > 65535 {
+		fmt.Fprintf(os.Stderr, "invalid server port %q: expected 1-65535\n", serverPort)
+		os.Exit(2)
 	}
 
 	// Determine address (flag > env > config > default)
 	serverAddress := cfg.Server.Address
+	if envAddress := strings.TrimSpace(os.Getenv("LISTEN")); envAddress != "" {
+		serverAddress = envAddress
+	}
 	if *address != "" {
 		serverAddress = *address
-	} else if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
-		serverAddress = envAddr
 	}
 	if serverAddress == "" {
-		serverAddress = "0.0.0.0"
+		serverAddress = config.DefaultConfig().Server.Address
+	}
+	if net.ParseIP(strings.Trim(serverAddress, "[]")) == nil {
+		fmt.Fprintf(os.Stderr, "invalid server address %q: expected an IP address\n", serverAddress)
+		os.Exit(2)
 	}
 
 	// Build listen address
-	listen := fmt.Sprintf("%s:%s", serverAddress, serverPort)
-	if serverAddress == "0.0.0.0" || serverAddress == "::" {
-		listen = ":" + serverPort
-	}
+	listen := net.JoinHostPort(strings.Trim(serverAddress, "[]"), serverPort)
 
 	// Log startup information
 	log.Printf("gitmessages %s (commit: %s, built: %s)", Version, CommitID, buildDate())
-
-	// Load messages
-	log.Println("Loading git commit messages...")
-	msgManager, err = messages.New()
-	if err != nil {
-		log.Fatalf("Failed to load messages: %v", err)
-	}
-	log.Printf("Loaded %d messages", msgManager.Count())
 
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 	// Setup HTTP server
+	sharedDB, err := database.OpenSQLite(filepath.Join(dirs.Data, "db", "sqlite", "server.db"), 5)
+	if err != nil {
+		log.Fatalf("open application database: %v", err)
+	}
+	defer func() { _ = sharedDB.Close() }()
+	if generated := config.ConsumeGeneratedSecrets(); len(generated) > 0 {
+		if err := sharedDB.Write(context.Background(), func(tx *sql.Tx) error {
+			for _, name := range generated {
+				if _, err := tx.Exec(`INSERT INTO audit_log(level, category, action, details) VALUES ('info','config','config.secret_generated',?)`, fmt.Sprintf(`{"key":%q}`, name)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			log.Printf("could not record generated-secret audit entries: %v", err)
+		}
+	}
+	authStore, err := auth.NewStore(sharedDB, cfg.Server.Token, cfg.Server.Security.EncryptionKey, cfg.Server.Tokens.MaxLinked, cfg.Server.Tokens.IdlePurgeDays, configuredTokenCookieAge(cfg.Server.Tokens.CookieMaxAge))
+	if err != nil {
+		log.Fatalf("initialize token management: %v", err)
+	}
+	web.ConfigureAuth(authStore)
+	web.ConfigureContact(sharedDB)
+	cleanupContext, cancelCleanup := context.WithCancel(context.Background())
+	defer cancelCleanup()
+	go authStore.RunCleanup(cleanupContext)
 	mux := http.NewServeMux()
 	setupRoutes(mux)
 
@@ -210,6 +314,44 @@ func main() {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+	torManager := overlay.NewTorManager(configDir, dirs.Data, dirs.Logs, cfg.Server.Tor, mux)
+	if err := torManager.Start(); err != nil {
+		log.Printf("Tor hidden service unavailable; clearnet remains available: %v", err)
+	}
+	i2pManager := overlay.NewI2PManager(configDir, dirs.Data, dirs.Logs, cfg.Server.I2P, mux)
+	i2pManager.Start()
+	web.SetOverlayStatus(func() map[string]any {
+		return map[string]any{"tor": torManager.Status(), "i2p": i2pManager.Status()}
+	})
+	reloadConfiguration := func() {
+		loaded, err := config.Load(configPath)
+		if err != nil {
+			log.Printf("Configuration reload failed: %v", err)
+			return
+		}
+		if err := applyI2POverrides(loaded, *i2pFlag); err != nil {
+			log.Printf("Configuration reload override failed: %v", err)
+			return
+		}
+		configureSMTP(loaded)
+		cfg = loaded
+		web.SetCORSOrigins(cfg.Server.CORS.AllowedOrigins)
+		web.SetServerFQDN(cfg.Server.FQDN)
+		web.SetDefaultTheme(cfg.Web.UI.Theme)
+		if err := torManager.Close(); err != nil {
+			log.Printf("Failed to stop Tor during reload: %v", err)
+		}
+		if err := i2pManager.Close(); err != nil {
+			log.Printf("Failed to stop I2P during reload: %v", err)
+		}
+		torManager = overlay.NewTorManager(configDir, dirs.Data, dirs.Logs, cfg.Server.Tor, mux)
+		i2pManager = overlay.NewI2PManager(configDir, dirs.Data, dirs.Logs, cfg.Server.I2P, mux)
+		if err := torManager.Start(); err != nil {
+			log.Printf("Tor hidden service unavailable after reload: %v", err)
+		}
+		i2pManager.Start()
+		log.Println("Configuration reloaded")
+	}
 
 	log.Printf("Public endpoints: /types, /templates, /builder, /api/v1/*, /graphql")
 	log.Printf("Listening on %s", listen)
@@ -219,23 +361,31 @@ func main() {
 	go func() {
 		errChan <- server.ListenAndServe()
 	}()
+	reloadChan := make(chan struct{}, 1)
+	watcherContext, stopWatcher := context.WithCancel(context.Background())
+	go watchConfiguration(watcherContext, configDir, reloadChan)
 
 	// Wait for shutdown signal or server error
 	for {
 		select {
 		case err := <-errChan:
 			log.Fatal(err)
+		case <-reloadChan:
+			reloadConfiguration()
 		case sig := <-sigChan:
 			switch sig {
 			case syscall.SIGHUP:
 				log.Println("Received SIGHUP, reloading configuration...")
-				if _, err := config.Load(configPath); err != nil {
-					log.Printf("Failed to reload config: %v", err)
-				} else {
-					log.Println("Configuration reloaded")
-				}
+				reloadConfiguration()
 			default:
 				log.Printf("Received signal %v, shutting down...", sig)
+				stopWatcher()
+				if err := i2pManager.Close(); err != nil {
+					log.Printf("I2P shutdown failed: %v", err)
+				}
+				if err := torManager.Close(); err != nil {
+					log.Printf("Tor shutdown failed: %v", err)
+				}
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				if err := server.Shutdown(shutdownCtx); err != nil {
 					log.Printf("Graceful shutdown failed: %v", err)
@@ -248,232 +398,123 @@ func main() {
 	}
 }
 
-func setupRoutes(mux *http.ServeMux) {
-	mux.Handle("/", web.Handler(Version))
-}
-
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		corsOrigin := "*"
-		if cfg != nil && cfg.WebSecurity.CORS != "" {
-			corsOrigin = cfg.WebSecurity.CORS
-		}
-
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-XSS-Protection", "1; mode=block")
-		w.Header().Set("Access-Control-Allow-Origin", corsOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
+func configureSMTP(configuration *config.Config) {
+	mail := &configuration.Server.Notifications.Email
+	smtpConfiguration := email.SMTPConfig{Host: mail.SMTP.Host, Port: mail.SMTP.Port, Username: mail.SMTP.Username, Password: mail.SMTP.Password, TLS: mail.SMTP.TLS}
+	if strings.TrimSpace(smtpConfiguration.Host) == "" {
+		if _, explicitlyConfigured := os.LookupEnv("SMTP_HOST"); explicitlyConfigured {
+			mail.Enabled = false
+			log.Printf("email.configured=false")
+			log.Printf("SMTP_HOST is empty; email notifications are disabled")
 			return
 		}
-
-		next.ServeHTTP(w, r)
-	})
-}
-
-// Handlers
-
-func handleHome(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>GitMessages API</title></head>
-<body>
-<h1>GitMessages API v%s</h1>
-<p>Random git commit messages API</p>
-<ul>
-<li><a href="/api/v1/random">GET /api/v1/random</a> - Random message (JSON)</li>
-<li><a href="/api/v1/random.txt">GET /api/v1/random.txt</a> - Random message (text)</li>
-<li><a href="/api/v1/messages">GET /api/v1/messages</a> - All messages</li>
-<li><a href="/api/v1/stats">GET /api/v1/stats</a> - Statistics</li>
-</ul>
-</body>
-</html>`, Version)
-}
-
-func handleHealthz(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":  "healthy",
-		"version": Version,
-	})
-}
-
-func handleHealthzText(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprint(w, "OK")
-}
-
-func handleAPIInfo(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/api/v1/" {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"name":    "GitMessages API",
-		"version": Version,
-		"endpoints": map[string]string{
-			"random":   "/api/v1/random",
-			"messages": "/api/v1/messages",
-			"stats":    "/api/v1/stats",
-			"reset":    "/api/v1/reset (POST)",
-		},
-	})
-}
-
-func handleRandom(w http.ResponseWriter, r *http.Request) {
-	msg, err := msgManager.GetRandom()
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	stats := msgManager.Stats()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"data": map[string]interface{}{
-			"message": msg,
-		},
-		"meta": stats,
-	})
-}
-
-func handleRandomText(w http.ResponseWriter, r *http.Request) {
-	msg, err := msgManager.GetRandom()
-	if err != nil {
-		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusInternalServerError)
-		fmt.Fprint(w, err.Error())
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprint(w, msg)
-}
-
-func handleMessages(w http.ResponseWriter, r *http.Request) {
-	data, err := msgManager.GetAllJSON()
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   err.Error(),
-		})
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
-}
-
-func handleMessagesText(w http.ResponseWriter, r *http.Request) {
-	msgs := msgManager.GetAll()
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	for _, msg := range msgs {
-		fmt.Fprintln(w, msg)
-	}
-}
-
-func handleStats(w http.ResponseWriter, r *http.Request) {
-	stats := msgManager.Stats()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"data":    stats,
-	})
-}
-
-func handleStatsText(w http.ResponseWriter, r *http.Request) {
-	stats := msgManager.Stats()
-	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprintf(w, "Cycle: %d\n", stats["cycle"])
-	fmt.Fprintf(w, "Total Messages: %d\n", stats["total_messages"])
-	fmt.Fprintf(w, "Used in Cycle: %d\n", stats["used_in_cycle"])
-	fmt.Fprintf(w, "Remaining: %d\n", stats["remaining_in_cycle"])
-}
-
-func handleReset(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": false,
-			"error":   "Method not allowed, use POST",
-		})
-		return
-	}
-
-	msgManager.ResetCycle()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"message": "Cycle reset successfully",
-	})
-}
-
-func handleRobotsTxt(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprintln(w, "User-agent: *")
-	if cfg != nil {
-		for _, path := range cfg.WebRobots.Allow {
-			fmt.Fprintf(w, "Allow: %s\n", path)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		detected, err := email.DetectSMTP(ctx, configuration.Server.FQDN, smtpConfiguration)
+		cancel()
+		if err != nil {
+			mail.Enabled = false
+			log.Printf("email.configured=false")
+			log.Printf("SMTP autodetection found no relay; email notifications are disabled")
+			return
 		}
-		for _, path := range cfg.WebRobots.Deny {
-			fmt.Fprintf(w, "Disallow: %s\n", path)
+		mail.SMTP.Host = detected.Host
+		mail.SMTP.Port = detected.Port
+		mail.Enabled = true
+		log.Printf("email.configured=true")
+		if err := config.SaveSMTPDetection(detected.Host, detected.Port); err != nil {
+			log.Printf("could not save detected SMTP relay %s:%d: %v", detected.Host, detected.Port, err)
 		}
-	} else {
-		fmt.Fprintln(w, "Allow: /")
+		log.Printf("detected SMTP relay %s:%d", detected.Host, detected.Port)
+		return
 	}
-}
-
-func handleSecurityTxt(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain")
-	admin := "security@apimgr.us"
-	if cfg != nil && cfg.WebSecurity.Admin != "" {
-		admin = cfg.WebSecurity.Admin
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	err := email.Probe(ctx, smtpConfiguration, 3*time.Second)
+	cancel()
+	if err != nil {
+		mail.Enabled = false
+		log.Printf("email.configured=false")
+		log.Printf("configured SMTP relay %s:%d is unavailable; email notifications are disabled: %v", smtpConfiguration.Host, smtpConfiguration.Port, err)
+		return
 	}
-	fmt.Fprintf(w, "Contact: mailto:%s\n", admin)
-	fmt.Fprintln(w, "Expires: 2026-12-31T23:59:59.000Z")
-	fmt.Fprintln(w, "Preferred-Languages: en")
-	fmt.Fprintln(w, "Canonical: https://gitmessages.apimgr.us/.well-known/security.txt")
+	mail.Enabled = true
+	log.Printf("email.configured=true")
 }
 
-func handleManifest(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/manifest+json")
-	fmt.Fprint(w, `{
-  "name": "GitMessages API",
-  "short_name": "GitMessages",
-  "description": "Random git commit messages API",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#1a1a1a",
-  "theme_color": "#0066cc",
-  "icons": []
-}`)
+func configuredTokenCookieAge(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 365 * 24 * time.Hour
+	}
+	if strings.HasSuffix(value, "y") {
+		years, err := strconv.Atoi(strings.TrimSuffix(value, "y"))
+		if err == nil && years > 0 {
+			return time.Duration(years) * 365 * 24 * time.Hour
+		}
+		return 365 * 24 * time.Hour
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil || duration <= 0 {
+		return 365 * 24 * time.Hour
+	}
+	return duration
 }
 
-func handleServiceWorker(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/javascript")
-	fmt.Fprint(w, `// GitMessages Service Worker
-const CACHE_NAME = 'gitmessages-v1';
-self.addEventListener('fetch', function(event) {
-  event.respondWith(fetch(event.request));
-});
-`)
+func printVersion(binary string) {
+	fmt.Printf("%s %s (%s)\nBuilt: %s\nGo: %s\nOS/Arch: %s/%s\n", binary, Version, CommitID, buildDate(), runtime.Version(), runtime.GOOS, runtime.GOARCH)
+}
+
+func flagWasProvided(name string) bool {
+	flag := "--" + name
+	for _, arg := range os.Args[1:] {
+		if arg == flag || strings.HasPrefix(arg, flag+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func configureOutput(color, language string) error {
+	switch color {
+	case "auto":
+	case "yes":
+		_ = os.Unsetenv("NO_COLOR")
+	case "no":
+		_ = os.Setenv("NO_COLOR", "1")
+	default:
+		return fmt.Errorf("invalid --color value %q: expected auto, yes, or no", color)
+	}
+	if language != "" {
+		if !i18n.IsSupported(language) {
+			language = "en"
+		}
+		if err := os.Setenv("GITMESSAGES_LANG", language); err != nil {
+			return fmt.Errorf("set output language: %w", err)
+		}
+	}
+	return nil
+}
+
+func applyI2POverrides(current *config.Config, enabled bool) error {
+	if current == nil {
+		return fmt.Errorf("I2P configuration is unavailable")
+	}
+	if value := strings.TrimSpace(os.Getenv("I2P_ENABLED")); value != "" {
+		parsed, err := config.ParseBool(value, current.Server.I2P.Enabled)
+		if err != nil {
+			return fmt.Errorf("invalid I2P_ENABLED value %q: expected true or false", value)
+		}
+		current.Server.I2P.Enabled = parsed
+	}
+	if flagWasProvided("i2p") {
+		current.Server.I2P.Enabled = enabled
+	}
+	return nil
+}
+
+func setupRoutes(mux *http.ServeMux) {
+	cfg := config.Get().Server.RateLimit
+	web.ConfigureTokenRateLimits(cfg.Strict.Requests, time.Duration(cfg.Strict.Window)*time.Second, cfg.AuthFailures.Requests, time.Duration(cfg.AuthFailures.Window)*time.Second)
+	mux.Handle("/", web.TokenCookieMiddleware(web.Handler(Version, CommitID, buildDate())))
 }
 
 func printHelp(binary string) {
@@ -482,12 +523,17 @@ func printHelp(binary string) {
 Usage: %s [options]
 
 Options:
-  --port PORT          Server port (default: from config or 8080)
+  -h, --help           Show this help message
+  -v, --version        Print version information
+  --port PORT          Server port (default: saved in server.yml)
   --address ADDRESS    Server address (default: from config or 0.0.0.0)
   --config DIR         Configuration directory
-  --version            Print version information
   --status             Check service status (for healthcheck)
-  --help               Show this help message
+  --debug              Enable debug logging
+  --color MODE         Color output: auto, yes, no
+  --lang CODE          Language for output
+  --shell ACTION [SHELL] Print shell completions, init command, or help
+  --i2p                Enable the optional I2P eepsite
 
 Service Commands:
   --service start      Start the service
@@ -502,6 +548,8 @@ Maintenance Commands:
   --maintenance backup [file]   Backup configuration
   --maintenance restore [file]  Restore from backup
   --maintenance update          Check for updates
+  --maintenance token list      List token metadata
+  --maintenance token revoke    Revoke a token by prefix
 
 Environment Variables:
   PORT         Server port
@@ -511,7 +559,7 @@ Environment Variables:
 Configuration:
   Root:    /etc/apimgr/gitmessages/server.yml
   User:    ~/.config/apimgr/gitmessages/server.yml
-  Docker:  /config/server.yml
+  Docker:  /config/gitmessages/server.yml
 
 `, binary, Version, binary)
 }
@@ -523,11 +571,75 @@ func checkHealth(port string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("health check returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func watchConfiguration(ctx context.Context, configDir string, changed chan<- struct{}) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	previous := configurationFingerprint(configDir)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			current := configurationFingerprint(configDir)
+			if current == previous {
+				continue
+			}
+			previous = current
+			select {
+			case changed <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+func configurationFingerprint(configDir string) string {
+	paths := []string{filepath.Join(configDir, "server.yml"), filepath.Join(configDir, "server.yaml"), filepath.Join(configDir, "secrets.yml"), filepath.Join(configDir, "yaml.d"), filepath.Join(configDir, "assets")}
+	files := make([]string, 0)
+	for _, path := range paths {
+		info, err := os.Lstat(path)
+		if err != nil {
+			continue
+		}
+		if !info.IsDir() {
+			if info.Mode().IsRegular() {
+				files = append(files, path)
+			}
+			continue
+		}
+		_ = filepath.WalkDir(path, func(current string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if entry.Type()&os.ModeSymlink != 0 {
+				return nil
+			}
+			if !entry.IsDir() {
+				if info, err := entry.Info(); err == nil && info.Mode().IsRegular() {
+					files = append(files, current)
+				}
+			}
+			return nil
+		})
+	}
+	sort.Strings(files)
+	var fingerprint strings.Builder
+	for _, path := range files {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(contents)
+		fmt.Fprintf(&fingerprint, "%s:%x\n", filepath.ToSlash(path), sum)
+	}
+	return fingerprint.String()
 }
 
 func handleServiceCommand(cmd, configDir string) {
@@ -558,6 +670,8 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, logsDir string) {
 	args := flag.Args()
 
 	switch cmd {
+	case "token":
+		handleTokenMaintenance(args, dataDir)
 	case "backup":
 		backupFile := ""
 		if len(args) > 0 {
@@ -578,7 +692,18 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, logsDir string) {
 		}
 		maintenanceRestore(args[0], configDir)
 	case "update":
-		maintenanceUpdate()
+		updateArgs := args
+		if len(updateArgs) > 1 && updateArgs[0] == "update" {
+			updateArgs = updateArgs[1:]
+		}
+		command := "yes"
+		if len(updateArgs) > 0 {
+			command = updateArgs[0]
+		}
+		if command == "branch" && len(updateArgs) > 1 {
+			command += " " + updateArgs[1]
+		}
+		handleUpdateCommand(command, cfg)
 	case "mode":
 		if len(args) == 0 {
 			// Show current mode
@@ -603,60 +728,95 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, logsDir string) {
 	}
 }
 
+func handleTokenMaintenance(args []string, dataDir string) {
+	if len(args) == 0 || (args[0] != "list" && args[0] != "revoke") {
+		fmt.Fprintln(os.Stderr, "Usage: gitmessages --maintenance token list | revoke <prefix>")
+		os.Exit(2)
+	}
+	store, err := database.OpenSQLite(filepath.Join(dataDir, "db", "sqlite", "server.db"), 5)
+	if err != nil {
+		log.Fatalf("open token database: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+	authStore, err := auth.NewStore(store, cfg.Server.Token, cfg.Server.Security.EncryptionKey, cfg.Server.Tokens.MaxLinked, cfg.Server.Tokens.IdlePurgeDays, configuredTokenCookieAge(cfg.Server.Tokens.CookieMaxAge))
+	if err != nil {
+		log.Fatalf("initialize token management: %v", err)
+	}
+	if err := authorizeTokenMaintenance(authStore); err != nil {
+		log.Fatalf("authorize token maintenance: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	switch args[0] {
+	case "list":
+		tokens, err := authStore.ListAll(ctx)
+		if err != nil {
+			log.Fatalf("list tokens: %v", err)
+		}
+		fmt.Println("prefix\tkind\towner\tname\tcreated\tlast used\tstatus")
+		for _, token := range tokens {
+			used := "never"
+			if token.LastUsedAt != nil {
+				used = token.LastUsedAt.Format(time.RFC3339)
+			}
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n", token.Prefix, token.Kind, token.OwnerID, token.Name, token.CreatedAt.Format(time.RFC3339), used, token.Status)
+		}
+	case "revoke":
+		if len(args) != 2 {
+			fmt.Fprintln(os.Stderr, "Usage: gitmessages --maintenance token revoke <prefix>")
+			os.Exit(2)
+		}
+		if err := authStore.RevokeByPrefix(ctx, args[1]); err != nil {
+			log.Fatalf("revoke token: %v", err)
+		}
+		fmt.Printf("Revoked token %s\n", args[1])
+	}
+}
+
+func authorizeTokenMaintenance(store *auth.Store) error {
+	if current, err := user.Current(); err == nil && current.Username == "root" {
+		return nil
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return fmt.Errorf("root access or an interactive operator-token confirmation is required")
+	}
+	fmt.Fprint(os.Stderr, "Operator token: ")
+	value, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return fmt.Errorf("read operator token: %w", err)
+	}
+	identity, err := store.AuthenticateBearer(context.Background(), string(value))
+	if err != nil || !identity.Admin {
+		return fmt.Errorf("invalid operator token")
+	}
+	return nil
+}
+
 // Service management functions
 func serviceStart() {
-	switch runtime.GOOS {
-	case "linux":
-		runCommand("systemctl", "start", "gitmessages")
-	case "darwin":
-		runCommand("launchctl", "start", "us.apimgr.gitmessages")
-	default:
-		fmt.Printf("Service management not supported on %s\n", runtime.GOOS)
-	}
+	logServiceError(servicepkg.Start())
 }
 
 func serviceStop() {
-	switch runtime.GOOS {
-	case "linux":
-		runCommand("systemctl", "stop", "gitmessages")
-	case "darwin":
-		runCommand("launchctl", "stop", "us.apimgr.gitmessages")
-	default:
-		fmt.Printf("Service management not supported on %s\n", runtime.GOOS)
-	}
+	logServiceError(servicepkg.Stop())
 }
 
 func serviceRestart() {
-	switch runtime.GOOS {
-	case "linux":
-		runCommand("systemctl", "restart", "gitmessages")
-	case "darwin":
-		runCommand("launchctl", "stop", "us.apimgr.gitmessages")
-		runCommand("launchctl", "start", "us.apimgr.gitmessages")
-	default:
-		fmt.Printf("Service management not supported on %s\n", runtime.GOOS)
-	}
+	logServiceError(servicepkg.Restart())
 }
 
 func serviceReload() {
-	switch runtime.GOOS {
-	case "linux":
-		runCommand("systemctl", "reload", "gitmessages")
-	case "darwin":
-		runCommand("pkill", "-HUP", "gitmessages")
-	default:
-		fmt.Printf("Service management not supported on %s\n", runtime.GOOS)
-	}
+	logServiceError(servicepkg.Reload())
 }
 
 func serviceStatus() {
-	switch runtime.GOOS {
-	case "linux":
-		runCommand("systemctl", "status", "gitmessages")
-	case "darwin":
-		runCommand("launchctl", "list", "us.apimgr.gitmessages")
-	default:
-		fmt.Printf("Service management not supported on %s\n", runtime.GOOS)
+	logServiceError(servicepkg.Status())
+}
+
+func logServiceError(err error) {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "service command failed: %v\n", err)
 	}
 }
 
@@ -733,42 +893,213 @@ func serviceUninstall() {
 }
 
 func serviceDisable() {
-	switch runtime.GOOS {
-	case "linux":
-		runCommand("systemctl", "disable", "gitmessages")
-	case "darwin":
-		runCommand("launchctl", "unload", "/Library/LaunchDaemons/us.apimgr.gitmessages.plist")
-	default:
-		fmt.Printf("Service disable not supported on %s\n", runtime.GOOS)
-	}
+	logServiceError(servicepkg.Disable())
 }
 
 func maintenanceBackup(configDir, backupFile string) {
-	fmt.Printf("Creating backup: %s\n", backupFile)
-	cmd := exec.Command("tar", "-czf", backupFile, "-C", filepath.Dir(configDir), filepath.Base(configDir))
-	if err := cmd.Run(); err != nil {
-		log.Fatalf("Backup failed: %v", err)
+	if err := createConfigBackup(configDir, backupFile); err != nil {
+		log.Printf("Backup failed: %v", err)
+		os.Exit(1)
 	}
 	fmt.Printf("Backup created successfully: %s\n", backupFile)
 }
 
 func maintenanceRestore(backupFile, configDir string) {
-	fmt.Printf("Restoring from backup: %s\n", backupFile)
-	if _, err := os.Stat(backupFile); os.IsNotExist(err) {
-		log.Fatalf("Backup file not found: %s", backupFile)
+	if err := restoreConfigBackup(backupFile, configDir); err != nil {
+		log.Printf("Restore failed: %v", err)
+		os.Exit(1)
 	}
-	cmd := exec.Command("tar", "-xzf", backupFile, "-C", "/")
-	if err := cmd.Run(); err != nil {
-		log.Fatalf("Restore failed: %v", err)
-	}
-	fmt.Println("Restore completed successfully")
+	fmt.Println("Configuration restored successfully")
 }
 
-func maintenanceUpdate() {
-	fmt.Println("Checking for updates...")
-	fmt.Printf("Current version: %s\n", Version)
-	fmt.Println("Update feature not yet implemented")
-	fmt.Println("Visit https://github.com/apimgr/gitmessages/releases for the latest version")
+func createConfigBackup(configDir, backupFile string) error {
+	info, err := os.Stat(configDir)
+	if err != nil {
+		return fmt.Errorf("inspect configuration directory: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("configuration path is not a directory")
+	}
+	if err := os.MkdirAll(filepath.Dir(backupFile), 0700); err != nil {
+		return fmt.Errorf("create backup directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(backupFile), ".gitmessages-backup-*")
+	if err != nil {
+		return fmt.Errorf("create backup file: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0600); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("secure backup file: %w", err)
+	}
+	compressed := gzip.NewWriter(temporary)
+	archive := tar.NewWriter(compressed)
+	base := filepath.Base(configDir)
+	err = filepath.WalkDir(configDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+			return fmt.Errorf("unsupported file type in config backup: %s", path)
+		}
+		relative, err := filepath.Rel(configDir, path)
+		if err != nil {
+			return err
+		}
+		name := base
+		if relative != "." {
+			name = filepath.ToSlash(filepath.Join(base, relative))
+		}
+		mode := int64(0600)
+		if info.IsDir() {
+			mode = 0700
+			name += "/"
+		}
+		header := &tar.Header{Name: name, Mode: mode, Size: 0, Typeflag: tar.TypeDir}
+		if !info.IsDir() {
+			header.Typeflag = tar.TypeReg
+			header.Size = info.Size()
+		}
+		if err := archive.WriteHeader(header); err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(archive, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	})
+	if err == nil {
+		err = archive.Close()
+	}
+	if closeErr := compressed.Close(); err == nil {
+		err = closeErr
+	}
+	if syncErr := temporary.Sync(); err == nil {
+		err = syncErr
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("write backup archive: %w", err)
+	}
+	if err := os.Rename(temporaryPath, backupFile); err != nil {
+		return fmt.Errorf("publish backup archive: %w", err)
+	}
+	return nil
+}
+
+func restoreConfigBackup(backupFile, configDir string) error {
+	info, err := os.Stat(backupFile)
+	if err != nil {
+		return fmt.Errorf("inspect backup file: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > 1<<30 {
+		return fmt.Errorf("backup must be a regular file no larger than 1 GiB")
+	}
+	parent := filepath.Dir(configDir)
+	if err := os.MkdirAll(parent, 0700); err != nil {
+		return fmt.Errorf("create configuration parent: %w", err)
+	}
+	stage, err := os.MkdirTemp(parent, ".gitmessages-restore-*")
+	if err != nil {
+		return fmt.Errorf("create restore staging directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(stage) }()
+	file, err := os.Open(backupFile)
+	if err != nil {
+		return fmt.Errorf("open backup file: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+	compressed, err := gzip.NewReader(file)
+	if err != nil {
+		return fmt.Errorf("read backup compression: %w", err)
+	}
+	defer func() { _ = compressed.Close() }()
+	archive := tar.NewReader(compressed)
+	root := filepath.Base(configDir)
+	var expanded int64
+	for {
+		header, err := archive.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read backup entry: %w", err)
+		}
+		clean := filepath.Clean(filepath.FromSlash(header.Name))
+		if filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("unsafe path in backup: %q", header.Name)
+		}
+		if clean != root && !strings.HasPrefix(clean, root+string(filepath.Separator)) {
+			return fmt.Errorf("unexpected top-level path in backup: %q", header.Name)
+		}
+		target := filepath.Join(stage, clean)
+		relative, err := filepath.Rel(stage, target)
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("unsafe path in backup: %q", header.Name)
+		}
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0700); err != nil {
+				return fmt.Errorf("create restored directory: %w", err)
+			}
+		case tar.TypeReg:
+			if header.Size < 0 || header.Size > (1<<30)-expanded {
+				return fmt.Errorf("expanded backup exceeds 1 GiB")
+			}
+			expanded += header.Size
+			if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+				return fmt.Errorf("create restored file directory: %w", err)
+			}
+			output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+			if err != nil {
+				return fmt.Errorf("create restored file: %w", err)
+			}
+			_, copyErr := io.CopyN(output, archive, header.Size)
+			closeErr := output.Close()
+			if copyErr != nil {
+				return fmt.Errorf("write restored file: %w", copyErr)
+			}
+			if closeErr != nil {
+				return fmt.Errorf("close restored file: %w", closeErr)
+			}
+		default:
+			return fmt.Errorf("unsupported archive entry type in %q", header.Name)
+		}
+	}
+	restored := filepath.Join(stage, root)
+	if _, err := os.Stat(restored); err != nil {
+		return fmt.Errorf("backup does not contain the expected config directory")
+	}
+	oldRoot, err := os.MkdirTemp(parent, ".gitmessages-restore-old-*")
+	if err != nil {
+		return fmt.Errorf("prepare current configuration backup: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(oldRoot) }()
+	old := filepath.Join(oldRoot, filepath.Base(configDir))
+	if err := os.Rename(configDir, old); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("move current configuration aside: %w", err)
+	}
+	if err := os.Rename(restored, configDir); err != nil {
+		_ = os.Rename(old, configDir)
+		return fmt.Errorf("install restored configuration: %w", err)
+	}
+	return nil
 }
 
 func runCommand(name string, args ...string) {
@@ -811,36 +1142,77 @@ func setApplicationMode(mode, configPath string) {
 func handleUpdateCommand(cmd string, currentCfg *config.Config) {
 	switch cmd {
 	case "check":
-		fmt.Println("Checking for updates...")
-		fmt.Printf("Current version: %s\n", Version)
-		fmt.Printf("Update branch: %s\n", currentCfg.Server.UpdateBranch)
-		fmt.Println("Update feature not yet implemented")
-	case "yes":
-		fmt.Println("Performing update...")
-		fmt.Println("Update feature not yet implemented")
-	default:
-		if len(cmd) > 7 && cmd[:7] == "branch " {
-			branch := cmd[7:]
-			validBranches := map[string]bool{
-				"stable": true,
-				"beta":   true,
-				"daily":  true,
-			}
-			if !validBranches[branch] {
-				fmt.Printf("Invalid branch: %s\n", branch)
-				fmt.Println("Valid branches: stable, beta, daily")
-				os.Exit(1)
-			}
-			currentCfg.Server.UpdateBranch = branch
-			if err := config.Save(); err != nil {
-				log.Fatalf("Failed to save configuration: %v", err)
-			}
-			fmt.Printf("Update branch set to: %s\n", branch)
-		} else {
-			fmt.Printf("Unknown update command: %s\n", cmd)
-			fmt.Println("Usage: --update check|yes|branch {stable|beta|daily}")
-			os.Exit(1)
+		latest, found, err := checkForUpdate(currentCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "update check failed: %v\n", err)
+			return
 		}
+		if !found {
+			fmt.Printf("Git Messages %s is current on the %s channel.\n", Version, currentCfg.Server.Update.Branch)
+			return
+		}
+		fmt.Printf("Update available: %s → %s (%s channel)\n", Version, latest.TagName, currentCfg.Server.Update.Branch)
+	case "yes":
+		latest, found, err := checkForUpdate(currentCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "update check failed: %v\n", err)
+			return
+		}
+		if !found {
+			fmt.Printf("Git Messages %s is already current.\n", Version)
+			return
+		}
+		fmt.Printf("Installing Git Messages %s...\n", latest.TagName)
+		if err := updatepkg.Install(context.Background(), latest); err != nil {
+			fmt.Fprintf(os.Stderr, "update installation failed: %v\n", err)
+		}
+	default:
+		branch := ""
+		if strings.HasPrefix(cmd, "branch ") {
+			branch = strings.TrimSpace(strings.TrimPrefix(cmd, "branch "))
+		} else if cmd == "branch" {
+			args := flag.Args()
+			for index, argument := range args {
+				if argument == "branch" && index+1 < len(args) {
+					branch = args[index+1]
+					break
+				}
+			}
+		}
+		branch = normalizeUpdateBranch(branch)
+		if branch == "" {
+			fmt.Fprintf(os.Stderr, "unknown update command: %s\nUsage: --update check|yes|branch {stable|beta|devel}\n", cmd)
+			return
+		}
+		currentCfg.Server.Update.Branch = branch
+		if err := config.SaveUpdate(); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to save configuration: %v\n", err)
+			return
+		}
+		fmt.Printf("Update branch set to: %s\n", branch)
+	}
+}
+
+func checkForUpdate(currentCfg *config.Config) (updatepkg.Release, bool, error) {
+	branch := currentCfg.Server.Update.Branch
+	if branch == "" {
+		branch = "stable"
+	}
+	epoch, err := strconv.ParseInt(BuildEpoch, 10, 64)
+	if err != nil {
+		epoch = 0
+	}
+	return updatepkg.Check(context.Background(), branch, Version, epoch)
+}
+
+func normalizeUpdateBranch(branch string) string {
+	switch strings.ToLower(strings.TrimSpace(branch)) {
+	case "stable", "beta":
+		return strings.ToLower(strings.TrimSpace(branch))
+	case "devel", "daily", "rolling", "dev", "development":
+		return "devel"
+	default:
+		return ""
 	}
 }
 

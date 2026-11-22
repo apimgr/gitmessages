@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -41,9 +42,14 @@ var debugEnabled bool
 
 const projectName = "gitmessages"
 
+var configProfile string
+
 type clientConfig struct {
 	Language string `yaml:"language"`
-	Server   struct {
+	Display  struct {
+		Mode string `yaml:"mode"`
+	} `yaml:"display"`
+	Server struct {
 		Primary string `yaml:"primary"`
 	} `yaml:"server"`
 }
@@ -67,6 +73,7 @@ func run(args []string) error {
 	flags := flag.NewFlagSet(binary, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	serverFlag := flags.String("server", "", "Server base URL")
+	configFlag := flags.String("config", "", "Configuration profile or file path")
 	languageFlag := flags.String("lang", "", "Language for output")
 	jsonOutput := flags.Bool("json", false, "Print the API response as JSON")
 	versionFlag := flags.Bool("version", false, "Print version")
@@ -75,6 +82,7 @@ func run(args []string) error {
 	flags.BoolVar(helpFlag, "h", false, "Print help")
 	debugFlag := flags.Bool("debug", false, "Print API requests to stderr")
 	colorFlag := flags.String("color", "auto", "Color output: auto, yes, no")
+	shellFlag := flags.String("shell", "", "Print shell completions: bash, zsh, fish, or powershell")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("%s: %w", binary, err)
 	}
@@ -86,8 +94,12 @@ func run(args []string) error {
 		_ = os.Unsetenv("NO_COLOR")
 	}
 	if *versionFlag {
-		fmt.Printf("%s %s (%s) built %s\n", binary, Version, CommitID, clientBuildDate())
+		printVersion(binary)
 		return nil
+	}
+	configProfile = strings.TrimSpace(*configFlag)
+	if err := ensureClientDirectories(); err != nil {
+		return err
 	}
 
 	config, err := loadConfig()
@@ -95,9 +107,12 @@ func run(args []string) error {
 		return err
 	}
 	lang := selectLanguage(*languageFlag, config.Language)
-	if *helpFlag || flags.NArg() == 0 {
+	if *helpFlag {
 		printUsage(binary, lang)
 		return nil
+	}
+	if *shellFlag != "" {
+		return printClientCompletions(*shellFlag, binary)
 	}
 
 	server := strings.TrimSpace(*serverFlag)
@@ -107,16 +122,23 @@ func run(args []string) error {
 	if server == "" {
 		server = strings.TrimSpace(config.Server.Primary)
 	}
+	if *serverFlag != "" {
+		if !validServer(*serverFlag) {
+			fmt.Fprintln(os.Stderr, "warning: invalid --server value; using configured server")
+			server = strings.TrimSpace(config.Server.Primary)
+		} else if !validServer(config.Server.Primary) {
+			config.Server.Primary = *serverFlag
+			if err := saveConfig(config); err != nil {
+				return err
+			}
+		}
+	}
+	if flags.NArg() == 0 {
+		return launchInteractive(server, lang, config)
+	}
 	if !validServer(server) {
 		return fmt.Errorf("%s", i18n.T(lang, "cli.server_required"))
 	}
-	if *serverFlag != "" && config.Server.Primary == "" {
-		config.Server.Primary = server
-		if err := saveConfig(config); err != nil {
-			return err
-		}
-	}
-
 	command := flags.Arg(0)
 	if command == "build" {
 		return runBuild(server, flags.Args()[1:], *jsonOutput, lang)
@@ -153,6 +175,16 @@ func run(args []string) error {
 	}
 	_, err = fmt.Fprintln(os.Stdout, formatted.String())
 	return err
+}
+
+func isInteractive() bool {
+	input, inputErr := os.Stdin.Stat()
+	output, outputErr := os.Stdout.Stat()
+	return inputErr == nil && outputErr == nil && input.Mode()&os.ModeCharDevice != 0 && output.Mode()&os.ModeCharDevice != 0
+}
+
+func printVersion(binary string) {
+	fmt.Printf("%s %s (%s)\nBuilt: %s\nGo: %s\nOS/Arch: %s/%s\n", binary, Version, CommitID, clientBuildDate(), runtime.Version(), runtime.GOOS, runtime.GOARCH)
 }
 
 func runBuild(server string, args []string, jsonOutput bool, lang string) error {
@@ -213,7 +245,7 @@ func request(server, method, path string, payload []byte, lang string) ([]byte, 
 	if err != nil {
 		return nil, fmt.Errorf("request %s: %w", endpoint, err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("read API response: %w", err)
@@ -248,8 +280,16 @@ func loadConfig() (*clientConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read client config: %w", err)
 	}
-	if err := yaml.Unmarshal(data, config); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(config); err != nil {
 		return nil, fmt.Errorf("parse client config: %w", err)
+	}
+	if config.Display.Mode != "" && config.Display.Mode != "auto" && config.Display.Mode != "gui" && config.Display.Mode != "tui" {
+		return nil, fmt.Errorf("invalid client display.mode %q: expected auto, gui, or tui", config.Display.Mode)
+	}
+	if config.Language != "" && !i18n.IsSupported(normalizeLanguage(config.Language)) {
+		return nil, fmt.Errorf("unsupported language in client config: %q", config.Language)
 	}
 	return config, nil
 }
@@ -266,8 +306,29 @@ func saveConfig(config *clientConfig) error {
 	if err != nil {
 		return fmt.Errorf("encode client config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("save client config: %w", err)
+	file, err := os.CreateTemp(filepath.Dir(path), ".cli.yml-*")
+	if err != nil {
+		return fmt.Errorf("create temporary client config: %w", err)
+	}
+	temporaryPath := file.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+	if err := file.Chmod(0600); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("secure temporary client config: %w", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write client config: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync client config: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close client config: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace client config: %w", err)
 	}
 	return nil
 }
@@ -277,7 +338,80 @@ func configPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve user config directory: %w", err)
 	}
-	return filepath.Join(dir, "apimgr", projectName, "cli.yml"), nil
+	base := filepath.Join(dir, "apimgr", projectName)
+	if configProfile == "" {
+		return filepath.Join(base, "cli.yml"), nil
+	}
+	profile := configProfile
+	if strings.HasPrefix(profile, "~/") || strings.HasPrefix(profile, "~\\") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		profile = filepath.Join(home, profile[2:])
+	}
+	if filepath.IsAbs(profile) || strings.ContainsRune(profile, filepath.Separator) {
+		return filepath.Abs(profile)
+	}
+	if filepath.Ext(profile) == "" {
+		profile += ".yml"
+	}
+	return filepath.Join(base, filepath.Base(profile)), nil
+}
+
+func ensureClientDirectories() error {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return fmt.Errorf("resolve client config directory: %w", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve client home directory: %w", err)
+	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return fmt.Errorf("resolve client cache directory: %w", err)
+	}
+	dataDir := os.Getenv("XDG_DATA_HOME")
+	if dataDir == "" {
+		dataDir = filepath.Join(home, ".local", "share")
+	}
+	logDir := filepath.Join(home, ".local", "log")
+	if runtime.GOOS == "windows" {
+		dataDir = os.Getenv("LOCALAPPDATA")
+		if dataDir == "" {
+			dataDir = filepath.Join(home, "AppData", "Local")
+		}
+		logDir = filepath.Join(dataDir, "log")
+	}
+	dirs := []string{
+		filepath.Join(configDir, "apimgr", projectName),
+		filepath.Join(dataDir, "apimgr", projectName),
+		filepath.Join(cacheDir, "apimgr", projectName),
+		filepath.Join(logDir, "apimgr", projectName),
+	}
+	for _, path := range dirs {
+		if err := os.MkdirAll(path, 0700); err != nil {
+			return fmt.Errorf("create client directory: %w", err)
+		}
+		if runtime.GOOS != "windows" {
+			if err := os.Chmod(path, 0700); err != nil {
+				return fmt.Errorf("secure client directory: %w", err)
+			}
+		}
+	}
+	logPath := filepath.Join(dirs[3], "cli.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("create client log: %w", err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := logFile.Chmod(0600); err != nil {
+			_ = logFile.Close()
+			return fmt.Errorf("secure client log: %w", err)
+		}
+	}
+	return logFile.Close()
 }
 
 func validServer(value string) bool {
@@ -313,7 +447,7 @@ func printUsage(binary, lang string) {
 	fmt.Printf(`%s %s
 
 %s:
-%s [--server URL] [--lang CODE] [--json] <command>
+%s [--server URL] [--config PROFILE|PATH] [--lang CODE] [--json] <command>
 
 %s:
   types         %s
@@ -326,6 +460,9 @@ func printUsage(binary, lang string) {
   --type TYPE --description TEXT [--scope SCOPE] [--body TEXT]
   [--breaking] [--convention conventional-commits|angular]
 
+With no command in an interactive terminal, opens the terminal menu.
+Shell completions: %s --shell bash|zsh|fish|powershell
+
 %s
-`, binary, Version, i18n.T(lang, "cli.usage"), binary, i18n.T(lang, "cli.commands"), i18n.T(lang, "cli.types"), i18n.T(lang, "cli.conventions"), i18n.T(lang, "cli.templates"), i18n.T(lang, "cli.random"), i18n.T(lang, "cli.build"), i18n.T(lang, "cli.build_options"), i18n.T(lang, "cli.server_source"))
+`, binary, Version, i18n.T(lang, "cli.usage"), binary, i18n.T(lang, "cli.commands"), i18n.T(lang, "cli.types"), i18n.T(lang, "cli.conventions"), i18n.T(lang, "cli.templates"), i18n.T(lang, "cli.random"), i18n.T(lang, "cli.build"), binary, i18n.T(lang, "cli.build_options"), i18n.T(lang, "cli.server_source"))
 }

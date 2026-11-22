@@ -18,8 +18,19 @@ REST resources use `/api/v1`. JSON responses use an `{ "ok": true, "data": ... }
 | GET | `/api/v1/server/terms` | Return the localized terms text |
 | GET | `/api/v1/server/security` | Return localized security reporting instructions and canonical policy links |
 | GET | `/api/v1/server/preferences` | Return the current request language and theme preference |
+| POST | `/api/v1/server/preferences` | Save supported language and theme preferences |
+| GET | `/api/v1/server/preferences/sync` | Export portable preferences as JSON with an import URL and code |
+| GET | `/api/v1/server/preferences/sync/import` | Apply preferences from the supplied import code |
 | GET | `/api/v1/server/help/mcp` | Return localized MCP connection instructions |
-| GET, POST | `/api/v1/server/preferences/tokens/*` | Issue or manage anonymous owner tokens; protected by owner/operator credentials as specified |
+| GET | `/api/v1/server/preferences/tokens` | List masked owner tokens; requires the owner's primary token |
+| POST | `/api/v1/server/preferences/tokens/primary` | Issue a primary owner token for a new owner; no token required |
+| POST | `/api/v1/server/preferences/tokens/primary/reveal` | Reveal the primary owner token; requires the primary token |
+| POST | `/api/v1/server/preferences/tokens/primary/rotate` | Rotate the primary owner token; requires the primary token |
+| POST | `/api/v1/server/preferences/tokens` | Create a linked token; requires the primary token |
+| POST | `/api/v1/server/preferences/tokens/{id}/reveal` | Reveal a linked token; requires the primary token |
+| POST | `/api/v1/server/preferences/tokens/{id}/rotate` | Rotate a linked token; requires the primary token |
+| PATCH | `/api/v1/server/preferences/tokens/{id}` | Rename or change linked token expiry; requires the primary token |
+| DELETE | `/api/v1/server/preferences/tokens/{id}` | Revoke a linked token; requires the primary token |
 | GET | `/api/v1/server/metrics[/{service}]` | Internal service metrics; requires its per-service Bearer token |
 | GET | `/api/v1/server/contact` | Return contact form descriptors and reporting information |
 | POST | `/api/v1/server/contact` | Submit the selected contact or security report; form and security anti-spam requirements apply |

@@ -28,6 +28,7 @@ type ServiceType int
 const (
 	ServiceUnknown ServiceType = iota
 	ServiceSystemd
+	ServiceOpenRC
 	ServiceRunit
 	ServiceLaunchd
 	ServiceWindows
@@ -41,6 +42,11 @@ func DetectServiceManager() ServiceType {
 		// Check for systemd
 		if _, err := os.Stat("/run/systemd/system"); err == nil {
 			return ServiceSystemd
+		}
+		if _, err := os.Stat("/sbin/openrc-run"); err == nil {
+			if _, err := os.Stat("/run/openrc"); err == nil {
+				return ServiceOpenRC
+			}
 		}
 		// Check for runit
 		if _, err := os.Stat("/run/runit"); err == nil {
@@ -73,6 +79,8 @@ func Install() error {
 	switch serviceType {
 	case ServiceSystemd:
 		return installSystemd()
+	case ServiceOpenRC:
+		return installOpenRC()
 	case ServiceRunit:
 		return installRunit()
 	case ServiceLaunchd:
@@ -93,6 +101,8 @@ func Uninstall() error {
 	switch serviceType {
 	case ServiceSystemd:
 		return uninstallSystemd()
+	case ServiceOpenRC:
+		return uninstallOpenRC()
 	case ServiceRunit:
 		return uninstallRunit()
 	case ServiceLaunchd:
@@ -104,6 +114,54 @@ func Uninstall() error {
 	default:
 		return fmt.Errorf("unsupported service manager")
 	}
+}
+
+func installOpenRC() error {
+	binaryPath := GetBinaryPath()
+	servicePath := "/etc/init.d/" + appName
+	serviceContent := fmt.Sprintf(`#!/sbin/openrc-run
+description="Git Messages server"
+command="%s"
+command_background=true
+pidfile="/run/%s.pid"
+output_log="/var/log/%s/%s/output.log"
+error_log="/var/log/%s/%s/error.log"
+depend() {
+    need net
+    use dns logger
+}
+`, binaryPath, appName, orgName, appName, orgName, appName)
+	for _, directory := range []string{filepath.Dir(servicePath), fmt.Sprintf("/var/log/%s/%s", orgName, appName)} {
+		if err := os.MkdirAll(directory, 0755); err != nil {
+			return fmt.Errorf("create OpenRC directory %s: %w", directory, err)
+		}
+	}
+	if err := os.WriteFile(servicePath, []byte(serviceContent), 0755); err != nil {
+		return fmt.Errorf("write OpenRC service: %w", err)
+	}
+	if executable, err := os.Executable(); err == nil && executable != binaryPath {
+		if err := copyBinary(executable, binaryPath); err != nil {
+			return fmt.Errorf("install server binary: %w", err)
+		}
+	}
+	if err := exec.Command("rc-update", "add", appName, "default").Run(); err != nil {
+		return fmt.Errorf("enable OpenRC service: %w", err)
+	}
+	if err := exec.Command("rc-service", appName, "start").Run(); err != nil {
+		return fmt.Errorf("start OpenRC service: %w", err)
+	}
+	return nil
+}
+
+func uninstallOpenRC() error {
+	_ = exec.Command("rc-service", appName, "stop").Run()
+	if err := exec.Command("rc-update", "del", appName, "default").Run(); err != nil {
+		return fmt.Errorf("disable OpenRC service: %w", err)
+	}
+	if err := os.Remove("/etc/init.d/" + appName); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove OpenRC service: %w", err)
+	}
+	return nil
 }
 
 // GetBinaryPath returns the path where the binary should be installed
@@ -200,10 +258,10 @@ func uninstallSystemd() error {
 	servicePath := fmt.Sprintf("/etc/systemd/system/%s.service", appName)
 
 	// Stop service if running
-	exec.Command("systemctl", "stop", appName).Run()
+	_ = exec.Command("systemctl", "stop", appName).Run()
 
 	// Disable service
-	exec.Command("systemctl", "disable", appName).Run()
+	_ = exec.Command("systemctl", "disable", appName).Run()
 
 	// Remove service file
 	if err := os.Remove(servicePath); err != nil && !os.IsNotExist(err) {
@@ -211,7 +269,7 @@ func uninstallSystemd() error {
 	}
 
 	// Reload systemd
-	exec.Command("systemctl", "daemon-reload").Run()
+	_ = exec.Command("systemctl", "daemon-reload").Run()
 
 	fmt.Printf("✅ Service uninstalled: %s\n", servicePath)
 	return nil
@@ -252,7 +310,7 @@ exec svlogd -tt ./main
 
 	// Link to service directory
 	linkPath := fmt.Sprintf("/var/service/%s", appName)
-	os.Symlink(svDir, linkPath)
+	_ = os.Symlink(svDir, linkPath)
 
 	fmt.Printf("✅ Runit service installed at: %s\n", svDir)
 	return nil
@@ -264,13 +322,13 @@ func uninstallRunit() error {
 	linkPath := fmt.Sprintf("/var/service/%s", appName)
 
 	// Stop service
-	exec.Command("sv", "stop", appName).Run()
+	_ = exec.Command("sv", "stop", appName).Run()
 
 	// Remove link
-	os.Remove(linkPath)
+	_ = os.Remove(linkPath)
 
 	// Remove service directory
-	os.RemoveAll(svDir)
+	_ = os.RemoveAll(svDir)
 
 	fmt.Printf("✅ Runit service uninstalled\n")
 	return nil
@@ -339,7 +397,7 @@ func uninstallLaunchd() error {
 	plistPath := fmt.Sprintf("/Library/LaunchDaemons/com.%s.%s.plist", orgName, appName)
 
 	// Unload if running
-	exec.Command("launchctl", "unload", plistPath).Run()
+	_ = exec.Command("launchctl", "unload", plistPath).Run()
 
 	// Remove plist
 	if err := os.Remove(plistPath); err != nil && !os.IsNotExist(err) {
@@ -388,7 +446,7 @@ func installWindows() error {
 // uninstallWindows removes Windows service
 func uninstallWindows() error {
 	// Stop service
-	exec.Command("sc.exe", "stop", appName).Run()
+	_ = exec.Command("sc.exe", "stop", appName).Run()
 
 	// Delete service
 	if err := exec.Command("sc.exe", "delete", appName).Run(); err != nil {
@@ -488,6 +546,8 @@ func Start() error {
 	switch serviceType {
 	case ServiceSystemd:
 		return exec.Command("systemctl", "start", appName).Run()
+	case ServiceOpenRC:
+		return exec.Command("rc-service", appName, "start").Run()
 	case ServiceRunit:
 		return exec.Command("sv", "start", appName).Run()
 	case ServiceLaunchd:
@@ -509,6 +569,8 @@ func Stop() error {
 	switch serviceType {
 	case ServiceSystemd:
 		return exec.Command("systemctl", "stop", appName).Run()
+	case ServiceOpenRC:
+		return exec.Command("rc-service", appName, "stop").Run()
 	case ServiceRunit:
 		return exec.Command("sv", "stop", appName).Run()
 	case ServiceLaunchd:
@@ -530,13 +592,17 @@ func Restart() error {
 	switch serviceType {
 	case ServiceSystemd:
 		return exec.Command("systemctl", "restart", appName).Run()
+	case ServiceOpenRC:
+		return exec.Command("rc-service", appName, "restart").Run()
 	case ServiceRunit:
 		return exec.Command("sv", "restart", appName).Run()
 	case ServiceLaunchd:
-		Stop()
+		if err := Stop(); err != nil {
+			return err
+		}
 		return Start()
 	case ServiceWindows:
-		exec.Command("sc.exe", "stop", appName).Run()
+		_ = exec.Command("sc.exe", "stop", appName).Run()
 		return exec.Command("sc.exe", "start", appName).Run()
 	case ServiceBSDRC:
 		return exec.Command("service", appName, "restart").Run()
@@ -557,5 +623,51 @@ func Reload() error {
 	default:
 		// For others, restart is the fallback
 		return Restart()
+	}
+}
+
+// Disable stops the service and removes it from automatic startup while preserving its files.
+func Disable() error {
+	if err := Stop(); err != nil {
+		return fmt.Errorf("stop service before disabling: %w", err)
+	}
+	switch DetectServiceManager() {
+	case ServiceSystemd:
+		return exec.Command("systemctl", "disable", appName).Run()
+	case ServiceOpenRC:
+		return exec.Command("rc-update", "del", appName, "default").Run()
+	case ServiceRunit:
+		if err := os.Remove(fmt.Sprintf("/var/service/%s", appName)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	case ServiceLaunchd:
+		return exec.Command("launchctl", "unload", fmt.Sprintf("/Library/LaunchDaemons/com.%s.%s.plist", orgName, appName)).Run()
+	case ServiceWindows:
+		return exec.Command("sc.exe", "config", appName, "start=", "demand").Run()
+	case ServiceBSDRC:
+		return fmt.Errorf("disable the service by removing %s_enable from /etc/rc.conf", appName)
+	default:
+		return fmt.Errorf("unsupported service manager")
+	}
+}
+
+// Status returns the service manager's current status for the project service.
+func Status() error {
+	switch DetectServiceManager() {
+	case ServiceSystemd:
+		return exec.Command("systemctl", "status", appName).Run()
+	case ServiceOpenRC:
+		return exec.Command("rc-service", appName, "status").Run()
+	case ServiceRunit:
+		return exec.Command("sv", "status", appName).Run()
+	case ServiceLaunchd:
+		return exec.Command("launchctl", "list", fmt.Sprintf("com.%s.%s", orgName, appName)).Run()
+	case ServiceWindows:
+		return exec.Command("sc.exe", "query", appName).Run()
+	case ServiceBSDRC:
+		return exec.Command("service", appName, "status").Run()
+	default:
+		return fmt.Errorf("unsupported service manager")
 	}
 }

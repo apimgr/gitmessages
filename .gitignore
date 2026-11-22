@@ -185,7 +185,12 @@ volumes/
 *.swp
 *.swo
 .claude/settings.local.json
-.cursor/
+.claude/*.lock
+.claude/backups/
+.claude/cache/
+.claude/history.jsonl
+.cursor/settings.json
+.windsurf/settings.json
 .aider/
 .ai/
 .windsurf/

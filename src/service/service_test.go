@@ -123,7 +123,7 @@ func cleanupPaths(t *testing.T, paths ...string) {
 	t.Helper()
 	t.Cleanup(func() {
 		for _, p := range paths {
-			os.RemoveAll(p)
+			_ = os.RemoveAll(p)
 		}
 	})
 }

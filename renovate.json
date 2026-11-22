@@ -1,0 +1,23 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard"
+  ],
+  "pinDigests": true,
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "groupName": "Go modules"
+    },
+    {
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "groupName": "Docker images"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    }
+  ]
+}
