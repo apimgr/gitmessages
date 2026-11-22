@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -8,13 +9,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/config"
+	"github.com/apimgr/gitmessages/src/paths"
 )
 
 func TestConfigureOutputFallsBackToEnglish(t *testing.T) {
@@ -332,35 +333,192 @@ func TestServiceDispatch_Status(t *testing.T) {
 	serviceStatus()
 }
 
-// TestServiceInstallUninstallDisable exercises the real systemd unit file
-// writer/remover. systemctl itself is absent in the test container, but
-// runCommand only logs on failure rather than exiting, so the file-write and
-// file-remove paths are still exercised end to end.
-func TestServiceInstallUninstallDisable(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("serviceInstall/Uninstall/Disable target Linux systemd paths")
-	}
-	if err := os.MkdirAll("/etc/systemd/system", 0755); err != nil {
-		t.Fatalf("MkdirAll(/etc/systemd/system): %v", err)
-	}
-	t.Cleanup(func() { os.Remove("/etc/systemd/system/gitmessages.service") })
-
+// TestSystemdServiceInstallAndUninstallCancellation exercises service file
+// creation and verifies that a declined uninstall preserves the service data.
+func TestSystemdServiceInstallAndUninstallCancellation(t *testing.T) {
 	configDir := t.TempDir()
-	serviceInstall(configDir)
+	serviceFile := filepath.Join(t.TempDir(), "systemd", "gitmessages.service")
+	var commands []string
+	command := func(name string, args ...string) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+	}
+	if err := os.MkdirAll(filepath.Dir(serviceFile), 0700); err != nil {
+		t.Fatalf("MkdirAll(service file): %v", err)
+	}
+	var installOutput bytes.Buffer
+	serviceInstall(configDir, "linux", serviceFile, "", command, &installOutput)
 
-	data, err := os.ReadFile("/etc/systemd/system/gitmessages.service")
+	data, err := os.ReadFile(serviceFile)
 	if err != nil {
 		t.Fatalf("service unit file missing after serviceInstall: %v", err)
 	}
 	if !strings.Contains(string(data), configDir) {
 		t.Errorf("service unit file does not reference configDir %q", configDir)
 	}
+	if len(commands) != 3 || commands[0] != "systemctl daemon-reload" || commands[1] != "systemctl enable gitmessages" || commands[2] != "systemctl start gitmessages" {
+		t.Errorf("service commands = %v", commands)
+	}
+	if !strings.Contains(installOutput.String(), "Service installed and started successfully") {
+		t.Errorf("installation status missing: %q", installOutput.String())
+	}
 
-	serviceDisable()
-	serviceUninstall()
+	var output bytes.Buffer
+	serviceUninstallWithInput(configDir, strings.NewReader("n\n"), &output)
 
-	if _, err := os.Stat("/etc/systemd/system/gitmessages.service"); !os.IsNotExist(err) {
-		t.Errorf("service unit file still exists after serviceUninstall, err=%v", err)
+	if _, err := os.Stat(serviceFile); err != nil {
+		t.Errorf("service unit file was removed despite uninstall cancellation, err=%v", err)
+	}
+	if _, err := os.Stat(configDir); err != nil {
+		t.Errorf("configuration directory was removed despite uninstall cancellation, err=%v", err)
+	}
+	if !strings.Contains(output.String(), "This will delete ALL data, configs, and the system user. Continue? [y/N]") {
+		t.Errorf("uninstall confirmation prompt missing: %q", output.String())
+	}
+
+	var unsupportedOutput bytes.Buffer
+	if err := installServiceFor("openbsd", configDir, "", "", command, &unsupportedOutput); err != nil {
+		t.Fatalf("unsupported service platform should report status without failing: %v", err)
+	}
+	if !strings.Contains(unsupportedOutput.String(), "Service installation not supported on openbsd") {
+		t.Errorf("unsupported platform status missing: %q", unsupportedOutput.String())
+	}
+	serviceInstall(configDir, "linux", filepath.Join(t.TempDir(), "missing", "gitmessages.service"), "", command, &installOutput)
+}
+
+func TestLaunchdServiceInstall(t *testing.T) {
+	configDir := t.TempDir()
+	serviceFile := filepath.Join(t.TempDir(), "LaunchDaemons", "gitmessages.plist")
+	if err := os.MkdirAll(filepath.Dir(serviceFile), 0700); err != nil {
+		t.Fatalf("MkdirAll(service file): %v", err)
+	}
+	var commands []string
+	command := func(name string, args ...string) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+	}
+	var output bytes.Buffer
+	if err := installServiceFor("darwin", configDir, "", serviceFile, command, &output); err != nil {
+		t.Fatalf("installServiceFor: %v", err)
+	}
+	data, err := os.ReadFile(serviceFile)
+	if err != nil {
+		t.Fatalf("service plist missing after installServiceFor: %v", err)
+	}
+	if !strings.Contains(string(data), configDir) {
+		t.Errorf("service plist does not reference configDir %q", configDir)
+	}
+	if len(commands) != 1 || commands[0] != "launchctl load "+serviceFile {
+		t.Errorf("service commands = %v", commands)
+	}
+	if !strings.Contains(output.String(), "Service installed and started successfully") {
+		t.Errorf("installation status missing: %q", output.String())
+	}
+}
+
+func TestRemoveServiceData(t *testing.T) {
+	root := t.TempDir()
+	dirs := paths.Directories{
+		Config: filepath.Join(root, "config"),
+		Data:   filepath.Join(root, "data"),
+		Cache:  filepath.Join(root, "cache"),
+		Logs:   filepath.Join(root, "logs"),
+		Backup: filepath.Join(root, "backup"),
+		PID:    filepath.Join(root, "run", "gitmessages.pid"),
+	}
+	for _, dir := range []string{dirs.Config, dirs.Data, dirs.Cache, dirs.Logs, dirs.Backup, filepath.Dir(dirs.PID)} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(dirs.PID, []byte("123"), 0600); err != nil {
+		t.Fatalf("WriteFile(PID): %v", err)
+	}
+	if err := removeServiceData(dirs); err != nil {
+		t.Fatalf("removeServiceData: %v", err)
+	}
+	for _, path := range []string{dirs.Config, dirs.Data, dirs.Cache, dirs.Logs, dirs.Backup, dirs.PID} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("path remains after service uninstall: %s (err=%v)", path, err)
+		}
+	}
+}
+
+func TestConfirmServiceUninstall(t *testing.T) {
+	var output bytes.Buffer
+	if !confirmServiceUninstall(strings.NewReader("yes\n"), &output) {
+		t.Fatal("affirmative response did not confirm service uninstall")
+	}
+	if !strings.Contains(output.String(), "This will delete ALL data, configs, and the system user. Continue? [y/N]") {
+		t.Errorf("uninstall confirmation prompt missing: %q", output.String())
+	}
+}
+
+func TestUninstallService(t *testing.T) {
+	root := t.TempDir()
+	serviceFile := filepath.Join(root, "systemd", "gitmessages.service")
+	if err := os.MkdirAll(filepath.Dir(serviceFile), 0700); err != nil {
+		t.Fatalf("MkdirAll(service file): %v", err)
+	}
+	if err := os.WriteFile(serviceFile, []byte("unit"), 0600); err != nil {
+		t.Fatalf("WriteFile(service file): %v", err)
+	}
+	dirs := paths.Directories{
+		Config: filepath.Join(root, "config"),
+		Data:   filepath.Join(root, "data"),
+		Cache:  filepath.Join(root, "cache"),
+		Logs:   filepath.Join(root, "logs"),
+		Backup: filepath.Join(root, "backup"),
+		PID:    filepath.Join(root, "run", "gitmessages.pid"),
+	}
+	for _, dir := range []string{dirs.Config, dirs.Data, dirs.Cache, dirs.Logs, dirs.Backup, filepath.Dir(dirs.PID)} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(dirs.PID, []byte("123"), 0600); err != nil {
+		t.Fatalf("WriteFile(PID): %v", err)
+	}
+	var commands []string
+	var output bytes.Buffer
+	command := func(name string, args ...string) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+	}
+	if err := uninstallService("linux", dirs, serviceFile, "/usr/local/bin/gitmessages", &output, command); err != nil {
+		t.Fatalf("uninstallService: %v", err)
+	}
+	if len(commands) != 3 || commands[0] != "systemctl stop gitmessages" || commands[1] != "systemctl disable gitmessages" || commands[2] != "systemctl daemon-reload" {
+		t.Errorf("service commands = %v", commands)
+	}
+	if !strings.Contains(output.String(), "Service uninstalled. Delete binary manually: rm /usr/local/bin/gitmessages") {
+		t.Errorf("binary removal guidance missing: %q", output.String())
+	}
+	for _, path := range []string{serviceFile, dirs.Config, dirs.Data, dirs.Cache, dirs.Logs, dirs.Backup, dirs.PID} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("path remains after uninstall: %s (err=%v)", path, err)
+		}
+	}
+}
+
+func TestUninstallServiceDarwin(t *testing.T) {
+	serviceFile := filepath.Join(t.TempDir(), "launchd", "gitmessages.plist")
+	if err := os.MkdirAll(filepath.Dir(serviceFile), 0700); err != nil {
+		t.Fatalf("MkdirAll(service file): %v", err)
+	}
+	if err := os.WriteFile(serviceFile, []byte("plist"), 0600); err != nil {
+		t.Fatalf("WriteFile(service file): %v", err)
+	}
+	var commands []string
+	var output bytes.Buffer
+	command := func(name string, args ...string) {
+		commands = append(commands, name+" "+strings.Join(args, " "))
+	}
+	if err := uninstallService("darwin", paths.Directories{}, serviceFile, "/usr/local/bin/gitmessages", &output, command); err != nil {
+		t.Fatalf("uninstallService: %v", err)
+	}
+	if len(commands) != 1 || commands[0] != "launchctl unload "+serviceFile {
+		t.Errorf("service commands = %v", commands)
+	}
+	if _, err := os.Stat(serviceFile); !os.IsNotExist(err) {
+		t.Errorf("launchd plist remains after uninstall (err=%v)", err)
 	}
 }
 

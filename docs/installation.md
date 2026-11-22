@@ -72,7 +72,7 @@ sudo /usr/local/bin/gitmessages --config /etc/apimgr/gitmessages --service --ins
 
 The command writes and enables the `gitmessages.service` unit, which runs as the `gitmessages` account. Check it with `systemctl status gitmessages` and view logs with `journalctl -u gitmessages`. Configure a reverse proxy for TLS and forward the original host, scheme, and optional path prefix. Add the proxy's address or CIDR to `server.trusted_proxies.additional` before relying on forwarded headers.
 
-To remove the installed unit, run `sudo /usr/local/bin/gitmessages --service --uninstall`. Data and logs use the platform defaults for the service account; use the configuration reference for their paths and permissions.
+To remove the installed service, run `sudo /usr/local/bin/gitmessages --config /etc/apimgr/gitmessages --service --uninstall` and confirm the prompt. This deletes the configuration, data, cache, logs, backups, and PID file for the selected paths; the binary and manually created service account remain. Delete the binary and account manually if they are no longer needed.
 
 ## Build from source
 

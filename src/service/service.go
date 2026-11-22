@@ -507,7 +507,11 @@ func uninstallBSDRC() error {
 	rcPath := fmt.Sprintf("/usr/local/etc/rc.d/%s", appName)
 
 	// Stop service
-	exec.Command("service", appName, "stop").Run()
+	if err := exec.Command("service", appName, "stop").Run(); err != nil {
+		if statusErr := exec.Command("service", appName, "status").Run(); statusErr == nil {
+			return fmt.Errorf("failed to stop BSD service: %w", err)
+		}
+	}
 
 	// Remove script
 	if err := os.Remove(rcPath); err != nil && !os.IsNotExist(err) {

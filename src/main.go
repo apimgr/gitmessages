@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/tar"
+	"bufio"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -655,9 +656,9 @@ func handleServiceCommand(cmd, configDir string) {
 	case "status":
 		serviceStatus()
 	case "--install":
-		serviceInstall(configDir)
+		serviceInstall(configDir, runtime.GOOS, "/etc/systemd/system/gitmessages.service", "/Library/LaunchDaemons/us.apimgr.gitmessages.plist", runCommand, os.Stdout)
 	case "--uninstall":
-		serviceUninstall()
+		serviceUninstall(configDir)
 	case "--disable":
 		serviceDisable()
 	default:
@@ -820,32 +821,24 @@ func logServiceError(err error) {
 	}
 }
 
-func serviceInstall(configDir string) {
-	fmt.Println("Installing gitmessages service...")
-	switch runtime.GOOS {
+func serviceInstall(configDir, goos, systemdFile, launchdFile string, command func(string, ...string), output io.Writer) {
+	if err := installServiceFor(goos, configDir, systemdFile, launchdFile, command, output); err != nil {
+		log.Printf("Service installation failed: %v", err)
+	}
+}
+
+func installServiceFor(goos, configDir, systemdFile, launchdFile string, command func(string, ...string), output io.Writer) error {
+	if _, err := fmt.Fprintln(output, "Installing gitmessages service..."); err != nil {
+		return fmt.Errorf("write installation status: %w", err)
+	}
+	switch goos {
 	case "linux":
-		service := fmt.Sprintf(`[Unit]
-Description=GitMessages Server
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/gitmessages --config %s
-Restart=always
-RestartSec=5
-User=gitmessages
-Group=gitmessages
-
-[Install]
-WantedBy=multi-user.target
-`, configDir)
-		if err := os.WriteFile("/etc/systemd/system/gitmessages.service", []byte(service), 0644); err != nil {
-			log.Fatalf("Failed to write systemd service file: %v", err)
+		if err := installSystemdService(configDir, systemdFile, command); err != nil {
+			return err
 		}
-		runCommand("systemctl", "daemon-reload")
-		runCommand("systemctl", "enable", "gitmessages")
-		runCommand("systemctl", "start", "gitmessages")
-		fmt.Println("Service installed and started successfully")
+		if _, err := fmt.Fprintln(output, "Service installed and started successfully"); err != nil {
+			return fmt.Errorf("write installation status: %w", err)
+		}
 	case "darwin":
 		plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -866,30 +859,141 @@ WantedBy=multi-user.target
 </dict>
 </plist>
 `, configDir)
-		if err := os.WriteFile("/Library/LaunchDaemons/us.apimgr.gitmessages.plist", []byte(plist), 0644); err != nil {
-			log.Fatalf("Failed to write launchd plist: %v", err)
+		if err := os.WriteFile(launchdFile, []byte(plist), 0644); err != nil {
+			return fmt.Errorf("write launchd plist: %w", err)
 		}
-		runCommand("launchctl", "load", "/Library/LaunchDaemons/us.apimgr.gitmessages.plist")
-		fmt.Println("Service installed and started successfully")
+		command("launchctl", "load", launchdFile)
+		if _, err := fmt.Fprintln(output, "Service installed and started successfully"); err != nil {
+			return fmt.Errorf("write installation status: %w", err)
+		}
 	default:
-		fmt.Printf("Service installation not supported on %s\n", runtime.GOOS)
+		if _, err := fmt.Fprintf(output, "Service installation not supported on %s\n", goos); err != nil {
+			return fmt.Errorf("write installation status: %w", err)
+		}
+	}
+	return nil
+}
+
+func installSystemdService(configDir, serviceFile string, command func(string, ...string)) error {
+	service := fmt.Sprintf(`[Unit]
+Description=GitMessages Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gitmessages --config %s
+Restart=always
+RestartSec=5
+User=gitmessages
+Group=gitmessages
+
+[Install]
+WantedBy=multi-user.target
+`, configDir)
+	if err := os.WriteFile(serviceFile, []byte(service), 0644); err != nil {
+		return fmt.Errorf("write systemd service file: %w", err)
+	}
+	command("systemctl", "daemon-reload")
+	command("systemctl", "enable", "gitmessages")
+	command("systemctl", "start", "gitmessages")
+	return nil
+}
+
+func serviceUninstall(configDir string) {
+	serviceUninstallWithInput(configDir, os.Stdin, os.Stdout)
+}
+
+func serviceUninstallWithInput(configDir string, input io.Reader, output io.Writer) {
+	if !confirmServiceUninstall(input, output) {
+		if _, err := fmt.Fprintln(output, "Service uninstall cancelled"); err != nil {
+			log.Printf("Service uninstall cancelled; write response: %v", err)
+		}
+		return
+	}
+
+	dirs := paths.GetDirectories()
+	dirs.Config = configDir
+	serviceFile := ""
+	switch runtime.GOOS {
+	case "linux":
+		serviceFile = "/etc/systemd/system/gitmessages.service"
+	case "darwin":
+		serviceFile = "/Library/LaunchDaemons/us.apimgr.gitmessages.plist"
+	}
+	binaryPath, err := os.Executable()
+	if err != nil {
+		binaryPath = "/usr/local/bin/gitmessages"
+	}
+	if err := uninstallService(runtime.GOOS, dirs, serviceFile, binaryPath, output, runCommand); err != nil {
+		log.Printf("Service uninstallation failed: %v", err)
 	}
 }
 
-func serviceUninstall() {
-	fmt.Println("Uninstalling gitmessages service...")
-	switch runtime.GOOS {
+func uninstallService(goos string, dirs paths.Directories, serviceFile, binaryPath string, output io.Writer, command func(string, ...string)) error {
+	switch goos {
 	case "linux":
-		runCommand("systemctl", "stop", "gitmessages")
-		runCommand("systemctl", "disable", "gitmessages")
-		os.Remove("/etc/systemd/system/gitmessages.service")
-		runCommand("systemctl", "daemon-reload")
+		command("systemctl", "stop", "gitmessages")
+		command("systemctl", "disable", "gitmessages")
+		if err := removeIfPresent(serviceFile); err != nil {
+			return fmt.Errorf("remove systemd unit: %w", err)
+		}
+		command("systemctl", "daemon-reload")
 	case "darwin":
-		runCommand("launchctl", "unload", "/Library/LaunchDaemons/us.apimgr.gitmessages.plist")
-		os.Remove("/Library/LaunchDaemons/us.apimgr.gitmessages.plist")
+		command("launchctl", "unload", serviceFile)
+		if err := removeIfPresent(serviceFile); err != nil {
+			return fmt.Errorf("remove launchd plist: %w", err)
+		}
 	default:
-		fmt.Printf("Service uninstallation not supported on %s\n", runtime.GOOS)
+		return fmt.Errorf("service uninstallation not supported on %s", goos)
 	}
+	if err := removeServiceData(dirs); err != nil {
+		return fmt.Errorf("remove service data: %w", err)
+	}
+	if _, err := fmt.Fprintf(output, "Service uninstalled. Delete binary manually: rm %s\n", binaryPath); err != nil {
+		return fmt.Errorf("write uninstall confirmation: %w", err)
+	}
+	return nil
+}
+
+func confirmServiceUninstall(input io.Reader, output io.Writer) bool {
+	if _, err := fmt.Fprintln(output, "This will delete ALL data, configs, and the system user. Continue? [y/N]"); err != nil {
+		return false
+	}
+	answer, err := bufio.NewReader(input).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(answer), "y") || strings.EqualFold(strings.TrimSpace(answer), "yes")
+}
+
+func removeServiceData(dirs paths.Directories) error {
+	seen := make(map[string]struct{})
+	for _, dir := range []string{dirs.Config, dirs.Data, dirs.Cache, dirs.Logs, dirs.Backup} {
+		if dir == "" {
+			continue
+		}
+		if _, ok := seen[dir]; ok {
+			continue
+		}
+		seen[dir] = struct{}{}
+		if err := os.RemoveAll(dir); err != nil {
+			return fmt.Errorf("remove %s: %w", dir, err)
+		}
+	}
+	if err := removeIfPresent(dirs.PID); err != nil {
+		return fmt.Errorf("remove PID file %s: %w", dirs.PID, err)
+	}
+	return nil
+}
+
+func removeIfPresent(path string) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func serviceDisable() {
@@ -928,7 +1032,11 @@ func createConfigBackup(configDir, backupFile string) error {
 		return fmt.Errorf("create backup file: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer func() {
+		if err := os.Remove(temporaryPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("Failed to remove temporary backup file %s: %v", temporaryPath, err)
+		}
+	}()
 	if err := temporary.Chmod(0600); err != nil {
 		_ = temporary.Close()
 		return fmt.Errorf("secure backup file: %w", err)
