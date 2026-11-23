@@ -27,6 +27,7 @@ The canonical API prefix is `/api/{api_version}`; its default is `/api/v1`, and 
 | POST | `/api/{api_version}/server/preferences/tokens/primary` | Issue a primary owner token for a new owner; no token required |
 | POST | `/api/{api_version}/server/preferences/tokens/primary/reveal` | Reveal the primary owner token; requires the primary token |
 | POST | `/api/{api_version}/server/preferences/tokens/primary/rotate` | Rotate the primary owner token; requires the primary token |
+| DELETE | `/api/{api_version}/server/preferences/tokens/primary` | Delete the owner and all its tokens; requires the primary token and a JSON body containing the last four token characters in `confirm` |
 | POST | `/api/{api_version}/server/preferences/tokens` | Create a linked token; requires the primary token |
 | POST | `/api/{api_version}/server/preferences/tokens/{id}/reveal` | Reveal a linked token; requires the primary token |
 | POST | `/api/{api_version}/server/preferences/tokens/{id}/rotate` | Rotate a linked token; requires the primary token |
@@ -84,7 +85,7 @@ The result is `feat(api): add message search`. Types must be in the catalog; des
 
 ## GraphQL
 
-GraphQL accepts GET query parameters and POST JSON at `/graphql`. The same handler is available at `/api/{api_version}/server/graphql` and `/api/graphql`. `/server/docs/graphql` provides a browser query form.
+GraphQL accepts POST requests at `/api/{api_version}/server/graphql` and its direct alias `/api/graphql`. The JSON API accepts a `query` and optional `variables`; the browser query form also supports a no-JavaScript URL-encoded POST. The removed root `/graphql` route is not served.
 
 ```graphql
 query Catalog {
@@ -94,10 +95,10 @@ query Catalog {
 }
 ```
 
-Build a message with a mutation:
+Build a message with a read-only query:
 
 ```graphql
-mutation Build($input: BuildMessageInput!) {
+query Build($input: BuildMessageInput!) {
   buildMessage(input: $input) { message }
 }
 ```

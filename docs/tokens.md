@@ -10,6 +10,8 @@ The browser stores a primary token in an `HttpOnly`, `Secure`, `SameSite=Strict`
 
 Token actions use POST forms with a Strict double-submit CSRF cookie. Creation and rotation redirect with `303` and show the new token once on the resulting page; reveal also shows a token only for that response. Rotation, creation, rename, and revocation show a toast. Confirmations are provided for destructive actions. Valid owner cookies refresh their configured lifetime when frontend pages use them, and invalid cookies are cleared on the next frontend response. API and MCP authentication ignore browser cookies.
 
+The primary token card shows its final four characters without decrypting the stored credential. Revoking the primary token requires typing those four characters; it deletes the anonymous owner and all primary and linked tokens, clears the browser token cookie, and clears browser storage. The API uses `DELETE /api/{api_version}/server/preferences/tokens/primary` with `{"confirm":"LAST"}` and returns the deleted token and resource counts. This project has no owner-owned resources, so the resource count is zero.
+
 ## Create and manage linked tokens
 
 Use one linked token per automation client. A linked token has the owner's resource access, but cannot manage tokens. The tokens page supports reveal, rotation, rename, expiry changes and revocation. Available expiries are never, 7, 30 or 90 days, one year, or a chosen date. A maximum of 25 active linked tokens is allowed by default.
@@ -22,6 +24,7 @@ The API mirror requires the primary token as `Authorization: Bearer …` and nev
 | POST | `/api/{api_version}/server/preferences/tokens/primary` | Issue an owner token when no valid token is presented |
 | POST | `/api/{api_version}/server/preferences/tokens/primary/reveal` | Reveal the primary token |
 | POST | `/api/{api_version}/server/preferences/tokens/primary/rotate` | Replace the primary token |
+| DELETE | `/api/{api_version}/server/preferences/tokens/primary` | Delete the owner and all tokens; requires the primary token and its last four characters in `confirm` |
 | POST | `/api/{api_version}/server/preferences/tokens` | Create a linked token |
 | POST | `/api/{api_version}/server/preferences/tokens/{id}/reveal` | Reveal a linked token |
 | POST | `/api/{api_version}/server/preferences/tokens/{id}/rotate` | Rotate a linked token |

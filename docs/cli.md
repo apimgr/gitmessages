@@ -39,8 +39,6 @@ Owner exports contain the owner timestamps, token metadata, and owned resources;
 `--baseurl PATH` serves routes and generated links under a path prefix, overriding `server.baseurl` for this process. For example, `--baseurl /gitmessages` serves the app below `/gitmessages/`. Trusted reverse-proxy prefix headers take precedence.
 
 ```sh
-gitmessages --shell completions bash
-gitmessages --shell init zsh
 gitmessages --mode debug --debug
 gitmessages --baseurl /gitmessages
 ```
@@ -61,3 +59,13 @@ gitmessages-cli --server "$GITMESSAGES_SERVER" build --type fix --scope parser -
 No official server URL is built into the release. Supply `--server`, set `GITMESSAGES_SERVER_PRIMARY`, or configure `server.primary` in `cli.yml` before running a command.
 
 Build options are `--type`, `--scope`, `--description`, `--body`, `--breaking`, and `--convention`. Supported conventions are `conventional-commits` and `angular`. `--help` and `--version` exit immediately.
+
+With no command, the CLI chooses the desktop GUI when a display is available and GUI support is built in; otherwise it opens the TUI when stdin and stdout are interactive. Set `display.mode` to `auto`, `gui`, or `tui` in `cli.yml` to override automatic selection. The TUI reflows when the terminal is resized and supports `↑`/`↓` or `j`/`k` navigation, `/` to filter actions, `?` for help, Enter to open an action, and `q` or Ctrl+C to exit. Page Up and Page Down scroll long results on small screens.
+
+Shell integration supports bash, zsh, fish, sh, dash, ksh, PowerShell, and pwsh. The optional shell argument is detected from `SHELL` or `ComSpec` when omitted.
+
+```sh
+gitmessages-cli --shell completions [SHELL]
+gitmessages-cli --shell init [SHELL]
+gitmessages-cli --shell help
+```

@@ -73,7 +73,7 @@ git commit -m "$(gitmessages-cli --server http://127.0.0.1:8080 random)"
 gitmessages-cli --server http://127.0.0.1:8080 build --type feat --scope api --description 'add message search'
 ```
 
-Use `--json` before the command to print JSON output. Run `gitmessages-cli --shell bash` (or `zsh`, `fish`, or `powershell`) to print completions. Select a language with `--lang`, `GITMESSAGES_LANG`, the `language` setting in `cli.yml`, or `LANG`. See the [CLI reference](docs/cli.md) for all options.
+Use `--json` before the command to print JSON output. Run `gitmessages-cli --shell completions [SHELL]` or `gitmessages-cli --shell init [SHELL]`; omit `SHELL` to detect it from the environment. Completions support bash, zsh, fish, sh, dash, ksh, PowerShell, and pwsh. Select a language with `--lang`, `GITMESSAGES_LANG`, the `language` setting in `cli.yml`, or `LANG`. See the [CLI reference](docs/cli.md) for all options.
 
 ## Configuration
 
@@ -97,7 +97,7 @@ curl -q -LSsf "$SERVER_URL/api/$API_VERSION/messages" \
 
 
 
-The active API version is available from `GET /api/autodiscover` (default `v1`). OpenAPI JSON is served at `/api/{api_version}/server/swagger` (also `/api/swagger`). GraphQL accepts GET and POST requests at `/graphql`, `/api/{api_version}/server/graphql`, and `/api/graphql`. MCP Streamable HTTP accepts JSON-RPC POST requests at `/api/{api_version}/server/mcp` (also `/api/mcp` and `/mcp`) and requires an owner or operator Bearer token. See the [API reference](docs/api.md).
+The active API version is available from `GET /api/autodiscover` (default `v1`). OpenAPI JSON is served at `/api/{api_version}/server/swagger` (also `/api/swagger`). GraphQL accepts POST requests at `/api/{api_version}/server/graphql` and `/api/graphql`. MCP Streamable HTTP accepts JSON-RPC POST requests at `/api/{api_version}/server/mcp` (also `/api/mcp` and `/mcp`) and requires an owner or operator Bearer token. See the [API reference](docs/api.md).
 
 ## Other
 
@@ -124,7 +124,7 @@ The catalog is embedded and user-submitted commit messages or conventions are no
 
 ## Development
 
-See [the developer documentation](docs/development.md) for repository structure and contribution guidance.
+See [the developer documentation](docs/development.md) for repository structure, contribution guidance, and isolated binary integration checks.
 See the [translation guide](docs/translating.md) to update or add a locale.
 
 Go development commands run through the `casjaysdev/go:latest` container using Make targets:

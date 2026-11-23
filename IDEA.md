@@ -30,7 +30,7 @@ owner_token: gitmessages_owner_token_7gT2qA
 - Alternate public access over a Tor v3 hidden service when Tor is available, with optional I2P eepsite access according to the shared server specification
 - CLI client (`gitmessages-cli`) for command-line and shell-pipeline use, with an interactive terminal interface, a desktop GUI on Linux/macOS/Windows when a local display is available, and a first-run server connection flow; FreeBSD uses the terminal interface: `git commit -m "$(gitmessages-cli random)"`
 - OpenAPI/Swagger docs at `/api/{api_version}/server/swagger`
-- GraphQL at `/graphql`
+- GraphQL POST endpoints at `/api/{api_version}/server/graphql` and `/api/graphql`
 - MCP over Streamable HTTP at `/api/{api_version}/server/mcp`, with direct aliases `/api/mcp` and `/mcp`, exposing the API operations allowed to the caller's Bearer token; token management is never available as an MCP tool
 - Anonymous owner tokens for resource ownership and MCP access, without user accounts
 - Server contact and security-report forms required by the shared server specification; no submitted commit messages or community conventions are accepted
@@ -129,6 +129,6 @@ No third-party content providers supply catalog or message data. AI.md-required 
 | GET | `/api/{api_version}/server/preferences/tokens` | Owner token when managing an existing identity | Owner-token page data |
 | POST | `/api/{api_version}/server/preferences/tokens/primary` | None | Issue an owner and primary token |
 | POST | `/api/{api_version}/server/mcp`, `/api/mcp`, `/mcp` | Owner or operator Bearer token | MCP JSON-RPC tools for public catalog reads and stateless message building |
-| GET, POST | `/graphql`, `/api/graphql`, `/api/{api_version}/server/graphql` | None | Read the catalog or statelessly build a commit message |
+| POST | `/api/graphql`, `/api/{api_version}/server/graphql` | None | Read the catalog or statelessly build a commit message |
 
 All listed API routes accept JSON by default. The GET resources and server pages also support plain text through their `.txt` form or `Accept: text/plain`; the message builder accepts JSON or form-compatible browser input. `/api/swagger` is a compatibility alias for the OpenAPI document. `/.well-known/security.txt` is a public metadata file, not an API route.

@@ -76,6 +76,36 @@ Area names are conventions; the loader accepts supported settings in any merged 
 | `server.logs.access_format` | Access log format; defaults to `apache`. |
 | `server.logs.level` | Log level; defaults to `info`. |
 
+## Database and cache connections
+
+The default database is local SQLite at `server.db` in the configured database directory. Remote libSQL/Turso is selected with `server.database.driver: libsql` and a `libsql://` URL, or an `https://` URL with `server.database.token`. SQLite accepts a file path or `file:` URL. The URL scheme selects the driver and overrides the separate driver field. Credential-bearing URLs and the separate token belong in `secrets.yml`; connection URLs are redacted in diagnostics.
+
+`DATABASE_URL`, `DATABASE_DRIVER`, and `CACHE_URL` seed the saved settings on first run only. A URL with credentials is saved in `secrets.yml`; a URL without credentials is saved in `server.yml`. On later starts these variables are ignored, and a mismatch is reported by variable name. `${NAME}` and `${NAME:-default}` references in configuration values are expanded after files are merged and are not written back.
+
+| YAML key | Default and behavior |
+|---|---|
+| `server.database.driver` | `sqlite`; accepts `sqlite`, `sqlite2`, `sqlite3`, `libsql`, or `turso`. |
+| `server.database.url` | Empty uses the default `server.db`; remote libSQL requires a URL. Accepted remote schemes are `libsql://` and `https://`. |
+| `server.database.token` | Optional libSQL auth token kept in `secrets.yml`; an `authToken` URL option takes precedence. |
+| `server.database.pool.max_open` | `5`; maximum open database connections. For SQLite this sizes the read pool only; the write pool stays at one connection. |
+| `server.database.pool.max_idle` | `2`; maximum idle connections, capped at `max_open`. |
+| `server.database.pool.max_lifetime` | `5m`; maximum connection lifetime. SQLite writer lifetime remains unlimited by the concurrency contract. |
+| `server.database.pool.max_idle_time` | `1m`; maximum idle duration before a pooled connection closes. |
+| `server.database.cache.enabled` | `false`; enables the local SQLite cache for remote libSQL/Turso. |
+| `server.database.cache.path` | Required when enabled; path to the private local SQLite cache file. Relative paths are resolved beside the configured database file. |
+| `server.database.cache.sync_interval` | `30s`; interval for refreshing the local cache from remote libSQL. |
+| `server.database.cache.offline_mode` | `true`; permits read-only service from a cache that is no older than `max_age` when remote libSQL is unavailable. |
+| `server.database.cache.max_age` | `1h`; older cache contents force a remote read and are not used as an offline fallback. |
+| `server.cache.type` | `memory`; accepts `none`, `memory`, `valkey`, or `redis`. Valkey/Redis counters support rate limits across restarts and instances. |
+| `server.cache.url` | Optional `valkey://`, `valkeys://`, `redis://`, or `rediss://` connection URL. A saved URL takes precedence over the host, port, username, password, and database fields. |
+| `server.cache.host`, `port`, `username`, `password`, `db` | Separate connection fields; default host `localhost`, port `6379`, database `0`. Keep passwords in `secrets.yml`. |
+| `server.cache.tls`, `tls_skip_verify` | TLS is off unless requested by the URL scheme, URL `tls` option, or this field. TLS defaults to skipping certificate verification; set `tls_skip_verify: false` to verify the certificate and host. |
+| `server.cache.tls_ca`, `tls_cert`, `tls_key` | Optional CA and client certificate files inside `{config_dir}/ssl/`. Configure both client certificate and key together. |
+| `server.cache.pool_size`, `min_idle`, `timeout` | Redis/Valkey connection pool controls; defaults are `10`, `2`, and `5s`. |
+| `server.cache.prefix`, `ttl` | Counter key prefix and default expiration; defaults are `gitmessages:` and `1h`. Explicit counter windows, including the one-minute rate-limit window, take precedence over this fallback TTL. |
+
+Passwords may be typed directly in URL userinfo; valid `%XX` sequences are decoded. A cache URL may use a password-only userinfo such as `valkey://:{password}@host:6379/0`. URL query credentials (`password`, `pwd`, `token`, and `authToken`) are treated as secrets. Use the separate password/token fields when a literal password contains an ambiguous `%XX` sequence.
+
 ## Internationalization
 
 Configure the server's default content language and enabled browser-language choices under `server.i18n`:

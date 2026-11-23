@@ -4,7 +4,7 @@ Git Messages does not query third-party content providers for catalog or message
 
 ## HTTP clients
 
-Any HTTP client can use the public catalog REST API. The companion CLI uses the configured server and sends a project-specific User-Agent. OpenAPI JSON is available at `/api/{api_version}/server/swagger`; GraphQL is available at `/graphql`; MCP Streamable HTTP is available at `/api/{api_version}/server/mcp` and the `/api/mcp` and `/mcp` aliases and requires an owner or operator Bearer token. Health is available at `/api/{api_version}/server/healthz` and its direct `/api/healthz` alias. The optional `/healthz` alias is disabled by default and enabled with `server.healthz.root.enabled`.
+Any HTTP client can use the public catalog REST API. The companion CLI uses the configured server and sends a project-specific User-Agent. OpenAPI JSON is available at `/api/{api_version}/server/swagger`; GraphQL accepts POST requests at `/api/{api_version}/server/graphql` and `/api/graphql`; MCP Streamable HTTP is available at `/api/{api_version}/server/mcp` and the `/api/mcp` and `/mcp` aliases and requires an owner or operator Bearer token. Health is available at `/api/{api_version}/server/healthz` and its direct `/api/healthz` alias. The optional `/healthz` alias is disabled by default and enabled with `server.healthz.root.enabled`.
 
 ## Discovery and security reporting
 
@@ -12,7 +12,7 @@ The server always publishes `/.well-known/security.txt` for vulnerability report
 
 The server also publishes `/robots.txt` and `/sitemap.xml` for crawler discovery. The sitemap contains only public HTML pages permitted by the configured robots rules; it excludes API routes and the contact form. `/feed.xml` (Atom) and `/rss.xml` (RSS) are available for feed readers and currently contain no entries because Git Messages has no public per-item resource. These endpoints use request-specific absolute URLs. See [Browser application](browser.md) for response and cache behavior.
 
-MCP exposes tools for the REST operations and GET/POST GraphQL. The tools include `get_api_index`, `list_commit_types`, `list_conventions`, `list_templates`, `get_random_template`, `get_random_example`, `build_commit_message`, `get_health`, `get_about`, `get_help`, `get_mcp_help`, `get_privacy`, `get_terms`, `get_security`, `get_security_policy`, `get_security_thanks`, `get_data_protection_contact`, `get_contact_form`, `submit_contact_report`, `get_preferences`, `save_preferences`, `get_preferences_sync`, `import_preferences_sync`, `get_openapi`, `graphql_query_get`, and `graphql_query`. Token management and metrics are not exposed as tools. The localized `/server/help/mcp` page and the API tool list use the same operation definitions.
+MCP exposes tools for the REST operations and a GraphQL POST query. The tools include `get_api_index`, `list_commit_types`, `list_conventions`, `list_templates`, `get_random_template`, `get_random_example`, `build_commit_message`, `get_health`, `get_about`, `get_help`, `get_mcp_help`, `get_privacy`, `get_terms`, `get_security`, `get_security_policy`, `get_security_thanks`, `get_data_protection_contact`, `get_contact_form`, `submit_contact_report`, `get_preferences`, `save_preferences`, `get_preferences_sync`, `import_preferences_sync`, `get_openapi`, and `graphql_query`. Token management and metrics are not exposed as tools. The localized `/server/help/mcp` page and the API tool list use the same operation definitions.
 
 ## Git command pipelines
 

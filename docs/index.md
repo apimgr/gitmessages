@@ -13,6 +13,7 @@ Git Messages is a full-stack reference for Conventional Commits and Angular comm
 - [Contact and security reports](contact.md)
 - [Anonymous owner tokens](tokens.md)
 - [Internal metrics](metrics.md)
+- [Operations, backups, and updates](operations.md)
 - [Integrations](integrations.md)
 - [Contribute and develop](development.md)
 - [Translate the interface](translating.md)
