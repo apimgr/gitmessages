@@ -26,7 +26,7 @@ chmod 755 gitmessages-linux-amd64 gitmessages-cli-linux-amd64
 
 Use the asset matching your platform and architecture in place of the Linux amd64 names above. On Windows, run the `.exe` file from PowerShell. The first run saves an available host port in the 64000–64999 range; containers default to port 80. `--port`, `--address`, `--config`, and `--mode` select settings for the current run. Put public deployments behind a TLS-terminating reverse proxy and configure its trusted proxy addresses.
 
-The CLI desktop GUI is available on Linux, macOS, and Windows when a local display is available. FreeBSD builds use the interactive terminal interface; automatic display mode falls back to the terminal when one is available.
+The default CLI is statically linked and uses the interactive terminal interface. Optional `gitmessages-cli-gui-{os}-{arch}` artifacts provide the desktop GUI on Linux, macOS, and Windows; they require the system loader used by the build toolchain and are not interchangeable with the static CLI. BSD builds use the terminal interface.
 
 Default configuration, data, cache, and log locations vary by operating system and whether the process runs as root. See [Configuration](configuration.md). `--config DIR` or `CONFIG_DIR` selects the configuration directory.
 

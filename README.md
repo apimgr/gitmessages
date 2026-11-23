@@ -21,7 +21,7 @@ Git Messages is a curated reference and builder for git commit message conventio
 - Contact and coordinated security-report pages
 - Internal Prometheus, Grafana, and Loki-compatible metrics endpoints
 - Companion `gitmessages-cli` for shell use
-- Interactive terminal interface and desktop GUI when `gitmessages-cli` starts without a command
+- Interactive terminal interface in the default static CLI; optional GUI builds for desktop platforms
 - First-run server connection flow and saved client profiles
 - Optional Tor v3 onion service and I2P eepsite support
 
@@ -62,7 +62,7 @@ The server supports `-h`/`--help`, `-v`/`--version`, `--port`, `--address`, `--c
 
 ## Client
 
-Install `gitmessages-cli` from the same release as the server. It supports command-line requests, an interactive terminal interface, and a desktop GUI on Linux, macOS, and Windows when a local display is available. FreeBSD builds use the terminal interface because GUI support is not available there. With no configured server, the interactive interface provides a first-run connection flow. Select `display.mode` as `auto`, `gui`, or `tui` in `cli.yml`.
+Install `gitmessages-cli` from the same release as the server. The default CLI is a static command-line and terminal interface; with no configured server, it provides a first-run connection flow. Optional `gitmessages-cli-gui-{os}-{arch}` release artifacts enable the native desktop GUI on Linux, macOS, and Windows and require the toolchain's system loader. BSD builds use the terminal interface. Select `display.mode` as `auto`, `gui`, or `tui` in `cli.yml`; without the optional GUI build, automatic mode selects the TUI when a terminal is available.
 
 The CLI uses `--server`, `GITMESSAGES_SERVER_PRIMARY`, or its user configuration at `~/.config/apimgr/gitmessages/cli.yml`.
 

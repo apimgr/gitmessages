@@ -365,7 +365,7 @@ I2P settings are under `server.i2p`:
 
 The CLI stores `cli.yml` and profile files in the platform user configuration directory under `apimgr/gitmessages`. Select a profile with `--config`. Files are created with owner-only permissions. The server selection order is `--server`, `GITMESSAGES_SERVER_PRIMARY`, then `server.primary`. A valid `--server` argument is saved only when no valid server is already configured.
 
-The CLI config supports `language`, `display.mode` (`auto`, `gui`, or `tui`), `server.primary`, and the discovered `server.api_version`. The CLI queries `/api/autodiscover` on startup and records the server's active API version before using versioned routes. An explicit `--lang` applies to the current invocation; otherwise language selection uses the config and system locale. GUI mode is available on Linux, macOS, and Windows when a local display is available. FreeBSD builds use the terminal interface; automatic mode selects it when a terminal is available.
+The CLI config supports `language`, `display.mode` (`auto`, `gui`, or `tui`), `server.primary`, and the discovered `server.api_version`. The CLI queries `/api/autodiscover` on startup and records the server's active API version before using versioned routes. An explicit `--lang` applies to the current invocation; otherwise language selection uses the config and system locale. The default static CLI uses the TUI; optional `gitmessages-cli-gui-{os}-{arch}` builds enable GUI mode on Linux, macOS, and Windows. BSD builds use the terminal interface.
 
 ## Contact CAPTCHA behavior
 

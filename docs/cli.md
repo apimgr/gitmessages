@@ -60,7 +60,7 @@ No official server URL is built into the release. Supply `--server`, set `GITMES
 
 Build options are `--type`, `--scope`, `--description`, `--body`, `--breaking`, and `--convention`. Supported conventions are `conventional-commits` and `angular`. `--help` and `--version` exit immediately.
 
-With no command, the CLI chooses the desktop GUI when a display is available and GUI support is built in; otherwise it opens the TUI when stdin and stdout are interactive. Set `display.mode` to `auto`, `gui`, or `tui` in `cli.yml` to override automatic selection. The TUI reflows when the terminal is resized and supports `↑`/`↓` or `j`/`k` navigation, `/` to filter actions, `?` for help, Enter to open an action, and `q` or Ctrl+C to exit. Page Up and Page Down scroll long results on small screens.
+The default CLI is built without GUI dependencies and opens the TUI when stdin and stdout are interactive. Optional `gitmessages-cli-gui-{os}-{arch}` builds include the native GUI for Linux, macOS, and Windows; those binaries require the system loader used by the build toolchain and are separate from the static CLI. Set `display.mode` to `auto`, `gui`, or `tui` in `cli.yml` to override automatic selection. Without GUI support, `auto` selects the TUI when a terminal is available; explicitly selecting `gui` reports that GUI support is unavailable. The TUI reflows when the terminal is resized and supports `↑`/`↓` or `j`/`k` navigation, `/` to filter actions, `?` for help, Enter to open an action, and `q` or Ctrl+C to exit. Page Up and Page Down scroll long results on small screens.
 
 Shell integration supports bash, zsh, fish, sh, dash, ksh, PowerShell, and pwsh. The optional shell argument is detected from `SHELL` or `ComSpec` when omitted.
 
