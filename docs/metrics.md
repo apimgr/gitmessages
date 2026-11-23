@@ -21,7 +21,7 @@ Database metrics use `gitmessages_db_queries_total{operation,table}`, `gitmessag
 
 Scheduler metrics use `gitmessages_scheduler_tasks_total{task,status}`, `gitmessages_scheduler_task_duration_seconds{task}`, `gitmessages_scheduler_tasks_running{task}`, and `gitmessages_scheduler_last_run_timestamp{task}`. Status is `success` or `error`; task labels are built-in scheduler task IDs.
 
-The business metric `gitmessages_commit_message_builds_total` counts successful stateless message builds from the browser and API. The Grafana dashboard includes HTTP, database, scheduler, system, and message-build panels. Its cache panel explains that this service has no cache subsystem, so cache metrics do not apply.
+The business metric `gitmessages_commit_message_builds_total` counts successful stateless message builds from the browser and API. The rate-limit counter backend exports `gitmessages_cache_hits_total`, `gitmessages_cache_misses_total`, `gitmessages_cache_evictions_total`, `gitmessages_cache_size`, and `gitmessages_cache_bytes`, each labelled with the bounded cache purpose (`rate_limit`). Item and byte gauges are process-local estimates, including for the in-memory backend. The Grafana dashboard includes HTTP, database, cache, scheduler, system, and message-build panels.
 
 ## Configuration
 
