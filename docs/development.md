@@ -11,6 +11,12 @@ make build
 make test
 ```
 
+The CI lint gate runs `go vet` and `staticcheck` in the same Go toolchain container. To run it locally:
+
+```sh
+docker run --rm -v "$PWD:/app" -w /app casjaysdev/go:latest sh -c 'go vet ./... && staticcheck ./...'
+```
+
 ## Binary integration checks
 
 The `make test` target is the Phase 1 commit gate for source-level Go tests. Phase 2 checks are manual and run compiled binaries inside isolated containers. They build from a temporary source copy and clean up their containers and temporary files on exit; E2E preserves redacted failure artifacts in a project-scoped temporary directory.

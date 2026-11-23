@@ -60,8 +60,8 @@ The server defaults to API version `v1`. Operators may change `server.api_versio
 | `/api/metrics[/{service}]` | Direct alias for the versioned metrics handlers; each service requires its Bearer token. |
 | `/metrics[/{service}]` | Root metrics aliases; enabled by default when metrics are enabled, and each service requires its Bearer token. |
 | `/healthz` | Optional direct alias for `/server/healthz`; disabled by default and controlled by `server.healthz.root.enabled`. |
-| `/server/docs/swagger` | Browser interface for the REST/OpenAPI reference. |
-| `/server/docs/graphql` | Browser GraphQL query form. |
+| `/server/docs/swagger` | Interactive REST explorer. JavaScript loads the versioned OpenAPI document; without JavaScript, follow the link to the JSON specification. |
+| `/server/docs/graphql` | GraphQL query playground. The server-rendered POST form works without JavaScript; JavaScript enhances response display. |
 | `/server/help/mcp` | Browser MCP connection guide. |
 
 Metrics can also be reached through `/server/metrics[/{service}]` and the versioned `/api/{api_version}/server/metrics[/{service}]` routes. See [Metrics](metrics.md) for service names and token configuration.
@@ -107,7 +107,9 @@ Provide `variables.input` with the same fields as the REST builder request.
 
 ## OpenAPI
 
-OpenAPI JSON is available at `/api/{api_version}/server/swagger` and its direct alias `/api/swagger`; descriptions follow the request language. The browser reference is `/server/docs/swagger`.
+OpenAPI JSON is available at `/api/{api_version}/server/swagger` and its direct alias `/api/swagger`; descriptions follow the request language. The browser reference at `/server/docs/swagger` loads the spec from the same origin and provides a Try it control for each operation. It supports Bearer-token entry for protected operations, never saves the token, and runs requests against the server URL in the spec. Without JavaScript, the page links directly to the JSON document.
+
+The GraphQL playground at `/server/docs/graphql` submits queries to `/api/{api_version}/server/graphql`. Its HTML form is usable without JavaScript; JavaScript only enhances response rendering. The direct `/api/graphql` alias remains available to clients.
 
 ## Model Context Protocol
 

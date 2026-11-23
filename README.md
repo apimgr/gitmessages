@@ -113,8 +113,8 @@ The active API version is available from `GET /api/autodiscover` (default `v1`).
 - `/server/preferences/tokens` — anonymous owner token management
 - `/server/preferences/sync` — export and import browser preferences between devices
 - `/server/metrics[/{service}]` — internal service metrics, protected by per-service Bearer tokens
-- `/server/docs/swagger` — REST API reference
-- `/server/docs/graphql` — GraphQL query guide
+- `/server/docs/swagger` — interactive REST API explorer with an OpenAPI JSON link
+- `/server/docs/graphql` — server-rendered GraphQL playground form
 - `/server/help/mcp` — MCP connection guide for the public catalog and stateless message builder
 - `/robots.txt` and `/sitemap.xml` — crawler rules and public HTML page discovery
 - `/feed.xml` (Atom) and `/rss.xml` (RSS) — valid empty feeds; the product has no public item resource
