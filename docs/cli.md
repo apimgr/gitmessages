@@ -13,7 +13,26 @@ gitmessages --maintenance -h
 gitmessages --update help
 ```
 
-The server also accepts `--service {start|stop|restart|reload|status|--install|--uninstall|--disable}` and `--maintenance {backup|restore|update|mode|setup|token}`. Update commands are `--update [check|yes|branch {stable|beta|devel}]`.
+The server also accepts `--service {start|stop|restart|reload|status|--install|--uninstall|--disable}` and `--maintenance {backup|restore|update|mode|setup|token|data|compliance}`. Update commands are `--update [check|yes|branch {stable|beta|devel}]`.
+
+Email commands validate or send operator email using the configured SMTP relay. `email test --dry-run` previews and validates every embedded or overridden template without sending. `email test` sends the test template to `server.notifications.email.reply_to`; `--to ADDRESS` selects a one-off recipient. A real test send requires a working SMTP relay.
+
+```sh
+gitmessages email test --dry-run
+gitmessages email test --to operator@example.com
+```
+
+Maintenance commands that read or change owner or compliance data require root or the operator token from `server.token`. Token prefixes can be found with `--maintenance token list`.
+
+```sh
+gitmessages --maintenance data export --owner own_XXXXXXXX
+gitmessages --maintenance data export --owner own_XXXXXXXX --output ./owner-export.json
+gitmessages --maintenance data delete --owner own_XXXXXXXX
+gitmessages --maintenance data delete --owner own_XXXXXXXX --yes
+gitmessages --maintenance compliance report
+```
+
+Owner exports contain the owner timestamps, token metadata, and owned resources; they never include token values, token hashes, or audit/security log lines. The default export is created in the current directory with mode `0600`; use `--output -` to write JSON to stdout. Owner deletion asks for the owner ID unless `--yes` is provided. The compliance report shows configured standards, retention settings, aggregate counts, recent compliance-event counts, and the last backup time.
 
 `--lang CODE` selects the default interface language for requests served by this process. A request's supported `?lang=`, language cookie, and `Accept-Language` preference take precedence over the configured process default. `--color no` sets `NO_COLOR`; `--color yes` clears it.
 

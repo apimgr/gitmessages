@@ -76,6 +76,19 @@ Area names are conventions; the loader accepts supported settings in any merged 
 | `server.logs.access_format` | Access log format; defaults to `apache`. |
 | `server.logs.level` | Log level; defaults to `info`. |
 
+## Internationalization
+
+Configure the server's default content language and enabled browser-language choices under `server.i18n`:
+
+```yaml
+server:
+  i18n:
+    default_language: en
+    available_languages: [en, es, fr, de, it, ar]
+```
+
+The embedded locale registry includes English, Spanish, French, German, Italian, Arabic, Chinese, and Japanese. Unsupported configured languages are discarded; operator email uses `default_language` because it has no request-language context.
+
 ## Security feeds and GeoIP
 
 Security and GeoIP settings are stored in the security configuration area. The public catalog is independent of these operational datasets.
@@ -118,7 +131,7 @@ Built-in task IDs and default schedules follow the AI.md scheduler specification
 
 ## Backup and restore settings
 
-Backup policy is stored in `yaml.d/maintenance.yml`; compliance settings are stored with privacy configuration. The backup encryption password belongs only in `secrets.yml`.
+Backup policy is stored in `yaml.d/maintenance.yml`; compliance settings are stored in `yaml.d/privacy.yml` under the `server.compliance.*` keys. The backup encryption password belongs only in `secrets.yml`.
 
 | YAML key | Default | Behavior |
 |---|---:|---|
@@ -135,7 +148,19 @@ Backup policy is stored in `yaml.d/maintenance.yml`; compliance settings are sto
 | `server.restore.max_files` | `10000` | Maximum number of archive entries. |
 | `server.restore.max_file_size` | `512M` | Maximum size of one extracted file. |
 | `server.restore.max_ratio` | `100` | Maximum expanded-to-compressed size ratio. |
-| `server.compliance.enabled` | `false` | Requires encrypted backups when enabled. |
+| `server.compliance.gdpr` | `false` | Enables GDPR-specific compliance behavior; any enabled standard requires encrypted backups. |
+| `server.compliance.ccpa` | `false` | Enables CCPA-specific compliance behavior. |
+| `server.compliance.hipaa` | `false` | Enables HIPAA-specific compliance behavior. |
+| `server.compliance.soc2` | `false` | Enables SOC 2-specific compliance behavior. |
+| `server.compliance.pci_dss` | `false` | Enables PCI DSS-specific compliance behavior. |
+| `server.compliance.iso27001` | `false` | Enables ISO 27001-specific compliance behavior. |
+| `server.compliance.fedramp` | `false` | Enables FedRAMP-specific compliance behavior. |
+| `server.compliance.lgpd` | `false` | Enables LGPD-specific compliance behavior. |
+| `server.compliance.pipeda` | `false` | Enables PIPEDA-specific compliance behavior. |
+| `server.compliance.appi` | `false` | Enables APPI-specific compliance behavior. |
+| `server.compliance.pdpa` | `false` | Enables PDPA-specific compliance behavior. |
+
+All standards are disabled by default and configured independently. If any is enabled, backups require `server.backup.encryption_password` in `secrets.yml`. Run `gitmessages --maintenance compliance report` for aggregate compliance status and `gitmessages --maintenance data export|delete --owner <token-prefix>` for owner data requests.
 
 ## Web and browser settings
 
@@ -150,7 +175,48 @@ Backup policy is stored in `yaml.d/maintenance.yml`; compliance settings are sto
 | `web.security.report_url` | External security report destination. |
 | `web.security.publish_pgp_key` | Whether the configured public PGP key is published at `/.well-known/pgp-key.asc`. |
 
-The server generates `/.well-known/security.txt`, `/.well-known/llms.txt`, and `/llms.txt`. See [Security](security.md) and [Integrations](integrations.md) for public discovery and reporting behavior. These generated endpoints use request-specific URLs; configure the proxy trust list before forwarding external host, scheme, port, or prefix headers.
+`robots.txt` rules must start with `/`; invalid and duplicate rules are ignored. When no valid allow rule remains, `/` is allowed. Deny rules take precedence over allow rules, and the sitemap uses the same rules when selecting pages. Defaults allow `/` and `/api`, and deny `/debug`.
+
+| YAML key | Default | Behavior |
+|---|---:|---|
+| `server.seo.sitemap.max_urls` | `50000` | Maximum sitemap URLs; values outside 1–50000 use 50000. |
+| `server.seo.sitemap.include_images` | `false` | Accepted setting; currently has no effect because the sitemap contains page URLs only. |
+| `server.seo.feed.max_items` | `50` | Accepted setting; currently has no effect because Git Messages has no public item resource and both feeds are empty. |
+| `server.seo.feed.title` | empty | Optional feed title; defaults to `server.branding.title`, then `gitmessages`. |
+
+The server always serves `/robots.txt`, `/sitemap.xml`, `/feed.xml` (Atom), and `/rss.xml` (RSS). The sitemap contains only the configured public HTML page list and omits any page denied by the crawler rules; it never lists API routes, feeds, or `/server/contact`. Feed pages are valid but empty because the product has no public per-item pages and creation timestamps. Feed responses have five-minute public caching and ETag/Last-Modified validators. `robots.txt` and sitemap/feed URLs are generated for the current request host and scheme, so configure trusted proxies before forwarding external host, scheme, port, or prefix headers. See [Browser application](browser.md) and [Integrations](integrations.md) for route behavior.
+
+The server also generates `/.well-known/security.txt`, `/.well-known/llms.txt`, and `/llms.txt`. See [Security](security.md) and [Integrations](integrations.md) for public discovery and reporting behavior.
+
+### Branding and page metadata
+
+Branding and SEO settings belong in `{config_dir}/yaml.d/branding.yml`; the dotted keys below remain under `server.branding` and `server.seo` in the merged configuration.
+
+| YAML key | Default | Behavior |
+|---|---|---|
+| `server.branding.title` | `Git Messages` | Site name used in page titles, the header, email sender name, manifest, API discovery, and OpenAPI title. |
+| `server.branding.tagline` | empty | Homepage hero text and fallback page description. |
+| `server.branding.description` | empty | Site description used in page metadata; falls back to tagline, localized about text, then `gitmessages`. |
+| `server.branding.logo` | empty | Header logo. Accepts an HTTPS URL, supported image data URI, or a filename under `{config_dir}/assets/`; invalid or unavailable sources use the embedded logo. |
+| `server.branding.favicon` | empty | Browser favicon. Accepts an HTTPS URL, supported image data URI, or a filename under `{config_dir}/assets/`; invalid or unavailable sources use the embedded icon. |
+| `server.seo.keywords` | `[]` | Values joined into the keywords meta tag. |
+| `server.seo.author` | empty | Emits an author meta tag when set. |
+| `server.seo.og_image` | empty | OpenGraph and Twitter image. Accepts an HTTPS URL, supported image data URI, or a filename under `{config_dir}/assets/`; invalid or unavailable sources use the embedded image. |
+| `server.seo.twitter_handle` | empty | Twitter site attribution. |
+| `server.seo.title_separator` | ` - ` | Separator between the page title and tagline; an empty tagline falls back to the site title, empty separators use the default, and values longer than 8 characters are ignored. |
+| `server.seo.meta_tags` | `{}` | Extra name/content meta tags, sorted by name and capped at 20 emitted entries. |
+| `server.seo.canonical` | empty | Optional HTTPS canonical base URL; the current request path is appended. Empty or invalid values use the request-specific public URL. |
+| `server.seo.noindex` | `false` | Marks every route `noindex,nofollow` in HTML metadata and the `X-Robots-Tag` response header. The sitemap and feeds remain served. |
+| `server.seo.opengraph.enabled` | `true` | Enables OpenGraph tags. |
+| `server.seo.opengraph.type` | `website` | OpenGraph type. |
+| `server.seo.opengraph.site_name` | empty | OpenGraph site name; defaults to `server.branding.title`. |
+| `server.seo.twitter.enabled` | `true` | Enables Twitter card tags. |
+| `server.seo.twitter.card` | `summary_large_image` | `summary` or `summary_large_image`; unsupported values use `summary_large_image`. |
+| `server.seo.twitter.creator` | empty | Twitter creator attribution. |
+
+The page title combines the route title and tagline with `title_separator`; when the tagline is empty, the site title is used, and a repeated title is not duplicated. The canonical link and `og:url` use the configured HTTPS base plus the request path, or the resolved request URL when unset. Configured image files must be regular files directly in the private `assets/` directory, use `.svg`, `.png`, `.ico`, `.webp`, or `.jpg`, and stay under 2 MiB. Image data URIs are limited to 256 KiB and PNG, JPEG, WebP, ICO, or SVG. Remote images require HTTPS, a public destination address, and an allowed image content type; downloads are limited to 10 MiB and cached for up to 24 hours under the config cache directory. OpenGraph and Twitter tags are omitted when their respective `enabled` setting is false. The standard site-verification settings are `server.seo.verification.google`, `.bing`, `.yandex`, `.baidu`, `.pinterest`, and `.facebook`; invalid codes are omitted. Google accepts up to 43 letters, digits, `_` or `-`; Bing accepts up to 32 uppercase hexadecimal characters; Yandex and Pinterest accept up to 32 lowercase hexadecimal characters; Baidu accepts up to 32 letters or digits; Facebook accepts up to 64 lowercase letters or digits.
+
+`server.seo.meta_tags` accepts keys matching `[a-z0-9:_.-]+` and non-empty values up to 256 characters. Built-in names `description`, `keywords`, `author`, `robots`, and `viewport` are ignored to prevent duplicate or conflicting tags. For `server.seo.verification.custom`, each item must contain exactly one of `name` or `property` plus non-empty `content` of at most 256 characters; names/properties may contain letters, digits, `_`, `:`, and `-`. Values are HTML-escaped before rendering. The `robots` directive defaults to `index,follow` only for public HTML pages; other routes default to `noindex,nofollow` and receive `X-Robots-Tag: noindex, nofollow`.
 
 ## Metrics
 
@@ -227,6 +293,10 @@ Email settings use `server.notifications.email`:
 | `server.notifications.email.smtp.tls` | `auto`, `starttls`, `tls`, or `none`; defaults to `auto`. |
 | `server.notifications.email.from.name` | Sender display name. |
 | `server.notifications.email.from.email` | Sender email address. |
+| `server.notifications.email.reply_to` | Optional RFC email address used as Reply-To and the default recipient for `gitmessages email test`; invalid values are warned about and cleared. Provide `--to ADDRESS` to override the test recipient. |
+| `server.notifications.email.events.*` | Per-event operator email switches; event names include `startup`, `shutdown`, `backup_complete`, `backup_failed`, `ssl_expiring`, `ssl_renewed`, `ssl_renewal_failed`, `security_alert`, `scheduler_error`, `update_available`, `update_installed`, `update_failed`, and `update_staged`. |
+
+Operator email language uses `server.i18n.default_language`. The supported runtime locale registry also includes `zh` and `ja`; if the configured default is unavailable, rendering falls back to English. Email templates live in `{config_dir}/template/email/`, override embedded templates by filename, and reload on each render.
 
 SMTP environment overrides are `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_TLS`, `SMTP_FROM_NAME`, and `SMTP_FROM_EMAIL`. A configured host is checked with an SMTP greeting at startup and on reload; an unavailable relay disables email until the next check. When `smtp.host` is empty and `SMTP_HOST` is unset, startup probes `127.0.0.1`, `172.17.0.1`, the default gateway, the server FQDN, a global IPv4 address, `mail.{fqdn}`, and `smtp.{fqdn}` in that order, using ports 25, 465, then 587 for each host. The first working relay is saved to `yaml.d/notifications.yml`. If no relay answers, email remains disabled and the server continues.
 

@@ -58,7 +58,7 @@ gitmessages --port 8080 --address 127.0.0.1
 
 Open `http://127.0.0.1:8080/`. The application uses a read-only embedded catalog and has no operator web panel. Server settings are read from `server.yml` in the configuration directory selected by `--config` or `CONFIG_DIR`.
 
-The server supports `-h`/`--help`, `-v`/`--version`, `--port`, `--address`, `--config`, `--mode`, `--update`, `--service`, `--maintenance`, `--debug`, `--color auto|yes|no`, `--lang CODE`, and shell completions/init with `--shell`. Server settings are documented in the [configuration reference](docs/configuration.md).
+The server supports `-h`/`--help`, `-v`/`--version`, `--port`, `--address`, `--config`, `--mode`, `--update`, `--service`, `--maintenance`, `--debug`, `--color auto|yes|no`, `--lang CODE`, shell completions/init with `--shell`, and `email test` commands. Use `gitmessages email test --dry-run` to preview and validate templates, or `gitmessages email test --to ADDRESS` to send a test message through the configured SMTP relay. Server settings are documented in the [configuration reference](docs/configuration.md).
 
 ## Client
 
@@ -115,10 +115,12 @@ The active API version is available from `GET /api/autodiscover` (default `v1`).
 - `/server/docs/swagger` — REST API reference
 - `/server/docs/graphql` — GraphQL query guide
 - `/server/help/mcp` — MCP connection guide for the public catalog and stateless message builder
+- `/robots.txt` and `/sitemap.xml` — crawler rules and public HTML page discovery
+- `/feed.xml` (Atom) and `/rss.xml` (RSS) — valid empty feeds; the product has no public item resource
 
 ## Security and privacy
 
-The catalog is embedded and user-submitted commit messages or conventions are not accepted. Contact and security reports follow the configured validation, encryption, access, and retention rules. Builder fields are validated on the server. Public endpoints include security headers, CORS, request size limits, and per-client rate limiting. Tor and I2P provide alternate access; the service does not query third-party content or data providers. Tor starts when its binary is available. I2P is opt-in on bare metal and in VMs and enabled by default in containers.
+The catalog is embedded and user-submitted commit messages or conventions are not accepted. Contact and security reports follow the configured validation, encryption, access, and retention rules. Builder fields are validated on the server. Public endpoints include security headers, CORS, request size limits, and per-client rate limiting. Tor and I2P provide alternate access. The service does not query third-party providers for catalog or message data; it can fetch operational security and GeoIP datasets from configured sources. Tor starts when its binary is available. I2P is opt-in on bare metal and in VMs and enabled by default in containers.
 
 ## Development
 
