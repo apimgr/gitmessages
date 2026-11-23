@@ -3,6 +3,7 @@
 [![Release](https://img.shields.io/github/v/release/apimgr/gitmessages)](https://github.com/apimgr/gitmessages/releases)
 [![License](https://img.shields.io/github/license/apimgr/gitmessages)](LICENSE.md)
 [![CI](https://github.com/apimgr/gitmessages/actions/workflows/ci.yml/badge.svg)](https://github.com/apimgr/gitmessages/actions/workflows/ci.yml)
+[![Documentation Status](https://readthedocs.org/projects/apimgr-gitmessages/badge/?version=latest)](https://apimgr-gitmessages.readthedocs.io/en/latest/?badge=latest)
 
 ## About
 

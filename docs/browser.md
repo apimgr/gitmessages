@@ -1,6 +1,8 @@
 # Browser application
 
-The site uses server-rendered HTML and remains usable without JavaScript. Pages are responsive, support auto, light, and dark themes, and provide eight embedded languages: English, Spanish, French, German, Italian, Arabic, Chinese, and Japanese. Dark is the default theme. The theme and language preferences are stored in one-year, same-site cookies; they are not HTTP-only. The `auto` theme follows the operating system preference. Choose a language in Preferences or with `?lang=CODE`; without a saved selection, the site negotiates the browser's `Accept-Language` header and falls back to English. Arabic pages use right-to-left layout. Locale JSON is served from the same embedded files at `/locales/{lang}.json`.
+The site uses server-rendered HTML and remains usable without JavaScript. Pages are responsive, support auto, light, and dark themes, and provide eight embedded languages: English, Spanish, French, German, Italian, Arabic, Chinese, and Japanese. Dark is the default theme. The header theme form cycles dark → light → auto → dark and saves the choice in a one-year, same-site cookie. The `auto` theme follows the operating system preference. Theme and language cookies are readable by the server and are not HTTP-only. Choose a language in Preferences or with `?lang=CODE`; without a saved selection, the site negotiates the browser's `Accept-Language` header and falls back to English. Arabic pages use right-to-left layout. Locale JSON is served from the same embedded files at `/locales/{lang}.json`.
+
+On small screens, the hamburger opens a slide-in navigation drawer. The checkbox, drawer, close control, and scrim work without JavaScript; the Preferences link and theme toggle stay in the header. The drawer follows the page direction, so it opens from the inline end in both left-to-right and right-to-left locales.
 
 - `/` introduces the product.
 - `/types` lists all supported commit types and examples.

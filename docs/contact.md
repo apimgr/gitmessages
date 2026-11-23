@@ -13,6 +13,7 @@ Security reports receive a tracking ID even when SMTP is unavailable. When a pro
 - `GET /server/contact` renders the type chooser and report forms; `POST` handles review and confirmation.
 - `GET, POST /api/{api_version}/server/contact` exposes the same token, CAPTCHA, review, and confirmation flow.
 - `/server/security`, `/server/security/policy`, `/server/security/thanks`, `/server/security/report/{id}`, and `/server/dpo` provide the public security, disclosure, status, and privacy-contact pages.
+- The acknowledgments page lists researchers who opted into public credit. Its table has a localized empty state and links to the disclosure policy when no entries are published.
 - `/api/{api_version}/server/security`, `/api/{api_version}/server/security/policy`, `/api/{api_version}/server/security/thanks`, and `/api/{api_version}/server/dpo` mirror their public metadata.
 - `/.well-known/security.txt` publishes reporting channels and policy links. `/.well-known/pgp-key.asc` serves the public encryption key when publication is enabled.
 - `/.well-known/llms.txt` and `/llms.txt` publish the service's public route discovery for automated clients. Well-known files support unauthenticated `GET` and `HEAD` requests.

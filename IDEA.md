@@ -100,7 +100,6 @@ No third-party content providers supply catalog or message data. AI.md-required 
 ### Security decisions & exceptions
 
 - **Public catalog access**: intentional. The curated reference remains publicly readable; protected operations follow AI.md.
-- **All responses include `Access-Control-Allow-Origin: *`**: intentional. Public data API designed for cross-origin browser use.
 
 ### API routes
 
