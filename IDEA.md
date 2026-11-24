@@ -30,7 +30,7 @@ owner_token: gitmessages_owner_token_7gT2qA
 - Alternate public access over a Tor v3 hidden service when Tor is available, with optional I2P eepsite access according to the shared server specification
 - CLI client (`gitmessages-cli`) for command-line and shell-pipeline use, with an interactive terminal interface, a desktop GUI on Linux/macOS/Windows when a local display is available, and a first-run server connection flow; FreeBSD uses the terminal interface: `git commit -m "$(gitmessages-cli random)"`
 - OpenAPI/Swagger docs at `/api/{api_version}/server/swagger`, with a same-origin interactive REST explorer at `/server/docs/swagger` and a no-JavaScript OpenAPI JSON link
-- GraphQL POST endpoints at `/api/{api_version}/server/graphql` and `/api/graphql`, with a server-rendered GraphQL playground form at `/server/docs/graphql`
+- GraphQL POST endpoints at `/api/{api_version}/server/graphql` and `/api/graphql`, with a GraphiQL UI at `/server/docs/graphql` with a no-JavaScript POST form
 - MCP over Streamable HTTP at `/api/{api_version}/server/mcp`, with direct aliases `/api/mcp` and `/mcp`, exposing the API operations allowed to the caller's Bearer token; token management is never available as an MCP tool
 - Anonymous owner tokens for resource ownership and MCP access, without user accounts
 - Server contact and security-report forms required by the shared server specification; no submitted commit messages or community conventions are accepted

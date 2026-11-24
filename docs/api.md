@@ -61,7 +61,7 @@ The server defaults to API version `v1`. Operators may change `server.api_versio
 | `/metrics[/{service}]` | Root metrics aliases; enabled by default when metrics are enabled, and each service requires its Bearer token. |
 | `/healthz` | Optional direct alias for `/server/healthz`; disabled by default and controlled by `server.healthz.root.enabled`. |
 | `/server/docs/swagger` | Interactive REST explorer. JavaScript loads the versioned OpenAPI document; without JavaScript, follow the link to the JSON specification. |
-| `/server/docs/graphql` | GraphQL query playground. The server-rendered POST form works without JavaScript; JavaScript enhances response display. |
+| `/server/docs/graphql` | GraphiQL query explorer with a no-JavaScript POST form. |
 | `/server/help/mcp` | Browser MCP connection guide. |
 
 Metrics can also be reached through `/server/metrics[/{service}]` and the versioned `/api/{api_version}/server/metrics[/{service}]` routes. See [Metrics](metrics.md) for service names and token configuration.
@@ -85,7 +85,7 @@ The result is `feat(api): add message search`. Types must be in the catalog; des
 
 ## GraphQL
 
-GraphQL accepts POST requests at `/api/{api_version}/server/graphql` and its direct alias `/api/graphql`. The JSON API accepts a `query` and optional `variables`; the browser query form also supports a no-JavaScript URL-encoded POST. The removed root `/graphql` route is not served.
+GraphQL accepts POST requests at `/api/{api_version}/server/graphql` and its direct alias `/api/graphql`. The JSON API accepts a `query` and optional `variables`; the browser provides GraphiQL and a no-JavaScript URL-encoded POST form. The removed root `/graphql` route is not served.
 
 ```graphql
 query Catalog {
@@ -109,7 +109,7 @@ Provide `variables.input` with the same fields as the REST builder request.
 
 OpenAPI JSON is available at `/api/{api_version}/server/swagger` and its direct alias `/api/swagger`; descriptions follow the request language. The browser reference at `/server/docs/swagger` loads the spec from the same origin and provides a Try it control for each operation. It supports Bearer-token entry for protected operations, never saves the token, and runs requests against the server URL in the spec. Without JavaScript, the page links directly to the JSON document.
 
-The GraphQL playground at `/server/docs/graphql` submits queries to `/api/{api_version}/server/graphql`. Its HTML form is usable without JavaScript; JavaScript only enhances response rendering. The direct `/api/graphql` alias remains available to clients.
+The GraphiQL explorer at `/server/docs/graphql` submits queries to `/api/{api_version}/server/graphql`. A no-JavaScript form remains available, and the page links to the plain GraphQL endpoint. The direct `/api/graphql` alias remains available to clients.
 
 ## Model Context Protocol
 

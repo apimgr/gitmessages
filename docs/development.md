@@ -1,6 +1,6 @@
 # Development
 
-The source is organized under `src/`. Curated catalog data lives in `src/messages/data/` and is embedded into the binaries. The `src/web/` package serves the SSR site, REST API, and OpenAPI/PWA routes. `src/graphql/` defines the GraphQL schema and resolver. `src/client/` contains the companion CLI.
+The source is organized under `src/`. Curated catalog data lives in `src/messages/data/` and is embedded into the binaries. The `src/web/` package serves the SSR site, REST API, OpenAPI/PWA routes, and local documentation assets. `src/swagger/` builds OpenAPI output and serves Swagger UI assets; `src/graphql/` contains the GraphQL handler, schema, resolvers, and GraphiQL assets. `src/client/` contains the companion CLI.
 
 Use Docker-backed Make targets; do not install or invoke Go directly on the host:
 
