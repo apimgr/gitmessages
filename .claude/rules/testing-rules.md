@@ -12,6 +12,8 @@
 - Keep Go unit tests beside their source; run integration and browser E2E checks in isolated environments.
 - Document browser, CLI, API, config, security, integrations, and development surfaces.
 - Keep translations complete and in parity across binaries.
+- Run browser E2E on demand across SSR, JavaScript-disabled, and full-browser behavior; it must cover every IDEA.md feature and server page.
+- Keep MkDocs navigation synchronized with all actual user, operator, integration, and enabled discovery surfaces.
 
 ## Key rules
 

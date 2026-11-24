@@ -10,8 +10,10 @@
 ## CRITICAL - ALWAYS DO
 
 - Build static server and companion CLI binaries with matching release versions.
+- Ship the client for all projects; select GUI/TUI/CLI from display and terminal capability, with GUI artifacts separate from the default static client.
 - Respect the actual invoked binary name in help/version output; use `NO_COLOR` where color is added.
 - Keep public catalog clients unauthenticated; require Bearer tokens only on AI.md routes whose Auth rule requires them.
+- Support shell completions, resource-owner token flows, and client first-run server configuration as specified in PART 32.
 
 ## Key rules
 

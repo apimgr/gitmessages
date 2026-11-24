@@ -34,6 +34,8 @@ This software includes the following third-party libraries:
 | golang.org/x/sys | v0.39.0 | BSD-3-Clause | 2009 The Go Authors |
 | golang.org/x/text | v0.32.0 | BSD-3-Clause | 2009 The Go Authors |
 
+BSD-3-Clause: neither the names of the copyright holders nor the names of their contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
 Full license texts available at: https://spdx.org/licenses/
 
 ## GeoIP Data Sources

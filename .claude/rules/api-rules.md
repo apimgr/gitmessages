@@ -11,6 +11,7 @@
 
 - Use `/api/{api_version}` for canonical REST resources and the shared response/error envelope; clients discover the active value at `/api/autodiscover`.
 - Keep health, OpenAPI, and GraphQL public; recommend TLS termination for deployment.
+- Provide same-origin Swagger and GraphiQL pages with no-JavaScript alternatives, and keep Streamable HTTP MCP token-scoped with no token-management tools.
 
 ## Key rules
 

@@ -11,6 +11,8 @@
 
 - Use responsive server-rendered HTML, keyboard-visible focus, and high contrast themes.
 - Keep PWA caching same-origin, GET-only, and safe on network/cache failure.
+- Every page uses the shared shell, one page title, translated controls, visible focus, mobile-safe long strings, and complete light/dark/auto plus RTL layouts.
+- Exercise every server page, including token, preference-sync, DPO, and security pages, in browser E2E coverage.
 
 ## Key rules
 

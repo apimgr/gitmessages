@@ -11,6 +11,7 @@
 
 - Compile in a multi-stage container build and run through tini with a health check.
 - Keep Compose production, development, and test modes distinct.
+- Publish container ports on `172.17.0.1`; use `/config` and `/data` volumes, and keep persistent state aligned with each compose mode.
 
 ## Key rules
 

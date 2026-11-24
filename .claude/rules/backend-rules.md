@@ -11,6 +11,8 @@
 
 - Bound requests, validate inputs, rate-limit public surfaces, and use structured errors.
 - Keep the catalog embedded and handle failures safely.
+- Protect contact/security reports and owner-token state with configured encryption, retention, audit, and access rules; never persist the curated catalog.
+- Run Tor automatically when its binary is available; keep I2P opt-in outside containers and enabled by default in containers.
 
 ## Key rules
 

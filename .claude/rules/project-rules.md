@@ -11,6 +11,7 @@
 
 - Keep Go sources under `src/`, MkDocs content under `docs/`, and runtime config under the configured path.
 - Keep root `CLAUDE.md` and `AGENTS.md` loader contents synchronized.
+- Attribute every third-party dependency in `LICENSE.md`, keep its versions current, and include the BSD-3-Clause non-endorsement clause when applicable.
 
 ## Key rules
 

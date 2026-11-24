@@ -10,6 +10,8 @@
 
 - Treat the embedded catalog as immutable release data and document any future update path.
 - Expose only operational metrics that are safe for public viewing.
+- Keep metrics internal and per-service token-protected; do not expose metrics as unauthenticated MCP tools.
+- Back up applicable operational data with required encryption and integrity checks; never back up catalog submissions or user accounts.
 
 ## Key rules
 

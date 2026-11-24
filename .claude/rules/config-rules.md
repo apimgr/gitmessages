@@ -10,7 +10,9 @@
 ## CRITICAL - ALWAYS DO
 
 - Keep server settings in `server.yml`; document defaults and environment/flag precedence.
+- Treat `server.yml`, `yaml.d/`, `secrets.yml`, and `assets/` as watched inputs; persist generated secrets only in `secrets.yml`.
 - Apply safe production defaults and make development mode explicit.
+- Reload safe settings live and report restart-required changes for listener, TLS, database, daemonize, PID, and Tor configuration.
 
 ## Key rules
 

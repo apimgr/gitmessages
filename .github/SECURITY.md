@@ -16,8 +16,10 @@ reports to the GitHub origin repository.
 Include the affected version or commit, impact, reproduction steps, and a
 possible mitigation. The maintainers will acknowledge the report, investigate
 privately, coordinate a fix and release, and agree on a public disclosure date
-with the reporter. Please allow maintainers time to verify and address the
-report before disclosure.
+with the reporter. The target is to acknowledge reports within 48 hours and
+release a fix within 90 days, depending on severity and the time needed to
+validate a safe correction. Please allow maintainers time to verify and
+address the report before disclosure.
 
 The application exposes `/server/security`, `/.well-known/security.txt`, and
 `/server/contact?security_id=...` for deployed-instance security reporting.

@@ -11,6 +11,7 @@
 
 - Keep service templates platform-specific and use least privilege.
 - Ensure service lifecycle operations report failures clearly.
+- Create least-privilege service identities and paths before privilege drop; require authorization and typed confirmation for destructive maintenance actions.
 
 ## Key rules
 

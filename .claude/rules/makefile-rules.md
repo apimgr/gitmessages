@@ -11,6 +11,7 @@
 
 - Use the `casjaysdev/go:latest` container for all Go commands and mount module/build caches.
 - Keep the required targets focused on dev, local, build, test, release, docker, and clean.
+- Resolve project identity from IDEA.md first, then Git remote, then directory; use stable internal names for on-disk paths.
 
 ## Key rules
 
