@@ -1,6 +1,6 @@
 # Development
 
-The source is organized under `src/`. Curated catalog data lives in `src/messages/data/` and is embedded into the binaries. The `src/web/` package serves the SSR site, REST API, OpenAPI/PWA routes, and local documentation assets. `src/swagger/` builds OpenAPI output and serves Swagger UI assets; `src/graphql/` contains the GraphQL handler, schema, resolvers, and GraphiQL assets. `src/client/` contains the companion CLI.
+The source is organized under `src/`. Curated catalog data lives in `src/messages/data/` and is embedded into the binaries. The `src/web/` package serves the SSR site, REST API, OpenAPI/PWA routes, and the pinned browser assets under `src/web/static/vendor/` and startup scripts under `src/web/static/js/`. `src/swagger/` builds OpenAPI output and supplies its theme; `src/graphql/` contains the GraphQL handler, schema, resolvers, and GraphiQL theme. `src/client/` contains the companion CLI.
 
 Use Docker-backed Make targets; do not install or invoke Go directly on the host:
 
@@ -14,8 +14,10 @@ make test
 The CI lint gate runs `go vet` and `staticcheck` in the same Go toolchain container. To run it locally:
 
 ```sh
-docker run --rm --name "gitmessages-$(tr -dc 'a-z0-9' </dev/urandom | head -c8)" --no-healthcheck -v "$PWD:/app" -w /app casjaysdev/go:latest sh -c 'go vet ./... && staticcheck ./...'
+docker run --rm --name "gitmessages-$(od -An -N4 -tx4 /dev/urandom | tr -d '[:space:]')" --no-healthcheck -v "$PWD:/app" -w /app casjaysdev/go:latest sh -c 'go vet ./... && staticcheck ./...'
 ```
+
+OpenAPI supersets for all supported locales are generated from the route definitions in `src/web` into `src/swagger/assets/openapi-*.json`. The `make` build and test targets run `go generate ./src/swagger`; do not edit generated documents by hand.
 
 ## Binary integration checks
 
