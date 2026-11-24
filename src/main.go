@@ -1,18 +1,20 @@
 package main
 
 import (
-	"archive/tar"
 	"bufio"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
+	"crypto/tls"
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -24,8 +26,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/apimgr/gitmessages/src/auth"
+	"github.com/apimgr/gitmessages/src/cache"
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
@@ -34,7 +38,11 @@ import (
 	"github.com/apimgr/gitmessages/src/mode"
 	"github.com/apimgr/gitmessages/src/overlay"
 	"github.com/apimgr/gitmessages/src/paths"
+	"github.com/apimgr/gitmessages/src/privilege"
+	schedulerpkg "github.com/apimgr/gitmessages/src/scheduler"
+	"github.com/apimgr/gitmessages/src/securitydata"
 	servicepkg "github.com/apimgr/gitmessages/src/service"
+	"github.com/apimgr/gitmessages/src/ssl"
 	updatepkg "github.com/apimgr/gitmessages/src/update"
 	"github.com/apimgr/gitmessages/src/web"
 	"golang.org/x/term"
@@ -74,6 +82,74 @@ func (value *optionalUpdate) Set(argument string) error {
 
 func (*optionalUpdate) IsBoolFlag() bool { return true }
 
+func resolveDirectoryOverride(name, flagValue, environmentValue, fallback string) (string, error) {
+	value := fallback
+	if environmentValue != "" {
+		value = environmentValue
+	}
+	if flagValue != "" {
+		value = flagValue
+	}
+	safe, err := paths.SafeDirPath(value)
+	if err != nil {
+		return "", fmt.Errorf("invalid %s directory: %w", name, err)
+	}
+	absolute, err := filepath.Abs(safe)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s directory: %w", name, err)
+	}
+	return absolute, nil
+}
+
+type serverListener struct {
+	port int
+	tls  bool
+}
+
+func parseServerListeners(value string, sslEnabled bool) ([]serverListener, error) {
+	parts := strings.Split(value, ",")
+	if len(parts) > 2 || value == "" {
+		return nil, fmt.Errorf("expected one port or an HTTP,HTTPS pair")
+	}
+	listeners := make([]serverListener, 0, len(parts))
+	for index, part := range parts {
+		part = strings.TrimSpace(part)
+		port, err := strconv.Atoi(part)
+		if err != nil || port < 1 || port > 65535 {
+			return nil, fmt.Errorf("invalid server port %q", part)
+		}
+		useTLS := (len(parts) == 2 && index == 1) || (len(parts) == 1 && (port == 443 || sslEnabled))
+		listeners = append(listeners, serverListener{port: port, tls: useTLS})
+	}
+	return listeners, nil
+}
+
+func validateTLSChallenge(listeners []serverListener, letsEncrypt config.LetsEncryptConfig) error {
+	if !letsEncrypt.Enabled {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(letsEncrypt.Challenge)) {
+	case "", "http-01":
+		for _, listener := range listeners {
+			if listener.port == 80 && !listener.tls {
+				return nil
+			}
+		}
+		return fmt.Errorf("HTTP-01 requires a plain HTTP listener on port 80")
+	case "tls-alpn-01":
+		for _, listener := range listeners {
+			if listener.port == 443 && listener.tls {
+				return nil
+			}
+		}
+		return fmt.Errorf("TLS-ALPN-01 requires an HTTPS listener on port 443")
+	case "dns-01":
+		return nil
+	default:
+		return fmt.Errorf("unsupported ACME challenge type %q", letsEncrypt.Challenge)
+	}
+}
+
 func init() {
 	log.SetPrefix("gitmessages: ")
 	log.SetFlags(log.Lshortfile)
@@ -87,12 +163,19 @@ func main() {
 	// Flags
 	port := flag.String("port", "", "Server port (overrides config)")
 	address := flag.String("address", "", "Server address (overrides config)")
+	baseURLFlag := flag.String("baseurl", "", "URL path prefix (overrides config)")
 	configDirFlag := flag.String("config", "", "Configuration directory")
+	dataDirFlag := flag.String("data", "", "Data directory")
+	cacheDirFlag := flag.String("cache", "", "Cache directory")
+	logDirFlag := flag.String("log", "", "Log directory")
+	backupDirFlag := flag.String("backup", "", "Backup directory")
+	pidFileFlag := flag.String("pid", "", "PID file")
 	showVersion := flag.Bool("version", false, "Show version information")
 	flag.BoolVar(showVersion, "v", false, "Show version information")
 	showStatus := flag.Bool("status", false, "Check server status (for health checks)")
 	showHelp := flag.Bool("help", false, "Show help")
 	flag.BoolVar(showHelp, "h", false, "Show help")
+	daemonFlag := flag.Bool("daemon", false, "Run as a daemon")
 	debugFlag := flag.Bool("debug", false, "Enable debug logging")
 	colorFlag := flag.String("color", "auto", "Color output: auto, yes, no")
 	languageFlag := flag.String("lang", "", "Language for output")
@@ -107,8 +190,14 @@ func main() {
 	serviceCmd := flag.String("service", "", "Service commands: start, stop, restart, reload, status, --install, --uninstall, --disable")
 
 	// Maintenance commands
-	maintenanceCmd := flag.String("maintenance", "", "Maintenance commands: backup, restore, update, mode, setup, token")
+	maintenanceCmd := flag.String("maintenance", "", "Maintenance commands: backup, restore, update, mode, setup, pgp, secret, token, data, compliance")
+	includeSSLFlag := flag.Bool("include-ssl", false, "Include SSL files with --maintenance backup")
+	includeDataFlag := flag.Bool("include-data", false, "Include data files with --maintenance backup")
 	i2pFlag := flag.Bool("i2p", false, "Enable the I2P eepsite")
+	if name, ok := commandHelp(os.Args[1:], "shell", "service", "maintenance", "update"); ok {
+		printCommandHelp(name)
+		return
+	}
 
 	flag.Parse()
 	if updateCmd == "yes" && len(flag.Args()) > 0 {
@@ -116,6 +205,10 @@ func main() {
 		case "check", "yes", "branch":
 			updateCmd = optionalUpdate(flag.Args()[0])
 		}
+	}
+	if (*includeSSLFlag || *includeDataFlag) && *maintenanceCmd != "backup" {
+		fmt.Fprintln(os.Stderr, "--include-ssl and --include-data are only valid with --maintenance backup")
+		os.Exit(2)
 	}
 
 	if err := configureOutput(*colorFlag, *languageFlag); err != nil {
@@ -146,33 +239,241 @@ func main() {
 		return
 	}
 
-	// Override directories from flags
+	// Resolve directory overrides on every startup: flags take precedence over environment variables.
+	directoryOverrides := []struct {
+		name      string
+		flagValue string
+		envName   string
+		target    *string
+	}{
+		{name: "config", flagValue: *configDirFlag, envName: "CONFIG_DIR", target: &dirs.Config},
+		{name: "data", flagValue: *dataDirFlag, envName: "DATA_DIR", target: &dirs.Data},
+		{name: "cache", flagValue: *cacheDirFlag, envName: "CACHE_DIR", target: &dirs.Cache},
+		{name: "log", flagValue: *logDirFlag, envName: "LOG_DIR", target: &dirs.Logs},
+		{name: "backup", flagValue: *backupDirFlag, envName: "BACKUP_DIR", target: &dirs.Backup},
+		{name: "database", envName: "DATABASE_DIR", target: &dirs.Database},
+	}
+	for _, override := range directoryOverrides {
+		resolved, err := resolveDirectoryOverride(override.name, override.flagValue, os.Getenv(override.envName), *override.target)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(2)
+		}
+		*override.target = resolved
+	}
+	if *pidFileFlag != "" {
+		pidFile, err := paths.SafeDirPath(*pidFileFlag)
+		if err == nil {
+			pidFile, err = filepath.Abs(pidFile)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid --pid path: %v\n", err)
+			os.Exit(2)
+		}
+		dirs.PID = pidFile
+	}
 	configDir := dirs.Config
-	if *configDirFlag != "" {
-		configDir = *configDirFlag
+
+	if *showStatus {
+		checkPort := *port
+		if checkPort == "" {
+			checkPort = strings.TrimSpace(os.Getenv("PORT"))
+		}
+		if checkPort == "" {
+			checkPort, _, _ = config.EarlyServerSettings(filepath.Join(configDir, "server.yml"))
+		}
+		if checkPort == "" {
+			checkPort = "64000"
+		}
+		checkPort = strings.Split(checkPort, ",")[0]
+		checkBaseURL := *baseURLFlag
+		if checkBaseURL == "" {
+			checkBaseURL = config.EarlyBaseURL(filepath.Join(configDir, "server.yml"))
+		}
+		checkBaseURL, err := config.NormalizeBaseURL(checkBaseURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid --baseurl: %v\n", err)
+			os.Exit(2)
+		}
+		if err := checkHealth(checkPort, checkBaseURL); err != nil {
+			fmt.Fprintf(os.Stderr, "Health check failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("OK")
+		return
+	}
+	if *maintenanceCmd == "--help" {
+		fmt.Println("Usage: gitmessages --maintenance {backup|restore|update|mode|setup|token} [arguments]")
+		return
+	}
+	if updateCmd == "help" {
+		fmt.Println("Usage: gitmessages --update [check|yes|branch {stable|beta|devel}]")
+		return
 	}
 
-	// Override from environment
-	if envConfig := os.Getenv("CONFIG_DIR"); envConfig != "" && *configDirFlag == "" {
-		configDir = envConfig
+	// Service commands exit before normal startup creates paths or loads config.
+	if *serviceCmd != "" {
+		servicepkg.SetStartupPreparation(func() error {
+			_, err := prepareStartupDirectories(dirs)
+			return err
+		})
+		handleServiceCommand(*serviceCmd, configDir, dirs)
+		return
+	}
+	configPath := filepath.Join(configDir, "server.yml")
+	if *modeFlag != "" {
+		if err := paths.EnsureDirectories(dirs); err != nil {
+			fmt.Fprintf(os.Stderr, "prepare command directories: %v\n", err)
+			os.Exit(1)
+		}
+		setApplicationMode(*modeFlag, configPath)
+		return
+	}
+	if updateCmd != "" || *maintenanceCmd != "" {
+		if err := paths.EnsureDirectories(dirs); err != nil {
+			fmt.Fprintf(os.Stderr, "prepare command directories: %v\n", err)
+			os.Exit(1)
+		}
+		var err error
+		cfg, err = config.Load(configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load command configuration: %v\n", err)
+			os.Exit(1)
+		}
+		if updateCmd != "" {
+			handleUpdateCommand(string(updateCmd), cfg)
+			return
+		}
+		handleMaintenanceCommand(*maintenanceCmd, configDir, dirs.Data, dirs.Database, dirs.Logs, dirs.Backup, dirs.PID, cfg, *includeSSLFlag, *includeDataFlag)
+		return
+	}
+	if args := flag.Args(); len(args) > 0 && args[0] == "email" {
+		if err := paths.EnsureDirectories(dirs); err != nil {
+			fmt.Fprintf(os.Stderr, "prepare email command directories: %v\n", err)
+			os.Exit(1)
+		}
+		loaded, err := config.Load(configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load email command configuration: %v\n", err)
+			os.Exit(1)
+		}
+		dryRun := false
+		for _, arg := range args[1:] {
+			if arg == "--dry-run" {
+				dryRun = true
+				break
+			}
+		}
+		if !dryRun {
+			configureSMTP(loaded)
+		}
+		var store *database.Store
+		if !dryRun {
+			store, err = database.OpenConfigured(loaded.Server.Database, filepath.Join(dirs.Database, "server.db"), 2)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "open email audit database: %v\n", err)
+				os.Exit(1)
+			}
+			defer func() { _ = store.Close() }()
+		}
+		if err := runEmailCommand(args[1:], loaded, configDir, store, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
 	}
 
-	// Ensure directories exist
-	if err := paths.EnsureDirectories(dirs); err != nil {
-		log.Printf("Warning: Failed to create directories: %v", err)
+	startupIdentity, err := prepareStartupDirectories(dirs)
+	if err != nil {
+		log.Fatalf("prepare startup directories: %v", err)
+	}
+	earlyPort, earlyAddress, earlyDaemonize := config.EarlyServerSettings(configPath)
+	selectedEarlyPort := earlyPort
+	if envPort := strings.TrimSpace(os.Getenv("PORT")); envPort != "" {
+		selectedEarlyPort = envPort
+	}
+	if *port != "" {
+		selectedEarlyPort = *port
+	}
+	if selectedEarlyPort == "" {
+		selectedEarlyPort = config.DefaultConfig().Server.Port
+	}
+	selectedEarlyAddress := earlyAddress
+	if selectedEarlyAddress == "" {
+		selectedEarlyAddress = "[::]"
+	}
+	if envAddress := strings.TrimSpace(os.Getenv("LISTEN")); envAddress != "" {
+		selectedEarlyAddress = envAddress
+	}
+	if *address != "" {
+		selectedEarlyAddress = *address
+	}
+	if (*daemonFlag || earlyDaemonize) && *serviceCmd == "" && !paths.IsRunningInContainer() {
+		if err := daemonizeProcess(); err != nil {
+			log.Fatalf("daemonize server: %v", err)
+		}
+	}
+	selectedEarlyAddress = strings.Trim(selectedEarlyAddress, "[]")
+	if net.ParseIP(selectedEarlyAddress) == nil {
+		log.Fatalf("invalid server address %q: expected an IP address", selectedEarlyAddress)
+	}
+	privilegedListeners := make(map[int]net.Listener)
+	if selectedEarlyPort != "" && runtime.GOOS != "windows" {
+		parts := strings.Split(selectedEarlyPort, ",")
+		for _, part := range parts {
+			value, parseErr := strconv.Atoi(strings.TrimSpace(part))
+			if parseErr != nil || value < 1 || value > 65535 {
+				log.Fatalf("invalid server port %q: expected 1-65535", part)
+			}
+			if value < 1024 {
+				if !startupIdentity.system && !paths.IsRunningInContainer() {
+					log.Fatalf("port %d requires elevated privileges; use a port >= 1024 or install the service", value)
+				}
+				if !startupIdentity.system {
+					continue
+				}
+				listener, listenErr := net.Listen("tcp", net.JoinHostPort(selectedEarlyAddress, strconv.Itoa(value)))
+				if listenErr != nil {
+					log.Fatalf("bind privileged port %d: %v", value, listenErr)
+				}
+				privilegedListeners[value] = listener
+			}
+		}
+	}
+	if err := dropToServiceAccount(startupIdentity, dirs.Data); err != nil {
+		log.Fatalf("drop service privileges: %v", err)
+	}
+	pidMode := os.FileMode(0o600)
+	if startupIdentity.system {
+		pidMode = 0o644
+	}
+	if !paths.IsRunningInContainer() {
+		if err := paths.WritePIDFileMode(dirs.PID, pidMode); err != nil {
+			log.Fatalf("check and write PID file: %v", err)
+		}
+		defer func() {
+			if err := paths.RemovePIDFile(dirs.PID); err != nil {
+				log.Printf("remove PID file: %v", err)
+			}
+		}()
 	}
 
 	// Load configuration
-	configPath := filepath.Join(configDir, "server.yml")
-	var err error
 	cfg, err = config.Load(configPath)
 	if err != nil {
-		log.Printf("Warning: Failed to load config: %v, using defaults", err)
-		cfg = config.DefaultConfig()
+		log.Fatalf("load server configuration: %v", err)
 	}
 	if err := applyI2POverrides(cfg, *i2pFlag); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
+	}
+	if *baseURLFlag != "" {
+		baseURL, err := config.NormalizeBaseURL(*baseURLFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid --baseurl: %v\n", err)
+			os.Exit(2)
+		}
+		cfg.Server.BaseURL = baseURL
 	}
 	web.SetCORSOrigins(cfg.Server.CORS.AllowedOrigins)
 	web.SetServerFQDN(cfg.Server.FQDN)
@@ -187,47 +488,6 @@ func main() {
 		modeInfo += " [debugging]"
 	}
 	log.Printf("Running in mode: %s", modeInfo)
-
-	// Handle --status (health check)
-	if *showStatus {
-		checkPort := cfg.Server.Port
-		if *port != "" {
-			checkPort = *port
-		}
-		if checkPort == "" {
-			checkPort = config.DefaultConfig().Server.Port
-		}
-		if err := checkHealth(checkPort); err != nil {
-			fmt.Fprintf(os.Stderr, "Health check failed: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Println("OK")
-		os.Exit(0)
-	}
-
-	// Handle --mode
-	if *modeFlag != "" {
-		setApplicationMode(*modeFlag, configPath)
-		return
-	}
-
-	// Handle --update
-	if updateCmd != "" {
-		handleUpdateCommand(string(updateCmd), cfg)
-		return
-	}
-
-	// Handle service commands
-	if *serviceCmd != "" {
-		handleServiceCommand(*serviceCmd, configDir)
-		return
-	}
-
-	// Handle maintenance commands
-	if *maintenanceCmd != "" {
-		handleMaintenanceCommand(*maintenanceCmd, configDir, dirs.Data, dirs.Logs)
-		return
-	}
 
 	if len(flag.Args()) != 0 {
 		flag.Usage()
@@ -246,9 +506,13 @@ func main() {
 	if serverPort == "" {
 		serverPort = config.DefaultConfig().Server.Port
 	}
-	portNumber, portErr := strconv.Atoi(serverPort)
-	if portErr != nil || portNumber < 1 || portNumber > 65535 {
-		fmt.Fprintf(os.Stderr, "invalid server port %q: expected 1-65535\n", serverPort)
+	listeners, portErr := parseServerListeners(serverPort, cfg.Server.SSL.Enabled)
+	if portErr != nil {
+		fmt.Fprintf(os.Stderr, "invalid server port %q: %v\n", serverPort, portErr)
+		os.Exit(2)
+	}
+	if challengeErr := validateTLSChallenge(listeners, cfg.Server.SSL.LetsEncrypt); challengeErr != nil {
+		fmt.Fprintf(os.Stderr, "invalid server SSL configuration: %v\n", challengeErr)
 		os.Exit(2)
 	}
 
@@ -269,7 +533,10 @@ func main() {
 	}
 
 	// Build listen address
-	listen := net.JoinHostPort(strings.Trim(serverAddress, "[]"), serverPort)
+	listenAddresses := make([]string, 0, len(listeners))
+	for _, listener := range listeners {
+		listenAddresses = append(listenAddresses, net.JoinHostPort(strings.Trim(serverAddress, "[]"), strconv.Itoa(listener.port)))
+	}
 
 	// Log startup information
 	log.Printf("gitmessages %s (commit: %s, built: %s)", Version, CommitID, buildDate())
@@ -279,11 +546,45 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 
 	// Setup HTTP server
-	sharedDB, err := database.OpenSQLite(filepath.Join(dirs.Data, "db", "sqlite", "server.db"), 5)
+	sharedDB, err := database.OpenConfigured(cfg.Server.Database, filepath.Join(dirs.Database, "server.db"), 5)
 	if err != nil {
 		log.Fatalf("open application database: %v", err)
 	}
 	defer func() { _ = sharedDB.Close() }()
+	cacheCounter, err := cache.New(cfg.Server.Cache, configDir)
+	if err != nil {
+		log.Fatalf("configure rate limit cache: %v", err)
+	}
+	if cacheCounter != nil {
+		web.ConfigureRateLimitCache(cacheCounter)
+		defer func() {
+			web.ConfigureRateLimitCache(nil)
+			if err := cacheCounter.Close(); err != nil {
+				log.Printf("WARN cache.close_failed error=%q", err)
+			}
+		}()
+	}
+	securityDirectory, err := securityDataDirectory(cfg.Data.SecurityDir, dirs.Data)
+	if err != nil {
+		log.Fatalf("resolve security data directory: %v", err)
+	}
+	securityManager := securitydata.New(securityDirectory)
+	securityLogFile, err := os.OpenFile(filepath.Join(dirs.Logs, "app.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		log.Fatalf("open background task log: %v", err)
+	}
+	defer func() { _ = securityLogFile.Close() }()
+	securityLogger := log.New(securityLogFile, "", log.LstdFlags)
+	var geoIPReader *securitydata.GeoIP
+	if opened, openErr := securitydata.OpenGeoIP(filepath.Join(securityDirectory, "geoip")); openErr == nil {
+		geoIPReader = opened
+		defer func() { _ = opened.Close() }()
+	}
+	web.ConfigureSecurityData(securityManager, geoIPReader)
+	defer web.CloseSecurityData()
+	securityContext, cancelSecurity := context.WithCancel(context.Background())
+	defer cancelSecurity()
+	go initializeSecurityData(securityContext, securityManager, cfg, securityLogger)
 	if generated := config.ConsumeGeneratedSecrets(); len(generated) > 0 {
 		if err := sharedDB.Write(context.Background(), func(tx *sql.Tx) error {
 			for _, name := range generated {
@@ -302,18 +603,57 @@ func main() {
 	}
 	web.ConfigureAuth(authStore)
 	web.ConfigureContact(sharedDB)
-	cleanupContext, cancelCleanup := context.WithCancel(context.Background())
-	defer cancelCleanup()
-	go authStore.RunCleanup(cleanupContext)
 	mux := http.NewServeMux()
 	setupRoutes(mux)
+	web.ConfigureAuthMetrics(authStore)
+	web.ConfigureOwnerTokenMetrics(authStore)
+	web.ConfigureDatabaseMetrics(sharedDB)
+	sharedDB.SetBusyObserver(func(wait time.Duration, caller string) {
+		log.Printf("WARN db.busy wait_ms=%d caller=%s", wait.Milliseconds(), caller)
+		web.ObserveDatabaseBusy(wait)
+	})
 
-	server := &http.Server{
-		Addr:         listen,
-		Handler:      mux,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+	var tlsManager *ssl.Manager
+	var tlsConfig *tls.Config
+	for _, listener := range listeners {
+		if !listener.tls {
+			continue
+		}
+		fqdn := strings.TrimSpace(cfg.Server.FQDN)
+		if fqdn == "" {
+			fqdn = strings.TrimSpace(strings.Split(os.Getenv("DOMAIN"), ",")[0])
+		}
+		if fqdn == "" {
+			log.Fatalf("TLS requires server.fqdn or DOMAIN to be configured")
+		}
+		le := cfg.Server.SSL.LetsEncrypt
+		tlsManager = ssl.NewManager(ssl.Config{
+			Enabled: true, CertPath: filepath.Join(configDir, "ssl"),
+			Cert: cfg.Server.SSL.Cert, Key: cfg.Server.SSL.Key,
+			MinVersion:  cfg.Server.SSL.MinVersion,
+			LetsEncrypt: ssl.LetsEncryptConfig{Enabled: le.Enabled, Email: le.Email, Challenge: le.Challenge, Staging: le.Staging, DNSProvider: le.DNSProvider, DNSCredentials: le.DNSCredentials},
+		})
+		if le.Enabled && strings.EqualFold(strings.TrimSpace(le.Challenge), "dns-01") {
+			if err := tlsManager.ValidateDNSProvider(); err != nil {
+				log.Fatalf("validate DNS-01 provider: %v", err)
+			}
+		}
+		tlsConfig, err = tlsManager.GetTLSConfig([]string{fqdn})
+		if err != nil {
+			log.Fatalf("configure TLS: %v", err)
+		}
+		break
+	}
+	servers := make([]*http.Server, len(listeners))
+	for index, listener := range listeners {
+		handler := http.Handler(mux)
+		if tlsManager != nil && !listener.tls && listener.port == 80 {
+			handler = tlsManager.GetHTTPHandler(handler)
+		}
+		servers[index] = &http.Server{
+			Addr: listenAddresses[index], Handler: handler,
+			ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
+		}
 	}
 	torManager := overlay.NewTorManager(configDir, dirs.Data, dirs.Logs, cfg.Server.Tor, mux)
 	if err := torManager.Start(); err != nil {
@@ -321,6 +661,13 @@ func main() {
 	}
 	i2pManager := overlay.NewI2PManager(configDir, dirs.Data, dirs.Logs, cfg.Server.I2P, mux)
 	i2pManager.Start()
+	backgroundScheduler, err := newApplicationScheduler(sharedDB, securityManager, authStore, cfg, dirs, securityLogger, tlsManager, torManager, i2pManager)
+	if err != nil {
+		log.Fatalf("initialize scheduler: %v", err)
+	}
+	web.ConfigureSchedulerMetrics(backgroundScheduler)
+	backgroundScheduler.Start()
+	defer backgroundScheduler.Stop()
 	web.SetOverlayStatus(func() map[string]any {
 		return map[string]any{"tor": torManager.Status(), "i2p": i2pManager.Status()}
 	})
@@ -333,6 +680,14 @@ func main() {
 		if err := applyI2POverrides(loaded, *i2pFlag); err != nil {
 			log.Printf("Configuration reload override failed: %v", err)
 			return
+		}
+		if *baseURLFlag != "" {
+			baseURL, err := config.NormalizeBaseURL(*baseURLFlag)
+			if err != nil {
+				log.Printf("Configuration reload base URL override failed: %v", err)
+				return
+			}
+			loaded.Server.BaseURL = baseURL
 		}
 		configureSMTP(loaded)
 		cfg = loaded
@@ -354,14 +709,30 @@ func main() {
 		log.Println("Configuration reloaded")
 	}
 
-	log.Printf("Public endpoints: /types, /templates, /builder, /api/v1/*, /graphql")
-	log.Printf("Listening on %s", listen)
+	log.Printf("Public endpoints: /types, /templates, /builder, %s/*, /api/graphql", web.APIBasePath())
+	log.Printf("Listening on %s", strings.Join(listenAddresses, ", "))
 
 	// Start server in goroutine
-	errChan := make(chan error, 1)
-	go func() {
-		errChan <- server.ListenAndServe()
-	}()
+	errChan := make(chan error, len(servers))
+	for index, listener := range listeners {
+		server := servers[index]
+		bound := privilegedListeners[listener.port]
+		go func(server *http.Server, spec serverListener, bound net.Listener) {
+			if bound == nil {
+				var err error
+				bound, err = net.Listen("tcp", server.Addr)
+				if err != nil {
+					errChan <- err
+					return
+				}
+			}
+			if spec.tls {
+				errChan <- server.Serve(tls.NewListener(bound, tlsConfig))
+				return
+			}
+			errChan <- server.Serve(bound)
+		}(server, listener, bound)
+	}
 	reloadChan := make(chan struct{}, 1)
 	watcherContext, stopWatcher := context.WithCancel(context.Background())
 	go watchConfiguration(watcherContext, configDir, reloadChan)
@@ -370,7 +741,11 @@ func main() {
 	for {
 		select {
 		case err := <-errChan:
-			log.Fatal(err)
+			if err != nil && err != http.ErrServerClosed {
+				log.Printf("HTTP listener stopped: %v", err)
+			}
+			stopWatcher()
+			return
 		case <-reloadChan:
 			reloadConfiguration()
 		case sig := <-sigChan:
@@ -388,15 +763,298 @@ func main() {
 					log.Printf("Tor shutdown failed: %v", err)
 				}
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-				if err := server.Shutdown(shutdownCtx); err != nil {
-					log.Printf("Graceful shutdown failed: %v", err)
-					_ = server.Close()
+				for _, server := range servers {
+					if err := server.Shutdown(shutdownCtx); err != nil {
+						log.Printf("Graceful shutdown failed: %v", err)
+						_ = server.Close()
+					}
 				}
 				cancel()
 				return
 			}
 		}
 	}
+}
+
+func newApplicationScheduler(
+	store *database.Store,
+	securityManager *securitydata.Manager,
+	authStore *auth.Store,
+	configuration *config.Config,
+	directories paths.Directories,
+	logger *log.Logger,
+	tlsManager *ssl.Manager,
+	torManager *overlay.TorManager,
+	i2pManager *overlay.I2PManager,
+) (*schedulerpkg.Scheduler, error) {
+	schedulerConfig := configuration.Server.Scheduler
+	catchUpWindow, err := time.ParseDuration(schedulerConfig.CatchUpWindow)
+	if err != nil || catchUpWindow <= 0 {
+		catchUpWindow = time.Hour
+	}
+	scheduled, err := schedulerpkg.NewWithLogger(store, schedulerConfig.Timezone, catchUpWindow, func(level, message string) {
+		logger.Printf("%s %s", level, message)
+	})
+	if err != nil {
+		return nil, err
+	}
+	scheduled.SetObserver(func(event schedulerpkg.ExecutionEvent) {
+		if event.Running {
+			return
+		}
+		if event.Status == "error" && (event.Task == "backup_daily" || event.Task == "backup_hourly") {
+			return
+		}
+		level, action, success := "info", "scheduler.task_succeeded", 1
+		if event.Status == "error" {
+			level, action, success = "error", "scheduler.task_failed", 0
+		}
+		details := fmt.Sprintf(`{"duration_ms":%d,"error":%q}`, event.Duration.Milliseconds(), event.Error)
+		if err := store.Write(context.Background(), func(tx *sql.Tx) error {
+			_, err := tx.Exec(`INSERT INTO audit_log(level,category,action,target_type,target_id,details,success) VALUES(?, 'scheduler', ?, 'task', ?, ?, ?)`, level, action, event.Task, details, success)
+			return err
+		}); err != nil {
+			logger.Printf("ERROR write scheduler audit event task=%s: %v", event.Task, err)
+		}
+	})
+	scheduled.SetFailureHandler(func(task schedulerpkg.Task, taskErr error) {
+		event := "scheduler_error"
+		values := map[string]string{
+			"task_name": task.Name,
+			"error":     taskErr.Error(),
+			"next_run":  task.NextRun.Format(time.RFC3339),
+		}
+		switch task.ID {
+		case "backup_daily":
+			event = "backup_failed"
+			values["filename"] = paths.ProjectName + "-daily.tar.gz"
+			values["size"] = "unknown"
+		case "backup_hourly":
+			event = "backup_failed"
+			values["filename"] = paths.ProjectName + "-hourly.tar.gz"
+			values["size"] = "unknown"
+		case "ssl_renewal":
+			event = "ssl_renewal_failed"
+			values["fqdn"] = configuration.Server.FQDN
+			values["expires_in"] = "unknown"
+			values["expiry_date"] = "unknown"
+			values["next_retry"] = task.NextRun.Format(time.RFC3339)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := sendOperatorEmail(ctx, configuration, event, "", values); err != nil {
+			logger.Printf("WARN scheduler notification failed task=%s: %v", task.ID, err)
+		}
+	})
+	if err := applyBackupRetention(context.Background(), store, directories.Backup, configuration); err != nil {
+		return nil, fmt.Errorf("initialize backup retention cleanup: %w", err)
+	}
+	defaults := config.DefaultConfig().Server.Scheduler.Tasks
+	add := func(id string, callback func() error) error {
+		taskConfig, ok := schedulerConfig.Tasks[id]
+		if !ok {
+			taskConfig = defaults[id]
+		}
+		if id == "disk_check" {
+			if interval, err := time.ParseDuration(configuration.Server.Notifications.DiskLow.CheckInterval); err == nil && interval > 0 {
+				taskConfig.Schedule = "@every " + interval.String()
+			}
+		}
+		retryDelay, _ := time.ParseDuration(taskConfig.RetryDelay)
+		return scheduled.AddScheduledTask(schedulerpkg.TaskConfig{
+			ID: id, Name: id, Schedule: taskConfig.Schedule,
+			Enabled: taskConfig.Enabled, RetryOnFail: taskConfig.RetryOnFail,
+			RetryDelay: retryDelay,
+		}, callback)
+	}
+	withTaskContext := func(run func(context.Context) error) func() error {
+		return func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			defer cancel()
+			return run(ctx)
+		}
+	}
+	callbacks := map[string]func() error{
+		"healthcheck_self": func() error { return store.Read().Ping() },
+		"log_rotation": withTaskContext(func(context.Context) error {
+			return rotateLogFiles(directories.Logs, configuration.Server.Logging, time.Now())
+		}),
+		"disk_check": withTaskContext(func(context.Context) error {
+			return checkDiskSpace(directories, configuration, logger, time.Now())
+		}),
+		"backup_daily": withTaskContext(func(ctx context.Context) error {
+			err := runScheduledBackup(ctx, store, configuration, directories, false)
+			if err != nil {
+				_ = recordBackupEvent(ctx, store, "backup.failed", paths.ProjectName+"-daily.tar.gz", 0, configuration.Server.Backup.EncryptionPassword != "", false, err.Error())
+				return err
+			}
+			return nil
+		}),
+		"backup_hourly": withTaskContext(func(ctx context.Context) error {
+			err := runScheduledBackup(ctx, store, configuration, directories, true)
+			if err != nil {
+				_ = recordBackupEvent(ctx, store, "backup.failed", paths.ProjectName+"-hourly.tar.gz", 0, configuration.Server.Backup.EncryptionPassword != "", false, err.Error())
+			}
+			return err
+		}),
+		"security_cleanup": withTaskContext(func(ctx context.Context) error {
+			return cleanupSecurityData(ctx, store, config.ConfigDirectory(), configuration.Server.Security.Reports.RetentionDays, time.Now())
+		}),
+		"token_cleanup": withTaskContext(func(ctx context.Context) error {
+			if err := store.Write(ctx, func(tx *sql.Tx) error {
+				result, err := tx.ExecContext(ctx, `DELETE FROM captcha_challenges WHERE datetime(expires_at) <= datetime('now')`)
+				if err != nil {
+					return err
+				}
+				_, err = result.RowsAffected()
+				return err
+			}); err != nil {
+				return err
+			}
+			_, err := authStore.PurgeIdleOwners(ctx)
+			return err
+		}),
+		"geoip_update": withTaskContext(func(ctx context.Context) error {
+			if !configuration.Server.GeoIP.Enabled {
+				return nil
+			}
+			if err := securityManager.UpdateGeoIP(ctx); err != nil {
+				return err
+			}
+			reader, err := securitydata.OpenGeoIP(filepath.Join(securityManager.Dir, "geoip"))
+			if err != nil {
+				return err
+			}
+			web.ReplaceGeoIP(reader)
+			return nil
+		}),
+		"blocklist_update": withTaskContext(func(ctx context.Context) error {
+			blocklists := configuration.Server.Security.Blocklists
+			if !blocklists.Enabled {
+				return nil
+			}
+			sources := make([]securitydata.Source, 0, len(blocklists.ExtraSources))
+			for _, source := range blocklists.ExtraSources {
+				sources = append(sources, securitydata.Source{ID: source.ID, Type: source.Type, URL: source.URL, Enabled: source.Enabled})
+			}
+			_, err := securityManager.UpdateBlocklists(ctx, sources, nil)
+			return err
+		}),
+		"cve_update": withTaskContext(func(ctx context.Context) error {
+			var failures []error
+			if err := securityManager.UpdateNVD(ctx, configuration.Data.CVE.APIKey); err != nil {
+				failures = append(failures, err)
+			}
+			if configuration.Data.Trivy.Enabled {
+				if _, err := securityManager.UpdateTrivy(ctx, configuration.Data.Trivy.Source); err != nil {
+					failures = append(failures, err)
+				}
+			}
+			return errors.Join(failures...)
+		}),
+		"update_check": withTaskContext(func(ctx context.Context) error {
+			branch := normalizeUpdateBranch(configuration.Server.Update.Branch)
+			if branch == "" {
+				branch = "stable"
+			}
+			epoch, _ := strconv.ParseInt(BuildEpoch, 10, 64)
+			release, available, err := updatepkg.CheckDeferred(ctx, branch, Version, epoch, configuration.Server.Update.DeferDays, time.Now().UTC())
+			if err != nil || !available {
+				return err
+			}
+			if configuration.Server.Update.AutoInstall {
+				return fmt.Errorf("update %s is available, but scheduled privileged staging is not configured", release.TagName)
+			}
+			inserted := false
+			err = store.Write(ctx, func(tx *sql.Tx) error {
+				var count int
+				if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_log WHERE category='update' AND action='update.available' AND target_id=?`, release.TagName).Scan(&count); err != nil {
+					return err
+				}
+				if count > 0 {
+					return nil
+				}
+				details := fmt.Sprintf(`{"version":%q}`, release.TagName)
+				if _, err := tx.ExecContext(ctx, `INSERT INTO audit_log(level,category,action,target_type,target_id,details,success) VALUES('warn','update','update.available','release',?,?,1)`, release.TagName, details); err != nil {
+					return err
+				}
+				inserted = true
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			if inserted {
+				logger.Printf("WARN update.available version=%s command='gitmessages --update yes'", release.TagName)
+			}
+			return nil
+		}),
+	}
+	callbacks["ssl_renewal"] = func() error { return nil }
+	if tlsManager != nil && configuration.Server.SSL.LetsEncrypt.Enabled {
+		domain := strings.TrimSpace(configuration.Server.FQDN)
+		callbacks["ssl_renewal"] = func() error { return tlsManager.RenewCertificate([]string{domain}) }
+	}
+	if torManager != nil && torManager.Status().Enabled {
+		callbacks["tor_health"] = func() error {
+			status := torManager.Status()
+			if !status.Running || !status.CircuitEstablished {
+				if err := torManager.Restart(); err != nil {
+					return fmt.Errorf("tor is unhealthy (%s) and restart failed: %w", status.Status, err)
+				}
+				return nil
+			}
+			return nil
+		}
+	}
+	if i2pManager != nil && i2pManager.Status().Enabled {
+		callbacks["i2p_health"] = func() error {
+			status := i2pManager.Status()
+			if !status.Running {
+				if err := i2pManager.Restart(); err != nil {
+					return fmt.Errorf("I2P is unhealthy (%s) and restart failed: %w", status.Status, err)
+				}
+			}
+			return nil
+		}
+	}
+	for _, id := range []string{"healthcheck_self", "security_cleanup", "token_cleanup", "geoip_update", "blocklist_update", "cve_update", "update_check", "ssl_renewal", "log_rotation", "disk_check", "backup_daily", "backup_hourly", "tor_health", "i2p_health"} {
+		callback, ok := callbacks[id]
+		if !ok {
+			continue
+		}
+		if err := add(id, callback); err != nil {
+			return nil, fmt.Errorf("register task %q: %w", id, err)
+		}
+	}
+	return scheduled, nil
+}
+
+func cleanupSecurityData(ctx context.Context, store *database.Store, configDir string, retentionDays int, now time.Time) error {
+	if retentionDays <= 0 {
+		retentionDays = 365
+	}
+	cutoff := now.UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
+	if err := store.Write(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM security_reports WHERE closed_at IS NOT NULL AND datetime(closed_at) <= datetime(?)`, cutoff)
+		return err
+	}); err != nil {
+		return err
+	}
+	oldKey := filepath.Join(configDir, "security", "pgp.priv.old.asc.enc")
+	info, err := os.Stat(oldKey)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect retired PGP key: %w", err)
+	}
+	if now.Sub(info.ModTime()) >= 30*24*time.Hour {
+		if err := os.Remove(oldKey); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove retired PGP key: %w", err)
+		}
+	}
+	return nil
 }
 
 func configureSMTP(configuration *config.Config) {
@@ -512,10 +1170,123 @@ func applyI2POverrides(current *config.Config, enabled bool) error {
 	return nil
 }
 
+func securityDataDirectory(configured, dataDirectory string) (string, error) {
+	value := strings.TrimSpace(configured)
+	if value == "" {
+		value = filepath.Join(dataDirectory, "security")
+	} else {
+		value = strings.ReplaceAll(value, "{data_dir}", dataDirectory)
+	}
+	safe, err := paths.SafeDirPath(value)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(safe)
+}
+
+func initializeSecurityData(ctx context.Context, manager *securitydata.Manager, configuration *config.Config, logger *log.Logger) {
+	if configuration.Server.GeoIP.Enabled {
+		if reader, err := securitydata.OpenGeoIP(filepath.Join(manager.Dir, "geoip")); err != nil {
+			if err := refreshGeoIP(ctx, manager); err != nil {
+				logger.Printf("WARN geoip initial update failed: %v", err)
+			}
+		} else {
+			web.ReplaceGeoIP(reader)
+		}
+	}
+	if configuration.Server.Security.Blocklists.Enabled {
+		if status, _ := manager.CheckBlocklist("firehol_level1", 0); status == "error" {
+			if _, err := manager.UpdateBlocklists(ctx, blocklistSources(configuration.Server.Security.Blocklists.ExtraSources), trustedBlocklistPrefixes(configuration)); err != nil {
+				logger.Printf("WARN blocklist initial update failed: %v", err)
+			}
+		}
+	}
+	if status, _ := manager.Check("cve", 0); status == "error" {
+		if err := manager.UpdateNVD(ctx, configuration.Data.CVE.APIKey); err != nil {
+			logger.Printf("WARN NVD initial update failed: %v", err)
+		}
+	}
+	if configuration.Data.Trivy.Enabled {
+		if status, _ := manager.Check("trivy", 0); status == "error" {
+			if _, err := manager.UpdateTrivy(ctx, configuration.Data.Trivy.Source); err != nil {
+				logger.Printf("WARN Trivy initial update failed: %v", err)
+			}
+		}
+	}
+}
+
+func refreshGeoIP(ctx context.Context, manager *securitydata.Manager) error {
+	if err := manager.UpdateGeoIP(ctx); err != nil {
+		return err
+	}
+	reader, err := securitydata.OpenGeoIP(filepath.Join(manager.Dir, "geoip"))
+	if err != nil {
+		return fmt.Errorf("open refreshed GeoIP databases: %w", err)
+	}
+	web.ReplaceGeoIP(reader)
+	return nil
+}
+
+func blocklistSources(values []config.BlocklistSourceConfig) []securitydata.Source {
+	sources := make([]securitydata.Source, 0, len(values))
+	for _, source := range values {
+		sources = append(sources, securitydata.Source{ID: source.ID, Type: source.Type, URL: source.URL, Enabled: source.Enabled})
+	}
+	return sources
+}
+
+func trustedBlocklistPrefixes(configuration *config.Config) []netip.Prefix {
+	values := append([]string(nil), configuration.Server.TrustedProxies.Additional...)
+	for _, entry := range configuration.Server.Security.Allowlist {
+		values = append(values, entry.CIDR)
+	}
+	prefixes := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		if prefix, err := netip.ParsePrefix(strings.TrimSpace(value)); err == nil {
+			prefixes = append(prefixes, prefix.Masked())
+			continue
+		}
+		if address, err := netip.ParseAddr(strings.TrimSpace(value)); err == nil {
+			address = address.Unmap()
+			prefixes = append(prefixes, netip.PrefixFrom(address, address.BitLen()))
+		}
+	}
+	return prefixes
+}
+
 func setupRoutes(mux *http.ServeMux) {
 	cfg := config.Get().Server.RateLimit
 	web.ConfigureTokenRateLimits(cfg.Strict.Requests, time.Duration(cfg.Strict.Window)*time.Second, cfg.AuthFailures.Requests, time.Duration(cfg.AuthFailures.Window)*time.Second)
 	mux.Handle("/", web.TokenCookieMiddleware(web.Handler(Version, CommitID, buildDate())))
+}
+
+func commandHelp(args []string, commands ...string) (string, bool) {
+	for index := 0; index+1 < len(args); index++ {
+		next := args[index+1]
+		if next != "--help" && next != "-h" && next != "help" {
+			continue
+		}
+		for _, command := range commands {
+			if args[index] == "--"+command {
+				return command, true
+			}
+		}
+	}
+	return "", false
+}
+
+func printCommandHelp(command string) {
+	binary := filepath.Base(os.Args[0])
+	switch command {
+	case "shell":
+		fmt.Printf("Usage: %s --shell {completions|init} [bash|zsh|fish|sh|dash|ksh|powershell|pwsh]\n", binary)
+	case "service":
+		fmt.Printf("Usage: %s --service {start|stop|restart|reload|status|--install|--uninstall|--disable|--help}\n", binary)
+	case "maintenance":
+		fmt.Printf("Usage: %s --maintenance {backup|restore|update|mode|setup|pgp|secret|token|data|compliance} [arguments]\nBackup modifiers: --include-ssl, --include-data\n", binary)
+	case "update":
+		fmt.Printf("Usage: %s --update [check|yes|branch {stable|beta|devel}]\n", binary)
+	}
 }
 
 func printHelp(binary string) {
@@ -527,11 +1298,17 @@ Options:
   -h, --help           Show this help message
   -v, --version        Print version information
   --port PORT          Server port (default: saved in server.yml)
-  --address ADDRESS    Server address (default: from config or 0.0.0.0)
+  --address ADDRESS    Server address (default: [::], IPv4 fallback if unavailable)
+  --baseurl PATH       URL path prefix (default: /)
   --config DIR         Configuration directory
+  --data DIR           Data directory
+  --cache DIR          Cache directory
+  --log DIR            Log directory
+  --backup DIR         Backup directory
+  --pid FILE           PID file path
   --status             Check service status (for healthcheck)
+  --daemon             Run as a daemon
   --debug              Enable debug logging
-  --color MODE         Color output: auto, yes, no
   --lang CODE          Language for output
   --shell ACTION [SHELL] Print shell completions, init command, or help
   --i2p                Enable the optional I2P eepsite
@@ -546,16 +1323,29 @@ Service Commands:
   --service --uninstall Remove system service
 
 Maintenance Commands:
-  --maintenance backup [file]   Backup configuration
+  --maintenance backup [file]   Back up configuration and server.db
+      --include-ssl             Include SSL files
+      --include-data            Include data files
   --maintenance restore [file]  Restore from backup
   --maintenance update          Check for updates
   --maintenance token list      List token metadata
   --maintenance token revoke    Revoke a token by prefix
+  --maintenance data export     Export owner data by token prefix
+  --maintenance data delete     Delete owner data by token prefix
+  --maintenance compliance report  Print aggregate compliance status
+
+Email Commands:
+  email test [--to ADDRESS]  Send a test message to the configured recipient
+  email test --dry-run       Preview and validate every email template
 
 Environment Variables:
   PORT         Server port
-  ADDRESS      Server address
+  LISTEN       Server listen address
   CONFIG_DIR   Configuration directory
+  DATA_DIR     Data directory
+  CACHE_DIR    Cache directory
+  LOG_DIR      Log directory
+  BACKUP_DIR   Backup directory
 
 Configuration:
   Root:    /etc/apimgr/gitmessages/server.yml
@@ -565,8 +1355,12 @@ Configuration:
 `, binary, Version, binary)
 }
 
-func checkHealth(port string) error {
-	url := fmt.Sprintf("http://127.0.0.1:%s/api/v1/server/healthz", port)
+func checkHealth(port string, baseURL ...string) error {
+	prefix := ""
+	if len(baseURL) > 0 {
+		prefix = baseURL[0]
+	}
+	url := fmt.Sprintf("http://127.0.0.1:%s%s/api/v1/server/healthz", port, prefix)
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -643,7 +1437,7 @@ func configurationFingerprint(configDir string) string {
 	return fingerprint.String()
 }
 
-func handleServiceCommand(cmd, configDir string) {
+func handleServiceCommand(cmd, configDir string, dirs paths.Directories) {
 	switch cmd {
 	case "start":
 		serviceStart()
@@ -656,42 +1450,192 @@ func handleServiceCommand(cmd, configDir string) {
 	case "status":
 		serviceStatus()
 	case "--install":
-		serviceInstall(configDir, runtime.GOOS, "/etc/systemd/system/gitmessages.service", "/Library/LaunchDaemons/us.apimgr.gitmessages.plist", runCommand, os.Stdout)
+		logServiceError(servicepkg.Install())
 	case "--uninstall":
-		serviceUninstall(configDir)
+		if confirmServiceUninstall(os.Stdin, os.Stdout) {
+			if err := servicepkg.Uninstall(); err != nil {
+				logServiceError(err)
+				return
+			}
+			if err := privilege.DeleteServiceAccount(dirs.Data); err != nil {
+				logServiceError(err)
+				return
+			}
+			if err := removeServiceData(dirs); err != nil {
+				logServiceError(err)
+				return
+			}
+			fmt.Println("Service uninstalled and application data removed")
+		} else {
+			fmt.Println("Service uninstall cancelled")
+		}
 	case "--disable":
 		serviceDisable()
+	case "--help":
+		fmt.Println("Usage: gitmessages --service {start|stop|restart|reload|status|--install|--uninstall|--disable|--help}")
 	default:
 		fmt.Printf("Unknown service command: %s\n", cmd)
 		os.Exit(1)
 	}
 }
 
-func handleMaintenanceCommand(cmd, configDir, dataDir, logsDir string) {
+func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, backupDir, pidPath string, configuration *config.Config, includeSSL, includeData bool) {
 	args := flag.Args()
 
 	switch cmd {
 	case "token":
-		handleTokenMaintenance(args, dataDir)
+		handleTokenMaintenance(args, databaseDir, configuration)
+	case "data", "compliance":
+		store, err := database.OpenConfigured(configuration.Server.Database, filepath.Join(databaseDir, "server.db"), 5)
+		if err != nil {
+			log.Fatalf("open maintenance database: %v", err)
+		}
+		defer func() { _ = store.Close() }()
+		authStore, err := auth.NewStore(store, configuration.Server.Token, configuration.Server.Security.EncryptionKey, configuration.Server.Tokens.MaxLinked, configuration.Server.Tokens.IdlePurgeDays, configuredTokenCookieAge(configuration.Server.Tokens.CookieMaxAge))
+		if err != nil {
+			log.Fatalf("initialize maintenance authorization: %v", err)
+		}
+		if err := authorizeTokenMaintenance(authStore); err != nil {
+			log.Fatalf("authorize maintenance command: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if cmd == "data" {
+			if err := runDataMaintenance(ctx, args, store, authStore); err != nil {
+				log.Fatalf("data maintenance failed: %v", err)
+			}
+		} else if err := runComplianceReport(ctx, args, store, configuration); err != nil {
+			log.Fatalf("compliance report failed: %v", err)
+		}
 	case "backup":
+		if configuration.Server.Database.Driver == "libsql" {
+			log.Fatalf("remote libSQL backups are unavailable")
+		}
+		if len(args) > 0 && args[0] == "test" {
+			if len(args) > 2 {
+				log.Fatalf("invalid backup test arguments")
+			}
+			backupFile := ""
+			if len(args) == 2 {
+				backupFile = args[1]
+			}
+			if backupFile == "" {
+				selected, err := newestBackupFile(backupDir)
+				if err != nil {
+					log.Fatalf("select backup for verification: %v", err)
+				}
+				backupFile = selected
+			}
+			password := ""
+			if strings.HasSuffix(strings.ToLower(backupFile), ".enc") {
+				var err error
+				password, err = promptBackupPassword(os.Stdin, os.Stderr)
+				if err != nil {
+					log.Fatalf("read backup password: %v", err)
+				}
+			}
+			manifest, err := verifyApplicationBackup(context.Background(), backupFile, backupDir, password, configuration.Server.Restore)
+			if err != nil {
+				log.Fatalf("backup verification failed: %v", err)
+			}
+			fmt.Print(i18n.Format(os.Getenv("GITMESSAGES_LANG"), "cli.backup_verified", map[string]string{
+				"backup_file": backupFile,
+				"file_count":  strconv.Itoa(len(manifest.Files)),
+				"encrypted":   strconv.FormatBool(manifest.Encrypted),
+			}))
+			return
+		}
+		if len(args) > 1 {
+			log.Fatalf("invalid backup arguments")
+		}
 		backupFile := ""
 		if len(args) > 0 {
 			backupFile = args[0]
-		} else {
-			backupDir := paths.GetBackupDir()
-			if err := os.MkdirAll(backupDir, 0755); err != nil {
-				log.Fatalf("Failed to create backup directory: %v", err)
+		}
+		if backupFile == "" {
+			extension := ".tar.gz"
+			if configuration.Server.Backup.EncryptionPassword != "" {
+				extension += ".enc"
 			}
-			timestamp := time.Now().Format("20060102-150405")
-			backupFile = filepath.Join(backupDir, fmt.Sprintf("gitmessages-backup-%s.tar.gz", timestamp))
+			backupFile = filepath.Join(backupDir, paths.ProjectName+"_backup_"+time.Now().UTC().Format("2006-01-02_150405")+extension)
 		}
-		maintenanceBackup(configDir, backupFile)
+		store, err := database.OpenSQLite(filepath.Join(databaseDir, "server.db"), 1)
+		if err != nil {
+			log.Fatalf("open database for backup: %v", err)
+		}
+		manifest, backupErr := createApplicationBackup(context.Background(), store, configuration, configDir, dataDir, backupDir, backupFile, includeSSL, includeData)
+		if backupErr != nil {
+			_ = recordBackupEvent(context.Background(), store, "backup.failed", backupFile, 0, configuration.Server.Backup.EncryptionPassword != "", false, backupErr.Error())
+		}
+		if backupErr == nil {
+			info, statErr := os.Stat(backupFile)
+			if statErr != nil {
+				backupErr = fmt.Errorf("inspect completed backup: %w", statErr)
+			} else if err := recordBackupEvent(context.Background(), store, "backup.created", backupFile, info.Size(), manifest.Encrypted, true, "verified"); err != nil {
+				log.Printf("WARN backup.audit_write_failed error=%q", err)
+			}
+			if backupErr == nil {
+				backupErr = applyBackupRetention(context.Background(), store, backupDir, configuration)
+			}
+		}
+		closeErr := store.Close()
+		if backupErr != nil || closeErr != nil {
+			log.Fatalf("backup failed: %v", errors.Join(backupErr, closeErr))
+		}
+		fmt.Print(i18n.Format(os.Getenv("GITMESSAGES_LANG"), "cli.backup_created", map[string]string{
+			"backup_file": backupFile,
+			"file_count":  strconv.Itoa(len(manifest.Files)),
+			"encrypted":   strconv.FormatBool(manifest.Encrypted),
+		}))
 	case "restore":
-		if len(args) == 0 {
-			fmt.Println("Usage: gitmessages --maintenance restore <backup-file>")
-			os.Exit(1)
+		if configuration.Server.Database.Driver == "libsql" {
+			log.Fatalf("remote libSQL restore is unavailable")
 		}
-		maintenanceRestore(args[0], configDir)
+		if len(args) != 1 {
+			fmt.Println("Usage: gitmessages --maintenance restore <backup-file>")
+			os.Exit(2)
+		}
+		databaseEmpty, err := applicationDatabaseEmpty(filepath.Join(databaseDir, "server.db"))
+		if err != nil {
+			log.Fatalf("inspect database before restore: %v", err)
+		}
+		currentUser, _ := user.Current()
+		serviceUser := currentUser != nil && currentUser.Username == paths.ProjectName
+		var suppliedToken string
+		if !databaseEmpty && !privilege.IsElevated() && serviceUser {
+			suppliedToken, err = promptOperatorToken(os.Stdin, os.Stderr)
+			if err != nil {
+				log.Fatalf("read operator token: %v", err)
+			}
+		}
+		if err := authorizeApplicationRestore(configuration.Server.Token, suppliedToken, databaseEmpty, privilege.IsElevated(), serviceUser, os.Stdin, os.Stderr); err != nil {
+			log.Fatalf("restore authorization failed: %v", err)
+		}
+		password := ""
+		if strings.HasSuffix(strings.ToLower(args[0]), ".enc") {
+			password, err = promptBackupPassword(os.Stdin, os.Stderr)
+			if err != nil {
+				log.Fatalf("read backup password: %v", err)
+			}
+		}
+		if err := restoreApplicationBackup(context.Background(), args[0], configDir, dataDir, databaseDir, pidPath, configuration.Server.Address, configuration.Server.Port, configuration.Server.Restore, password); err != nil {
+			log.Fatalf("restore failed: %v", err)
+		}
+		if info, err := os.Stat(args[0]); err == nil {
+			if restoredStore, openErr := database.OpenSQLite(filepath.Join(databaseDir, "server.db"), 1); openErr == nil {
+				if auditErr := recordBackupEvent(context.Background(), restoredStore, "backup.restored", args[0], info.Size(), strings.HasSuffix(strings.ToLower(args[0]), ".enc"), true, "verified"); auditErr != nil {
+					log.Printf("WARN backup.audit_write_failed error=%q", auditErr)
+				}
+				if closeErr := restoredStore.Close(); closeErr != nil {
+					log.Printf("WARN backup.audit_close_failed error=%q", closeErr)
+				}
+			} else {
+				log.Printf("WARN backup.audit_open_failed error=%q", openErr)
+			}
+		} else {
+			log.Printf("WARN backup.audit_stat_failed error=%q", err)
+		}
+		fmt.Println(i18n.T(os.Getenv("GITMESSAGES_LANG"), "cli.restore_completed"))
 	case "update":
 		updateArgs := args
 		if len(updateArgs) > 1 && updateArgs[0] == "update" {
@@ -719,6 +1663,22 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, logsDir string) {
 				fmt.Printf("Current mode: %s\n", mode)
 			}
 		} else {
+			currentUser, _ := user.Current()
+			root := privilege.IsElevated()
+			serviceUser := currentUser != nil && currentUser.Username == paths.ProjectName
+			var suppliedToken string
+			if root {
+				log.Printf("WARN application mode change requested by root; review the security implications")
+			} else if serviceUser {
+				var err error
+				suppliedToken, err = promptOperatorToken(os.Stdin, os.Stderr)
+				if err != nil {
+					log.Fatalf("read operator token: %v", err)
+				}
+			}
+			if err := authorizeModeChange(configuration.Server.Token, suppliedToken, root, serviceUser); err != nil {
+				log.Fatalf("authorize mode change: %v", err)
+			}
 			setApplicationMode(args[0], filepath.Join(configDir, "server.yml"))
 		}
 	case "setup":
@@ -729,17 +1689,27 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, logsDir string) {
 	}
 }
 
-func handleTokenMaintenance(args []string, dataDir string) {
+func authorizeModeChange(serverToken, suppliedToken string, root, serviceUser bool) error {
+	if root {
+		return nil
+	}
+	if serviceUser && serverToken != "" && suppliedToken != "" && subtle.ConstantTimeCompare([]byte(serverToken), []byte(suppliedToken)) == 1 {
+		return nil
+	}
+	return errors.New("mode change requires root access or a valid operator token from the service account")
+}
+
+func handleTokenMaintenance(args []string, databaseDir string, configuration *config.Config) {
 	if len(args) == 0 || (args[0] != "list" && args[0] != "revoke") {
 		fmt.Fprintln(os.Stderr, "Usage: gitmessages --maintenance token list | revoke <prefix>")
 		os.Exit(2)
 	}
-	store, err := database.OpenSQLite(filepath.Join(dataDir, "db", "sqlite", "server.db"), 5)
+	store, err := database.OpenConfigured(configuration.Server.Database, filepath.Join(databaseDir, "server.db"), 5)
 	if err != nil {
 		log.Fatalf("open token database: %v", err)
 	}
 	defer func() { _ = store.Close() }()
-	authStore, err := auth.NewStore(store, cfg.Server.Token, cfg.Server.Security.EncryptionKey, cfg.Server.Tokens.MaxLinked, cfg.Server.Tokens.IdlePurgeDays, configuredTokenCookieAge(cfg.Server.Tokens.CookieMaxAge))
+	authStore, err := auth.NewStore(store, configuration.Server.Token, configuration.Server.Security.EncryptionKey, configuration.Server.Tokens.MaxLinked, configuration.Server.Tokens.IdlePurgeDays, configuredTokenCookieAge(configuration.Server.Tokens.CookieMaxAge))
 	if err != nil {
 		log.Fatalf("initialize token management: %v", err)
 	}
@@ -763,15 +1733,59 @@ func handleTokenMaintenance(args []string, dataDir string) {
 			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n", token.Prefix, token.Kind, token.OwnerID, token.Name, token.CreatedAt.Format(time.RFC3339), used, token.Status)
 		}
 	case "revoke":
-		if len(args) != 2 {
-			fmt.Fprintln(os.Stderr, "Usage: gitmessages --maintenance token revoke <prefix>")
+		if len(args) < 2 || len(args) > 3 || (len(args) == 3 && args[2] != "--yes") {
+			fmt.Fprintln(os.Stderr, "Usage: gitmessages --maintenance token revoke <prefix> [--yes]")
 			os.Exit(2)
+		}
+		tokens, err := authStore.ListAll(ctx)
+		if err != nil {
+			log.Fatalf("find token to revoke: %v", err)
+		}
+		var selected auth.Token
+		for _, token := range tokens {
+			if token.Prefix == args[1] && token.Status == "active" {
+				selected = token
+			}
+		}
+		if selected.Prefix == "" {
+			log.Fatalf("revoke token: %v", auth.ErrNotFound)
+		}
+		var ownerTokenCount int64
+		for _, token := range tokens {
+			if token.OwnerID == selected.OwnerID {
+				ownerTokenCount++
+			}
+		}
+		if err := confirmTokenRevocation(os.Stdin, os.Stderr, selected, ownerTokenCount, len(args) == 3 && args[2] == "--yes"); err != nil {
+			log.Fatalf("token revocation confirmation failed: %v", err)
 		}
 		if err := authStore.RevokeByPrefix(ctx, args[1]); err != nil {
 			log.Fatalf("revoke token: %v", err)
 		}
 		fmt.Printf("Revoked token %s\n", args[1])
 	}
+}
+
+func confirmTokenRevocation(input io.Reader, output io.Writer, token auth.Token, tokenCount int64, skipPrompt bool) error {
+	if skipPrompt {
+		return nil
+	}
+	expected, description := token.Prefix, "linked token prefix"
+	if token.Kind == "primary" {
+		expected = token.OwnerID
+		description = fmt.Sprintf("owner id %s (%d tokens, 0 resources)", token.OwnerID, tokenCount)
+	}
+	if _, err := fmt.Fprintf(output, "Revoking %s. Type %s to confirm: ", description, expected); err != nil {
+		return err
+	}
+	var confirmation string
+	if _, err := fmt.Fscanln(input, &confirmation); err != nil {
+		return fmt.Errorf("read token revocation confirmation: %w", err)
+	}
+	if confirmation != expected {
+		return errors.New("token revocation confirmation did not match")
+	}
+	return nil
 }
 
 func authorizeTokenMaintenance(store *auth.Store) error {
@@ -859,7 +1873,7 @@ func installServiceFor(goos, configDir, systemdFile, launchdFile string, command
 </dict>
 </plist>
 `, configDir)
-		if err := os.WriteFile(launchdFile, []byte(plist), 0644); err != nil {
+		if err := os.WriteFile(launchdFile, []byte(plist), 0o644); err != nil {
 			return fmt.Errorf("write launchd plist: %w", err)
 		}
 		command("launchctl", "load", launchdFile)
@@ -890,17 +1904,13 @@ Group=gitmessages
 [Install]
 WantedBy=multi-user.target
 `, configDir)
-	if err := os.WriteFile(serviceFile, []byte(service), 0644); err != nil {
+	if err := os.WriteFile(serviceFile, []byte(service), 0o644); err != nil {
 		return fmt.Errorf("write systemd service file: %w", err)
 	}
 	command("systemctl", "daemon-reload")
 	command("systemctl", "enable", "gitmessages")
 	command("systemctl", "start", "gitmessages")
 	return nil
-}
-
-func serviceUninstall(configDir string) {
-	serviceUninstallWithInput(configDir, os.Stdin, os.Stdout)
 }
 
 func serviceUninstallWithInput(configDir string, input io.Reader, output io.Writer) {
@@ -998,216 +2008,6 @@ func removeIfPresent(path string) error {
 
 func serviceDisable() {
 	logServiceError(servicepkg.Disable())
-}
-
-func maintenanceBackup(configDir, backupFile string) {
-	if err := createConfigBackup(configDir, backupFile); err != nil {
-		log.Printf("Backup failed: %v", err)
-		os.Exit(1)
-	}
-	fmt.Printf("Backup created successfully: %s\n", backupFile)
-}
-
-func maintenanceRestore(backupFile, configDir string) {
-	if err := restoreConfigBackup(backupFile, configDir); err != nil {
-		log.Printf("Restore failed: %v", err)
-		os.Exit(1)
-	}
-	fmt.Println("Configuration restored successfully")
-}
-
-func createConfigBackup(configDir, backupFile string) error {
-	info, err := os.Stat(configDir)
-	if err != nil {
-		return fmt.Errorf("inspect configuration directory: %w", err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("configuration path is not a directory")
-	}
-	if err := os.MkdirAll(filepath.Dir(backupFile), 0700); err != nil {
-		return fmt.Errorf("create backup directory: %w", err)
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(backupFile), ".gitmessages-backup-*")
-	if err != nil {
-		return fmt.Errorf("create backup file: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer func() {
-		if err := os.Remove(temporaryPath); err != nil && !os.IsNotExist(err) {
-			log.Printf("Failed to remove temporary backup file %s: %v", temporaryPath, err)
-		}
-	}()
-	if err := temporary.Chmod(0600); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("secure backup file: %w", err)
-	}
-	compressed := gzip.NewWriter(temporary)
-	archive := tar.NewWriter(compressed)
-	base := filepath.Base(configDir)
-	err = filepath.WalkDir(configDir, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
-			return fmt.Errorf("unsupported file type in config backup: %s", path)
-		}
-		relative, err := filepath.Rel(configDir, path)
-		if err != nil {
-			return err
-		}
-		name := base
-		if relative != "." {
-			name = filepath.ToSlash(filepath.Join(base, relative))
-		}
-		mode := int64(0600)
-		if info.IsDir() {
-			mode = 0700
-			name += "/"
-		}
-		header := &tar.Header{Name: name, Mode: mode, Size: 0, Typeflag: tar.TypeDir}
-		if !info.IsDir() {
-			header.Typeflag = tar.TypeReg
-			header.Size = info.Size()
-		}
-		if err := archive.WriteHeader(header); err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(archive, file)
-		closeErr := file.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
-	})
-	if err == nil {
-		err = archive.Close()
-	}
-	if closeErr := compressed.Close(); err == nil {
-		err = closeErr
-	}
-	if syncErr := temporary.Sync(); err == nil {
-		err = syncErr
-	}
-	if closeErr := temporary.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return fmt.Errorf("write backup archive: %w", err)
-	}
-	if err := os.Rename(temporaryPath, backupFile); err != nil {
-		return fmt.Errorf("publish backup archive: %w", err)
-	}
-	return nil
-}
-
-func restoreConfigBackup(backupFile, configDir string) error {
-	info, err := os.Stat(backupFile)
-	if err != nil {
-		return fmt.Errorf("inspect backup file: %w", err)
-	}
-	if !info.Mode().IsRegular() || info.Size() > 1<<30 {
-		return fmt.Errorf("backup must be a regular file no larger than 1 GiB")
-	}
-	parent := filepath.Dir(configDir)
-	if err := os.MkdirAll(parent, 0700); err != nil {
-		return fmt.Errorf("create configuration parent: %w", err)
-	}
-	stage, err := os.MkdirTemp(parent, ".gitmessages-restore-*")
-	if err != nil {
-		return fmt.Errorf("create restore staging directory: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(stage) }()
-	file, err := os.Open(backupFile)
-	if err != nil {
-		return fmt.Errorf("open backup file: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-	compressed, err := gzip.NewReader(file)
-	if err != nil {
-		return fmt.Errorf("read backup compression: %w", err)
-	}
-	defer func() { _ = compressed.Close() }()
-	archive := tar.NewReader(compressed)
-	root := filepath.Base(configDir)
-	var expanded int64
-	for {
-		header, err := archive.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("read backup entry: %w", err)
-		}
-		clean := filepath.Clean(filepath.FromSlash(header.Name))
-		if filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("unsafe path in backup: %q", header.Name)
-		}
-		if clean != root && !strings.HasPrefix(clean, root+string(filepath.Separator)) {
-			return fmt.Errorf("unexpected top-level path in backup: %q", header.Name)
-		}
-		target := filepath.Join(stage, clean)
-		relative, err := filepath.Rel(stage, target)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("unsafe path in backup: %q", header.Name)
-		}
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0700); err != nil {
-				return fmt.Errorf("create restored directory: %w", err)
-			}
-		case tar.TypeReg:
-			if header.Size < 0 || header.Size > (1<<30)-expanded {
-				return fmt.Errorf("expanded backup exceeds 1 GiB")
-			}
-			expanded += header.Size
-			if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
-				return fmt.Errorf("create restored file directory: %w", err)
-			}
-			output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-			if err != nil {
-				return fmt.Errorf("create restored file: %w", err)
-			}
-			_, copyErr := io.CopyN(output, archive, header.Size)
-			closeErr := output.Close()
-			if copyErr != nil {
-				return fmt.Errorf("write restored file: %w", copyErr)
-			}
-			if closeErr != nil {
-				return fmt.Errorf("close restored file: %w", closeErr)
-			}
-		default:
-			return fmt.Errorf("unsupported archive entry type in %q", header.Name)
-		}
-	}
-	restored := filepath.Join(stage, root)
-	if _, err := os.Stat(restored); err != nil {
-		return fmt.Errorf("backup does not contain the expected config directory")
-	}
-	oldRoot, err := os.MkdirTemp(parent, ".gitmessages-restore-old-*")
-	if err != nil {
-		return fmt.Errorf("prepare current configuration backup: %w", err)
-	}
-	defer func() { _ = os.RemoveAll(oldRoot) }()
-	old := filepath.Join(oldRoot, filepath.Base(configDir))
-	if err := os.Rename(configDir, old); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("move current configuration aside: %w", err)
-	}
-	if err := os.Rename(restored, configDir); err != nil {
-		_ = os.Rename(old, configDir)
-		return fmt.Errorf("install restored configuration: %w", err)
-	}
-	return nil
 }
 
 func runCommand(name string, args ...string) {
@@ -1331,7 +2131,7 @@ func runSetupWizard(configDir string) {
 	fmt.Println()
 
 	// Ensure config directory exists
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		log.Fatalf("Failed to create config directory: %v", err)
 	}
 

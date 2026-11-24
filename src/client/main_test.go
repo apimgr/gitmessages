@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,18 +34,7 @@ func TestValidServer(t *testing.T) {
 }
 
 func TestClientRunAndBuild(t *testing.T) {
-	root := filepath.Join(os.TempDir(), "apimgr")
-	configHome, err := os.MkdirTemp(root, "gitmessages-")
-	if err != nil {
-		if err := os.MkdirAll(root, 0700); err != nil {
-			t.Fatal(err)
-		}
-		configHome, err = os.MkdirTemp(root, "gitmessages-")
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(configHome) })
+	configHome := clientTestDir(t)
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(configHome, "cache"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(configHome, "data"))
@@ -55,6 +45,10 @@ func TestClientRunAndBuild(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("User-Agent") == "" || r.Header.Get("Accept-Language") == "" {
 			t.Errorf("request is missing CLI headers: %#v", r.Header)
+		}
+		if r.URL.Path == "/api/autodiscover" {
+			_, _ = w.Write([]byte(`{"ok":true,"data":{"server":{"api_version":"v1"}}}`))
+			return
 		}
 		if r.Method == http.MethodPost {
 			var input map[string]any
@@ -80,8 +74,8 @@ func TestClientRunAndBuild(t *testing.T) {
 	if err := run([]string{"--version"}); err != nil {
 		t.Fatalf("run(--version): %v", err)
 	}
-	if err := run([]string{"--shell", "bash"}); err != nil {
-		t.Fatalf("run(--shell bash): %v", err)
+	if err := run([]string{"--shell", "completions", "bash"}); err != nil {
+		t.Fatalf("run(--shell completions bash): %v", err)
 	}
 	if err := run(nil); err == nil {
 		t.Fatal("non-interactive invocation without a server unexpectedly succeeded")
@@ -105,8 +99,37 @@ func TestClientRequestErrors(t *testing.T) {
 	}
 }
 
+func TestRequestUsesDiscoveredAPIVersion(t *testing.T) {
+	var discovered, versioned int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/autodiscover":
+			discovered++
+			_, _ = w.Write([]byte(`{"ok":true,"data":{"server":{"api_version":"v2"}}}`))
+		case "/api/v2/types":
+			versioned++
+			_, _ = w.Write([]byte(`{"ok":true,"data":{"types":[]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	apiVersions.Delete(server.URL)
+	if _, err := request(server.URL, http.MethodGet, "/api/{api_version}/types", nil, "en"); err != nil {
+		t.Fatalf("request with discovered version: %v", err)
+	}
+	if discovered != 1 || versioned != 1 {
+		t.Fatalf("discovery requests = %d, versioned requests = %d, want 1 each", discovered, versioned)
+	}
+}
+
 func TestTerminalModelNavigationAndBuild(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/autodiscover" {
+			_, _ = w.Write([]byte(`{"ok":true,"data":{"server":{"api_version":"v1"}}}`))
+			return
+		}
 		if r.Method == http.MethodPost {
 			_, _ = w.Write([]byte(`{"ok":true,"data":{"message":"feat(ui): add navigation"}}`))
 			return
@@ -140,19 +163,100 @@ func TestTerminalModelNavigationAndBuild(t *testing.T) {
 	}
 }
 
+func TestTerminalViewUsesSelectedLocale(t *testing.T) {
+	model := terminalModel{language: "es", output: "", server: "https://example.test"}
+	view := model.View()
+	if !strings.Contains(view, "Tipos de commit") || !strings.Contains(view, "Salir") {
+		t.Fatalf("Spanish terminal view is missing translated actions: %q", view)
+	}
+}
+
+func TestTerminalSearchAndHelp(t *testing.T) {
+	model := terminalModel{language: "en", width: 80, height: 24}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	model = updated.(terminalModel)
+	for _, character := range "random" {
+		updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{character}})
+		model = updated.(terminalModel)
+	}
+	if got := model.filteredActions(); len(got) != 1 || got[0] != 3 {
+		t.Fatalf("filtered actions = %v, want only random action", got)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(terminalModel)
+	if model.searching || !strings.Contains(model.View(), "Random message") {
+		t.Fatalf("search did not finish with its result visible: %#v", model)
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	model = updated.(terminalModel)
+	if !model.help || !strings.Contains(model.View(), "TUI help") {
+		t.Fatalf("help screen did not open: %#v", model)
+	}
+}
+
+func TestTerminalResizesForMicroDisplays(t *testing.T) {
+	model := terminalModel{language: "en"}
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 20, Height: 6})
+	model = updated.(terminalModel)
+	view := model.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) > 6 {
+		t.Fatalf("micro display rendered %d rows: %q", len(lines), view)
+	}
+	for _, line := range lines {
+		if len([]rune(line)) > 20 {
+			t.Fatalf("micro display rendered a line wider than 20 columns: %q", line)
+		}
+	}
+}
+
+func TestLocalizeClientError(t *testing.T) {
+	if got := localizeClientError("es", errors.New("unknown commit type")); got != "Tipo de commit desconocido." {
+		t.Fatalf("localized build error = %q", got)
+	}
+	if got := localizeClientError("en", errors.New("network error")); !strings.Contains(got, "network error") {
+		t.Fatalf("unrecognized error lost its detail: %q", got)
+	}
+}
+
+func TestClientShellIntegrationSupportsRequiredShells(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh", "fish", "sh", "dash", "ksh", "powershell", "pwsh"} {
+		t.Run(shell, func(t *testing.T) {
+			if err := printClientCompletions(shell, "gitmessages-cli"); err != nil {
+				t.Fatalf("print completions: %v", err)
+			}
+			if err := printClientShellInit(shell, "gitmessages-cli"); err != nil {
+				t.Fatalf("print initialization: %v", err)
+			}
+		})
+	}
+}
+
+func TestClientShellIntegrationAutoDetectsAndValidatesArguments(t *testing.T) {
+	t.Setenv("SHELL", "/bin/zsh")
+	if got := detectClientShell(); got != "zsh" {
+		t.Fatalf("detected shell = %q, want zsh", got)
+	}
+	if err := printClientShellIntegration("completions", nil, "gitmessages-cli"); err != nil {
+		t.Fatalf("auto-detected completions: %v", err)
+	}
+	if err := printClientShellIntegration("unknown", nil, "gitmessages-cli"); err == nil {
+		t.Fatal("unknown shell integration action was accepted")
+	}
+	if err := printClientShellIntegration("completions", []string{"bash", "extra"}, "gitmessages-cli"); err == nil {
+		t.Fatal("unexpected shell integration argument was accepted")
+	}
+}
+
 func TestTerminalSetupAndDisplaySelection(t *testing.T) {
-	root := filepath.Join(os.TempDir(), "apimgr")
-	if err := os.MkdirAll(root, 0700); err != nil {
-		t.Fatal(err)
-	}
-	configHome, err := os.MkdirTemp(root, "gitmessages-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(configHome) })
+	configHome := clientTestDir(t)
 	t.Setenv("XDG_CONFIG_HOME", configHome)
 	t.Setenv("HOME", configHome)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/autodiscover" {
+			_, _ = w.Write([]byte(`{"ok":true,"data":{"server":{"api_version":"v1"}}}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"ok":true,"data":{}}`))
 	}))
 	defer server.Close()

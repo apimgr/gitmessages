@@ -77,7 +77,7 @@ func (s *testSender) SendSecurityNotification(_, _, _, _ string, _ []byte) error
 
 func testService(t *testing.T, settings Settings, sender Sender) (*Service, *database.Store) {
 	t.Helper()
-	store, err := database.OpenSQLite(filepath.Join(t.TempDir(), "contact.db"), 4)
+	store, err := database.OpenSQLite(filepath.Join(projectTestDir(t), "contact.db"), 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestServiceValidationAndFieldDescriptors(t *testing.T) {
 	if _, err := New(nil, make([]byte, 32), make([]byte, 32), Settings{}, nil); err == nil {
 		t.Fatal("nil store was accepted")
 	}
-	store, err := database.OpenSQLite(filepath.Join(t.TempDir(), "constructor.db"), 1)
+	store, err := database.OpenSQLite(filepath.Join(projectTestDir(t), "constructor.db"), 1)
 	if err != nil {
 		t.Fatal(err)
 	}

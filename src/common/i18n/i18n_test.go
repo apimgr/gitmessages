@@ -14,6 +14,19 @@ func TestLocaleParity(t *testing.T) {
 	}
 }
 
+func TestForbiddenFormatTokensAreRejected(t *testing.T) {
+	for _, value := range []string{"value %s", "count %d", "enabled %t", "item {0}"} {
+		if !hasForbiddenFormatToken(value) {
+			t.Errorf("hasForbiddenFormatToken(%q) = false", value)
+		}
+	}
+	for _, value := range []string{"100% complete", "Hello, {name}"} {
+		if hasForbiddenFormatToken(value) {
+			t.Errorf("hasForbiddenFormatToken(%q) = true", value)
+		}
+	}
+}
+
 func TestFallbackAndDirection(t *testing.T) {
 	if got := T("unsupported", "nav.home"); got != "Home" {
 		t.Fatalf("unsupported locale fallback = %q", got)
@@ -95,8 +108,20 @@ func TestLanguagesJSONAndPluralCategories(t *testing.T) {
 		language string
 		count    int64
 	}{
-		{"ar", 0}, {"ar", 1}, {"ar", 2}, {"ar", 5}, {"ar", 15}, {"ar", 101},
-		{"fr", 0}, {"fr", 1}, {"it", 1}, {"it", 1_000_000}, {"it", 2}, {"zh", 2}, {"ja", 3}, {"en", 2},
+		{"ar", 0},
+		{"ar", 1},
+		{"ar", 2},
+		{"ar", 5},
+		{"ar", 15},
+		{"ar", 101},
+		{"fr", 0},
+		{"fr", 1},
+		{"it", 1},
+		{"it", 1_000_000},
+		{"it", 2},
+		{"zh", 2},
+		{"ja", 3},
+		{"en", 2},
 	} {
 		if got := pluralCategory(test.language, test.count); got == "" {
 			t.Errorf("pluralCategory(%q, %d) is empty", test.language, test.count)

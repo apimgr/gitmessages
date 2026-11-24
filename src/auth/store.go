@@ -10,11 +10,13 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"math/big"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/apimgr/gitmessages/src/database"
@@ -43,6 +45,7 @@ type Token struct {
 	Kind       string     `json:"kind"`
 	Name       string     `json:"name"`
 	Prefix     string     `json:"prefix"`
+	Last4      string     `json:"last4"`
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
@@ -59,6 +62,8 @@ type Store struct {
 	maxLinked       int
 	idlePurgeDays   int
 	cookieMaxAge    time.Duration
+	authObserverMu  sync.RWMutex
+	authObserver    func(method string, success bool)
 }
 
 // Open creates an auth store backed by the shared local SQLite database.
@@ -90,11 +95,76 @@ func NewStore(db *database.Store, operatorToken, encryptionKey string, maxLinked
 	if cookieMaxAge <= 0 {
 		cookieMaxAge = 365 * 24 * time.Hour
 	}
-	return &Store{db: db, operatorHash: sha256.Sum256([]byte(operatorToken)), operatorEnabled: operatorToken != "", encryptionKey: key, maxLinked: maxLinked, idlePurgeDays: idlePurgeDays, cookieMaxAge: cookieMaxAge}, nil
+	store := &Store{db: db, operatorHash: sha256.Sum256([]byte(operatorToken)), operatorEnabled: operatorToken != "", encryptionKey: key, maxLinked: maxLinked, idlePurgeDays: idlePurgeDays, cookieMaxAge: cookieMaxAge}
+	if err := store.populateTokenLast4(context.Background()); err != nil {
+		return nil, fmt.Errorf("migrate token display suffixes: %w", err)
+	}
+	return store, nil
+}
+
+func (s *Store) populateTokenLast4(ctx context.Context) error {
+	rows, err := s.db.Read().QueryContext(ctx, `SELECT id, owner_id, kind, token_enc FROM api_tokens WHERE token_last4 = ''`)
+	if err != nil {
+		return err
+	}
+	type tokenSuffix struct {
+		id      int64
+		ownerID string
+		kind    string
+		encoded string
+	}
+	var pending []tokenSuffix
+	for rows.Next() {
+		var token tokenSuffix
+		if err := rows.Scan(&token.id, &token.ownerID, &token.kind, &token.encoded); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		pending = append(pending, token)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, token := range pending {
+		raw, err := s.decrypt(token.encoded, token.ownerID, token.kind)
+		if err != nil {
+			return fmt.Errorf("decrypt existing token %d: %w", token.id, err)
+		}
+		if len(raw) < 4 {
+			return fmt.Errorf("existing token %d is shorter than four characters", token.id)
+		}
+		if err := s.db.Write(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_last4 = ? WHERE id = ? AND token_last4 = ''`, raw[len(raw)-4:], token.id)
+			return err
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Database returns the shared database handle for server modules that need it.
 func (s *Store) Database() *database.Store { return s.db }
+
+func (s *Store) SetAuthObserver(observer func(method string, success bool)) {
+	s.authObserverMu.Lock()
+	s.authObserver = observer
+	s.authObserverMu.Unlock()
+}
+
+func (s *Store) recordAuth(method string, success bool) {
+	s.authObserverMu.RLock()
+	observer := s.authObserver
+	s.authObserverMu.RUnlock()
+	if observer != nil {
+		defer func() { _ = recover() }()
+		observer(method, success)
+	}
+}
 
 // CookieMaxAge reports the configured sliding owner-cookie lifetime.
 func (s *Store) CookieMaxAge() time.Duration { return s.cookieMaxAge }
@@ -163,6 +233,7 @@ func (s *Store) Close() error { return s.db.Close() }
 // AuthenticateBearer so it can be recognized without a database lookup.
 func (s *Store) Authenticate(ctx context.Context, raw string) (Identity, error) {
 	if len(raw) == 0 {
+		s.recordAuth("owner_token", false)
 		return Identity{}, ErrInvalidToken
 	}
 	hash := tokenHash(raw)
@@ -173,9 +244,11 @@ func (s *Store) Authenticate(ctx context.Context, raw string) (Identity, error) 
 	var lastUsed sql.NullInt64
 	err := s.db.Read().QueryRowContext(ctx, `SELECT id, owner_id, kind, token_hash, last_used_at FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`, hash, time.Now().Unix()).Scan(&identity.TokenID, &identity.OwnerID, &kind, &storedHash, &lastUsed)
 	if err != nil {
+		s.recordAuth("owner_token", false)
 		return Identity{}, ErrInvalidToken
 	}
 	if subtle.ConstantTimeCompare([]byte(hash), []byte(storedHash)) != 1 {
+		s.recordAuth("owner_token", false)
 		return Identity{}, ErrInvalidToken
 	}
 	identity.Kind = kind
@@ -187,19 +260,28 @@ func (s *Store) Authenticate(ctx context.Context, raw string) (Identity, error) 
 			_, err := tx.ExecContext(ctx, `UPDATE owners SET last_seen_at = ? WHERE id = ?`, time.Now().Unix(), identity.OwnerID)
 			return err
 		}); err != nil {
+			s.recordAuth("owner_token", false)
 			return Identity{}, err
 		}
 	}
+	s.recordAuth("owner_token", true)
 	return identity, nil
 }
 
 // AuthenticateBearer validates operator and owner bearer credentials.
 func (s *Store) AuthenticateBearer(ctx context.Context, raw string) (Identity, error) {
-	if s.operatorEnabled && raw != "" {
+	if strings.HasPrefix(raw, "adm_") {
+		if !s.operatorEnabled {
+			s.recordAuth("operator_token", false)
+			return Identity{}, ErrInvalidToken
+		}
 		got := sha256.Sum256([]byte(raw))
 		if subtle.ConstantTimeCompare(got[:], s.operatorHash[:]) == 1 {
+			s.recordAuth("operator_token", true)
 			return Identity{Kind: "operator", Admin: true}, nil
 		}
+		s.recordAuth("operator_token", false)
+		return Identity{}, ErrInvalidToken
 	}
 	return s.Authenticate(ctx, raw)
 }
@@ -224,7 +306,7 @@ func (s *Store) IssueOwner(ctx context.Context) (string, Identity, error) {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO owners(id) VALUES (?)`, ownerID); err != nil {
 			return err
 		}
-		result, err := tx.ExecContext(ctx, `INSERT INTO api_tokens(owner_id, kind, token_hash, token_prefix, token_enc) VALUES (?, 'primary', ?, ?, ?)`, ownerID, hash, tokenPrefix(raw), encoded)
+		result, err := tx.ExecContext(ctx, `INSERT INTO api_tokens(owner_id, kind, token_hash, token_prefix, token_last4, token_enc) VALUES (?, 'primary', ?, ?, ?, ?)`, ownerID, hash, tokenPrefix(raw), raw[len(raw)-4:], encoded)
 		if err != nil {
 			return err
 		}
@@ -255,7 +337,7 @@ func (s *Store) Restore(ctx context.Context, raw string) (Identity, error) {
 func (s *Store) List(ctx context.Context, ownerID string) ([]Token, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	rows, err := s.db.Read().QueryContext(ctx, `SELECT id, kind, COALESCE(name,''), token_prefix, created_at, last_used_at, expires_at, revoked_at FROM api_tokens WHERE owner_id = ? ORDER BY CASE kind WHEN 'primary' THEN 0 ELSE 1 END, id`, ownerID)
+	rows, err := s.db.Read().QueryContext(ctx, `SELECT id, kind, COALESCE(name,''), token_prefix, token_last4, created_at, last_used_at, expires_at, revoked_at FROM api_tokens WHERE owner_id = ? ORDER BY CASE kind WHEN 'primary' THEN 0 ELSE 1 END, id`, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +348,7 @@ func (s *Store) List(ctx context.Context, ownerID string) ([]Token, error) {
 		var token Token
 		var created int64
 		var lastUsed, expires, revoked sql.NullInt64
-		if err := rows.Scan(&token.ID, &token.Kind, &token.Name, &token.Prefix, &created, &lastUsed, &expires, &revoked); err != nil {
+		if err := rows.Scan(&token.ID, &token.Kind, &token.Name, &token.Prefix, &token.Last4, &created, &lastUsed, &expires, &revoked); err != nil {
 			return nil, err
 		}
 		token.CreatedAt = time.Unix(created, 0).UTC()
@@ -297,7 +379,7 @@ func (s *Store) List(ctx context.Context, ownerID string) ([]Token, error) {
 
 // ListAll returns token metadata for operator maintenance; token values and hashes are omitted.
 func (s *Store) ListAll(ctx context.Context) ([]Token, error) {
-	rows, err := s.db.Read().QueryContext(ctx, `SELECT id, owner_id, kind, COALESCE(name,''), token_prefix, created_at, last_used_at, expires_at, revoked_at FROM api_tokens ORDER BY owner_id, id`)
+	rows, err := s.db.Read().QueryContext(ctx, `SELECT id, owner_id, kind, COALESCE(name,''), token_prefix, token_last4, created_at, last_used_at, expires_at, revoked_at FROM api_tokens ORDER BY owner_id, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +390,7 @@ func (s *Store) ListAll(ctx context.Context) ([]Token, error) {
 		var token Token
 		var created int64
 		var lastUsed, expires, revoked sql.NullInt64
-		if err := rows.Scan(&token.ID, &token.OwnerID, &token.Kind, &token.Name, &token.Prefix, &created, &lastUsed, &expires, &revoked); err != nil {
+		if err := rows.Scan(&token.ID, &token.OwnerID, &token.Kind, &token.Name, &token.Prefix, &token.Last4, &created, &lastUsed, &expires, &revoked); err != nil {
 			return nil, err
 		}
 		token.CreatedAt = time.Unix(created, 0).UTC()
@@ -344,16 +426,51 @@ func (s *Store) RevokeByPrefix(ctx context.Context, prefix string) error {
 	if err := s.db.Read().QueryRowContext(ctx, `SELECT id, owner_id, kind FROM api_tokens WHERE token_prefix = ? AND revoked_at IS NULL`, prefix).Scan(&id, &ownerID, &kind); err != nil {
 		return ErrNotFound
 	}
+	if kind == "primary" {
+		_, _, err := s.DeleteOwner(ctx, ownerID, "cli")
+		return err
+	}
 	return s.db.Write(ctx, func(tx *sql.Tx) error {
-		if kind == "primary" {
-			if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET revoked_at = ?, revoked_reason = 'operator_revoked' WHERE owner_id = ? AND revoked_at IS NULL`, time.Now().Unix(), ownerID); err != nil {
-				return err
-			}
-		} else if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET revoked_at = ?, revoked_reason = 'operator_revoked' WHERE id = ? AND revoked_at IS NULL`, time.Now().Unix(), id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET revoked_at = ?, revoked_reason = 'operator_action' WHERE id = ? AND revoked_at IS NULL`, time.Now().Unix(), id); err != nil {
 			return err
 		}
-		return audit(tx, ctx, "token.revoked", ownerID, prefix, "operator")
+		return audit(tx, ctx, "token.revoked", ownerID, prefix, "cli")
 	})
+}
+
+// DeleteOwner deletes an owner and its credentials atomically, then records the deletion source.
+func (s *Store) DeleteOwner(ctx context.Context, ownerID, source string) (int64, int64, error) {
+	var tokenCount int64
+	var resourceCount int64
+	err := s.db.Write(ctx, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_tokens WHERE owner_id = ?`, ownerID).Scan(&tokenCount); err != nil {
+			return err
+		}
+		if tokenCount == 0 {
+			return ErrNotFound
+		}
+		result, err := tx.ExecContext(ctx, `DELETE FROM owners WHERE id = ?`, ownerID)
+		if err != nil {
+			return err
+		}
+		deleted, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if deleted != 1 {
+			return ErrNotFound
+		}
+		details, err := json.Marshal(map[string]any{"scope": "owner", "tokens": tokenCount, "resources": resourceCount, "source": source})
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO audit_log(level, category, action, target_type, target_id, details, success) VALUES ('info','security','token.revoked','owner',?,?,1)`, ownerID, string(details))
+		return err
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("delete owner: %w", err)
+	}
+	return tokenCount, resourceCount, nil
 }
 
 func (s *Store) Reveal(ctx context.Context, ownerID string, tokenID int64) (Token, error) {
@@ -391,18 +508,14 @@ func (s *Store) Reveal(ctx context.Context, ownerID string, tokenID int64) (Toke
 
 // MaskedValue returns a token's required masked display without recording a reveal event.
 func (s *Store) MaskedValue(ctx context.Context, ownerID string, tokenID int64) (string, error) {
-	var kind, encoded string
-	if err := s.db.Read().QueryRowContext(ctx, `SELECT kind, token_enc FROM api_tokens WHERE owner_id = ? AND id = ?`, ownerID, tokenID).Scan(&kind, &encoded); err != nil {
+	var last4 string
+	if err := s.db.Read().QueryRowContext(ctx, `SELECT token_last4 FROM api_tokens WHERE owner_id = ? AND id = ?`, ownerID, tokenID).Scan(&last4); err != nil {
 		return "", ErrNotFound
 	}
-	raw, err := s.decrypt(encoded, ownerID, kind)
-	if err != nil {
-		return "", err
-	}
-	if len(raw) < 4 {
+	if len(last4) != 4 {
 		return "", ErrInvalidToken
 	}
-	return "own_••••••••••••••••••••••••" + raw[len(raw)-4:], nil
+	return "own_••••••••••••••••••••••••" + last4, nil
 }
 
 func (s *Store) Rotate(ctx context.Context, ownerID string, tokenID int64) (string, Token, error) {
@@ -422,7 +535,7 @@ func (s *Store) Rotate(ctx context.Context, ownerID string, tokenID int64) (stri
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	err = s.db.Write(ctx, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_hash = ?, token_prefix = ?, token_enc = ?, rotated_at = ?, last_used_at = NULL WHERE owner_id = ? AND id = ? AND revoked_at IS NULL`, tokenHash(raw), tokenPrefix(raw), encoded, time.Now().Unix(), ownerID, tokenID)
+		result, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_hash = ?, token_prefix = ?, token_last4 = ?, token_enc = ?, rotated_at = ?, last_used_at = NULL WHERE owner_id = ? AND id = ? AND revoked_at IS NULL`, tokenHash(raw), tokenPrefix(raw), raw[len(raw)-4:], encoded, time.Now().Unix(), ownerID, tokenID)
 		if err != nil {
 			return err
 		}
@@ -435,7 +548,7 @@ func (s *Store) Rotate(ctx context.Context, ownerID string, tokenID int64) (stri
 	if err != nil {
 		return "", Token{}, err
 	}
-	token := Token{ID: tokenID, Kind: kind, Name: name, Prefix: tokenPrefix(raw), Value: raw, Status: "active", CreatedAt: time.Now().UTC()}
+	token := Token{ID: tokenID, Kind: kind, Name: name, Prefix: tokenPrefix(raw), Last4: raw[len(raw)-4:], Value: raw, Status: "active", CreatedAt: time.Now().UTC()}
 	if expires.Valid {
 		v := time.Unix(expires.Int64, 0).UTC()
 		token.ExpiresAt = &v
@@ -479,7 +592,7 @@ func (s *Store) CreateLinked(ctx context.Context, ownerID, name string, expiresA
 		if expiresAt != nil {
 			expiry = expiresAt.UTC().Unix()
 		}
-		result, err := tx.ExecContext(ctx, `INSERT INTO api_tokens(owner_id, kind, name, token_hash, token_prefix, token_enc, expires_at) VALUES (?, 'linked', ?, ?, ?, ?, ?)`, ownerID, name, tokenHash(raw), tokenPrefix(raw), encoded, expiry)
+		result, err := tx.ExecContext(ctx, `INSERT INTO api_tokens(owner_id, kind, name, token_hash, token_prefix, token_last4, token_enc, expires_at) VALUES (?, 'linked', ?, ?, ?, ?, ?, ?)`, ownerID, name, tokenHash(raw), tokenPrefix(raw), raw[len(raw)-4:], encoded, expiry)
 		if err != nil {
 			return err
 		}

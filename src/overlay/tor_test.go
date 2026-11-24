@@ -17,7 +17,7 @@ import (
 func TestTorConfigurationAndMissingBinary(t *testing.T) {
 	settings := config.DefaultConfig().Server.Tor
 	settings.UseNetwork = true
-	manager := NewTorManager(t.TempDir(), t.TempDir(), t.TempDir(), settings, nil)
+	manager := NewTorManager(projectTestDir(t), projectTestDir(t), projectTestDir(t), settings, nil)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestTorConfigurationAndMissingBinary(t *testing.T) {
 }
 
 func TestTorManagerTracksHiddenServiceRequests(t *testing.T) {
-	manager := NewTorManager(t.TempDir(), t.TempDir(), t.TempDir(), config.DefaultConfig().Server.Tor, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	manager := NewTorManager(projectTestDir(t), projectTestDir(t), projectTestDir(t), config.DefaultConfig().Server.Tor, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	response := httptest.NewRecorder()
@@ -65,11 +65,11 @@ func TestTorManagerTracksHiddenServiceRequests(t *testing.T) {
 }
 
 func TestTorControlFileAndConfigurationPaths(t *testing.T) {
-	directory := t.TempDir()
+	directory := projectTestDir(t)
 	cookie := filepath.Join(directory, "auth cookie")
 	path := filepath.Join(directory, "control-port")
 	contents := "PORT=127.0.0.1:19001\nCOOKIEFILE=\"" + cookie + "\"\n"
-	if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	address, gotCookie, err := waitTorControlFile(context.Background(), path, time.Second)
@@ -103,7 +103,7 @@ func TestTorControlFileAndConfigurationPaths(t *testing.T) {
 }
 
 func TestTorFailureAndBinaryResolution(t *testing.T) {
-	manager := NewTorManager(t.TempDir(), t.TempDir(), t.TempDir(), config.TorConfig{Binary: os.Args[0]}, nil)
+	manager := NewTorManager(projectTestDir(t), projectTestDir(t), projectTestDir(t), config.TorConfig{Binary: os.Args[0]}, nil)
 	if binary, err := manager.resolveBinary(); err != nil || binary == "" {
 		t.Fatalf("current executable did not resolve as a binary: %q %v", binary, err)
 	}

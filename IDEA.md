@@ -13,7 +13,7 @@ repo: https://github.com/apimgr/gitmessages
 license: MIT
 binary: gitmessages
 client_binary: gitmessages-cli
-owner_token: gitmessages_owner_token_7gT2qA
+owner_token: gitmessages_owner_token_wtoavxex
 
 ## Business logic
 
@@ -41,6 +41,8 @@ owner_token: gitmessages_owner_token_7gT2qA
 - No user-submitted messages or community conventions (curated dataset only, updated via releases)
 - No paid tiers or rate-limited access tiers
 - No git repository integration (read-only reference provider only)
+
+**Owner-cookie compatibility:** `owner_token` names the current cookie. The previous `gitmessages_owner_token_7gT2qA` remains a read-only fallback indefinitely, only when the current cookie is absent and the token passes normal validation. A verified legacy use issues the current cookie with the configured sliding max age and expires the legacy cookie in the same response. Invalid current cookies clear both names without fallback. API routes ignore both cookies.
 
 **Product data and third-party integrations:** The catalog is immutable release data embedded in the binary, and the message builder is stateless. The service accepts contact and security reports required by the shared server specification, but never accepts user-submitted commit messages or community conventions. It does not query third-party content providers for catalog or message data. The shared server security and GeoIP feeds are operational datasets downloaded and refreshed as specified by AI.md; they do not modify the curated catalog. Tor and optional I2P provide alternate network access to the same local reference service. Shared operational state, owner tokens, contact reports, and security reports may be persisted as required by AI.md. Email is used for configured contact and security-report delivery; no scheduled catalog jobs run. Shared backup and restore cover applicable operational configuration and state, never user accounts or submitted catalog content. Operational availability controls such as health checks and rate limiting remain applicable.
 

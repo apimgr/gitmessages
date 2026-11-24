@@ -17,8 +17,10 @@ import (
 	"golang.org/x/net/publicsuffix"
 )
 
-var validURLHostLabel = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
-var validURLPrefixCharacters = regexp.MustCompile(`^[A-Za-z0-9._~!$&'()*+,;=:@%/-]+$`)
+var (
+	validURLHostLabel        = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+	validURLPrefixCharacters = regexp.MustCompile(`^[A-Za-z0-9._~!$&'()*+,;=:@%/-]+$`)
+)
 
 var learnedURLDomains = struct {
 	sync.RWMutex
@@ -28,7 +30,7 @@ var learnedURLDomains = struct {
 // GetURLVars resolves the public origin for a request, accepting proxy headers only from trusted peers.
 func GetURLVars(r *http.Request) (proto, fqdn, port string) {
 	if r == nil {
-		return "http", "localhost", ""
+		return "http", "", ""
 	}
 	cfg := config.Get().Server
 	peerTrusted := trustedProxyPeer(r, cfg)
@@ -110,6 +112,9 @@ func GetURLVars(r *http.Request) (proto, fqdn, port string) {
 // BuildURL joins a request-specific public origin and validated proxy/config path prefix.
 func BuildURL(r *http.Request, path string) string {
 	proto, host, port := GetURLVars(r)
+	if host == "" {
+		return ""
+	}
 	if port != "" {
 		host = net.JoinHostPort(host, port)
 	} else if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
@@ -499,16 +504,27 @@ func wildcardFromDomains(domains []string) string {
 }
 
 func fallbackHostname() string {
-	if hostname, err := os.Hostname(); err == nil && validHostname(hostname) {
+	if hostname, err := os.Hostname(); err == nil && validURLDisplayHost(hostname) {
 		return hostname
 	}
-	if hostname := strings.TrimSpace(os.Getenv("HOSTNAME")); validHostname(hostname) {
+	if hostname := strings.TrimSpace(os.Getenv("HOSTNAME")); validURLDisplayHost(hostname) {
 		return hostname
 	}
 	for _, address := range publicInterfaceAddresses() {
 		return address
 	}
-	return "localhost"
+	return ""
+}
+
+func validURLDisplayHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if !validHostname(host) || strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".local") || strings.HasSuffix(strings.ToLower(host), ".localdomain") {
+		return false
+	}
+	if address := net.ParseIP(host); address != nil {
+		return address.IsGlobalUnicast() && !address.IsLoopback() && !address.IsUnspecified() && !address.IsLinkLocalUnicast()
+	}
+	return true
 }
 
 func publicInterfaceAddresses() []string {

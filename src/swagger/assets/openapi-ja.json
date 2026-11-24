@@ -1,0 +1,1584 @@
+{
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "厳選されたコミット規約カタログとメッセージ作成ツールです。",
+    "title": "Git Messages API",
+    "version": "dev"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/autodiscover": {
+      "get": {
+        "description": "リソース",
+        "operationId": "get_api_autodiscover",
+        "responses": {
+          "200": {
+            "description": "リソース"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "summary": "REST API"
+      }
+    },
+    "/api/graphql": {
+      "post": {
+        "description": "GraphiQL で公開コミットカタログを照会できます。JavaScript を使わないクエリフォームも利用できます。",
+        "operationId": "graphql_query_api_graphql",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "description": "GraphQL クエリ",
+                    "type": "string"
+                  },
+                  "variables": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "GraphiQL で公開コミットカタログを照会できます。JavaScript を使わないクエリフォームも利用できます。"
+          }
+        },
+        "summary": "GraphQL"
+      }
+    },
+    "/api/healthz": {
+      "get": {
+        "description": "サービスは正常です",
+        "operationId": "get_api_healthz",
+        "responses": {
+          "200": {
+            "description": "サービスは正常です"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "summary": "サービス状態"
+      }
+    },
+    "/api/mcp": {
+      "post": {
+        "description": "Streamable HTTP を使用して公開カタログとステートレスなメッセージビルダーに接続します。",
+        "operationId": "mcp_endpoint_api_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Streamable HTTP を使用して公開カタログとステートレスなメッセージビルダーに接続します。"
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "リクエストが多すぎます"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Git Messages MCP 接続ヘルプ"
+      }
+    },
+    "/api/metrics": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_metrics_api_metrics",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/grafana": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_metrics_api_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/loki": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_metrics_api_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/prometheus": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_metrics_api_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/swagger": {
+      "get": {
+        "description": "REST API",
+        "operationId": "get_api_swagger",
+        "responses": {
+          "200": {
+            "description": "REST API"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "summary": "OpenAPI"
+      }
+    },
+    "/api/v1": {
+      "get": {
+        "description": "リソース",
+        "operationId": "get_api_index",
+        "responses": {
+          "200": {
+            "description": "リソース"
+          }
+        },
+        "summary": "REST API"
+      }
+    },
+    "/api/v1/conventions": {
+      "get": {
+        "description": "対応するコミット規約です。",
+        "operationId": "list_conventions",
+        "responses": {
+          "200": {
+            "description": "対応するコミット規約です。"
+          }
+        },
+        "summary": "規約を一覧表示"
+      }
+    },
+    "/api/v1/messages": {
+      "post": {
+        "description": "書式設定済みのコミットメッセージです。",
+        "operationId": "build_commit_message",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "body": {
+                    "description": "本文（任意）",
+                    "type": "string"
+                  },
+                  "breaking": {
+                    "description": "破壊的変更",
+                    "type": "boolean"
+                  },
+                  "convention": {
+                    "description": "規約",
+                    "enum": [
+                      "conventional-commits",
+                      "angular"
+                    ],
+                    "type": "string"
+                  },
+                  "description": {
+                    "description": "短い説明",
+                    "type": "string"
+                  },
+                  "scope": {
+                    "description": "スコープ（任意）",
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "コミットの種類",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "description"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "書式設定済みのコミットメッセージです。"
+          },
+          "400": {
+            "description": "リクエストに無効なメッセージ項目が含まれています。"
+          }
+        },
+        "summary": "コミットメッセージを作成"
+      }
+    },
+    "/api/v1/messages/random": {
+      "get": {
+        "description": "ランダムなコミットメッセージ例です。",
+        "operationId": "get_random_example",
+        "responses": {
+          "200": {
+            "description": "ランダムなコミットメッセージ例です。"
+          }
+        },
+        "summary": "ランダムなメッセージ例を取得"
+      }
+    },
+    "/api/v1/server/about": {
+      "get": {
+        "description": "Git Messages はコミットメッセージ規約の厳選リファレンスで、明確なメッセージを作成するツールです。",
+        "operationId": "get_about",
+        "responses": {
+          "200": {
+            "description": "Git Messages はコミットメッセージ規約の厳選リファレンスで、明確なメッセージを作成するツールです。"
+          }
+        },
+        "summary": "Git Messages について"
+      }
+    },
+    "/api/v1/server/contact": {
+      "get": {
+        "description": "Returns report-form descriptors and a one-use captcha challenge",
+        "operationId": "get_contact_form",
+        "responses": {
+          "200": {
+            "description": "Returns report-form descriptors and a one-use captcha challenge"
+          }
+        },
+        "summary": "Contact report form"
+      },
+      "post": {
+        "description": "Uses a submit and confirm review flow",
+        "operationId": "submit_contact_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "properties": {
+                  "captcha_answer": {
+                    "type": "string"
+                  },
+                  "captcha_id": {
+                    "type": "string"
+                  },
+                  "confirmed": {
+                    "type": "boolean"
+                  },
+                  "email": {
+                    "format": "email",
+                    "maxLength": 254,
+                    "type": "string"
+                  },
+                  "form_token": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 100,
+                    "type": "string"
+                  },
+                  "review_token": {
+                    "type": "string"
+                  },
+                  "step": {
+                    "enum": [
+                      "submit",
+                      "confirm",
+                      "edit"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "abuse",
+                      "dmca",
+                      "privacy",
+                      "security"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name",
+                  "email",
+                  "form_token"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Uses a submit and confirm review flow"
+          },
+          "400": {
+            "description": "リクエストに無効なメッセージ項目が含まれています。"
+          }
+        },
+        "summary": "Submit a contact report"
+      }
+    },
+    "/api/v1/server/dpo": {
+      "get": {
+        "description": "Public DPO contact information",
+        "operationId": "get_data_protection_contact",
+        "responses": {
+          "200": {
+            "description": "Public DPO contact information"
+          }
+        },
+        "summary": "Data protection contact"
+      }
+    },
+    "/api/v1/server/graphql": {
+      "post": {
+        "description": "GraphiQL で公開コミットカタログを照会できます。JavaScript を使わないクエリフォームも利用できます。",
+        "operationId": "graphql_query_api_v1_server_graphql",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "description": "GraphQL クエリ",
+                    "type": "string"
+                  },
+                  "variables": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "GraphiQL で公開コミットカタログを照会できます。JavaScript を使わないクエリフォームも利用できます。"
+          }
+        },
+        "summary": "GraphQL"
+      }
+    },
+    "/api/v1/server/healthz": {
+      "get": {
+        "description": "サービスは正常です",
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "description": "サービスは正常です"
+          }
+        },
+        "summary": "サービス状態"
+      }
+    },
+    "/api/v1/server/help": {
+      "get": {
+        "description": "参照",
+        "operationId": "get_help",
+        "responses": {
+          "200": {
+            "description": "参照"
+          }
+        },
+        "summary": "ヘルプ"
+      }
+    },
+    "/api/v1/server/help/mcp": {
+      "get": {
+        "description": "Streamable HTTP を使用して公開カタログとステートレスなメッセージビルダーに接続します。",
+        "operationId": "get_mcp_help",
+        "responses": {
+          "200": {
+            "description": "Streamable HTTP を使用して公開カタログとステートレスなメッセージビルダーに接続します。"
+          }
+        },
+        "summary": "Git Messages MCP 接続ヘルプ"
+      }
+    },
+    "/api/v1/server/mcp": {
+      "post": {
+        "description": "Streamable HTTP を使用して公開カタログとステートレスなメッセージビルダーに接続します。",
+        "operationId": "mcp_endpoint_api_v1_server_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Streamable HTTP を使用して公開カタログとステートレスなメッセージビルダーに接続します。"
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "リクエストが多すぎます"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Git Messages MCP 接続ヘルプ"
+      }
+    },
+    "/api/v1/server/metrics": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_metrics_api_v1_server_metrics",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/grafana": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_metrics_api_v1_server_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/loki": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_metrics_api_v1_server_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/prometheus": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_metrics_api_v1_server_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/preferences": {
+      "get": {
+        "description": "設定",
+        "operationId": "get_preferences",
+        "responses": {
+          "200": {
+            "description": "設定"
+          }
+        },
+        "summary": "設定"
+      },
+      "post": {
+        "description": "設定",
+        "operationId": "save_preferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "properties": {
+                  "lang": {
+                    "type": "string"
+                  },
+                  "theme": {
+                    "enum": [
+                      "dark",
+                      "light",
+                      "auto"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "設定"
+          },
+          "400": {
+            "description": "リクエストに無効なメッセージ項目が含まれています。"
+          }
+        },
+        "summary": "保存"
+      }
+    },
+    "/api/v1/server/preferences/sync": {
+      "get": {
+        "description": "設定を別のデバイスに移します。",
+        "operationId": "get_preferences_sync",
+        "responses": {
+          "200": {
+            "description": "設定を別のデバイスに移します。"
+          }
+        },
+        "summary": "設定を同期"
+      }
+    },
+    "/api/v1/server/preferences/sync/import": {
+      "get": {
+        "description": "設定を別のデバイスに移します。",
+        "operationId": "import_preferences_sync",
+        "responses": {
+          "200": {
+            "description": "設定を別のデバイスに移します。"
+          }
+        },
+        "summary": "インポート"
+      }
+    },
+    "/api/v1/server/preferences/tokens": {
+      "get": {
+        "description": "所有者トークン",
+        "operationId": "list_owner_tokens",
+        "responses": {
+          "200": {
+            "description": "所有者トークン"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "所有者トークン"
+      },
+      "post": {
+        "description": "{resources}への完全なアクセス権です。秘密にしてください。",
+        "operationId": "create_linked_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiry": {
+                    "enum": [
+                      "never",
+                      "7d",
+                      "30d",
+                      "90d",
+                      "1y"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "{resources}への完全なアクセス権です。秘密にしてください。"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "リンク済みトークンを作成"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary": {
+      "delete": {
+        "description": "リンクされたトークン {linked} 個と、リンクトークンで作成されたものを含む {resources} を削除します。",
+        "operationId": "revoke_primary_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "confirm": {
+                    "maxLength": 4,
+                    "minLength": 4,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "confirm"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "リンクされたトークン {linked} 個と、リンクトークンで作成されたものを含む {resources} を削除します。"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "プライマリトークンを失効"
+      },
+      "post": {
+        "description": "プライマリトークン",
+        "operationId": "issue_primary_token",
+        "responses": {
+          "200": {
+            "description": "プライマリトークン"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "summary": "新しいトークン"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary/reveal": {
+      "post": {
+        "description": "このページ読み込み時に一度だけ表示されます。",
+        "operationId": "reveal_primary_token",
+        "responses": {
+          "200": {
+            "description": "このページ読み込み時に一度だけ表示されます。"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "表示"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary/rotate": {
+      "post": {
+        "description": "プライマリトークン",
+        "operationId": "rotate_primary_token",
+        "responses": {
+          "200": {
+            "description": "プライマリトークン"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "ローテーション"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}": {
+      "delete": {
+        "description": "失効",
+        "operationId": "revoke_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "失効"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "失効"
+      },
+      "patch": {
+        "description": "保存",
+        "operationId": "update_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiry": {
+                    "enum": [
+                      "never",
+                      "7d",
+                      "30d",
+                      "90d",
+                      "1y"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "保存"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "編集"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}/reveal": {
+      "post": {
+        "description": "このページ読み込み時に一度だけ表示されます。",
+        "operationId": "reveal_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "このページ読み込み時に一度だけ表示されます。"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "表示"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}/rotate": {
+      "post": {
+        "description": "プライマリトークン",
+        "operationId": "rotate_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "プライマリトークン"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "ローテーション"
+      }
+    },
+    "/api/v1/server/privacy": {
+      "get": {
+        "description": "このサービスは厳選されたコミット規約の静的カタログを提供します。ユーザーアカウントや投稿機能はなく、個人データも保存しません。運用ログはサーバー管理者が取り扱う場合があります。",
+        "operationId": "get_privacy",
+        "responses": {
+          "200": {
+            "description": "このサービスは厳選されたコミット規約の静的カタログを提供します。ユーザーアカウントや投稿機能はなく、個人データも保存しません。運用ログはサーバー管理者が取り扱う場合があります。"
+          }
+        },
+        "summary": "プライバシー"
+      }
+    },
+    "/api/v1/server/security": {
+      "get": {
+        "description": "脆弱性は GitHub の非公開セキュリティ報告からお知らせください。公開 Issue に悪用の詳細を投稿しないでください。",
+        "operationId": "get_security",
+        "responses": {
+          "200": {
+            "description": "脆弱性は GitHub の非公開セキュリティ報告からお知らせください。公開 Issue に悪用の詳細を投稿しないでください。"
+          }
+        },
+        "summary": "セキュリティ"
+      }
+    },
+    "/api/v1/server/security/policy": {
+      "get": {
+        "description": "Public coordinated-disclosure policy",
+        "operationId": "get_security_policy",
+        "responses": {
+          "200": {
+            "description": "Public coordinated-disclosure policy"
+          }
+        },
+        "summary": "Security disclosure policy"
+      }
+    },
+    "/api/v1/server/security/thanks": {
+      "get": {
+        "description": "Public researcher acknowledgments",
+        "operationId": "get_security_thanks",
+        "responses": {
+          "200": {
+            "description": "Public researcher acknowledgments"
+          }
+        },
+        "summary": "Security acknowledgments"
+      }
+    },
+    "/api/v1/server/swagger": {
+      "get": {
+        "description": "REST API",
+        "operationId": "get_openapi",
+        "responses": {
+          "200": {
+            "description": "REST API"
+          }
+        },
+        "summary": "OpenAPI"
+      }
+    },
+    "/api/v1/server/terms": {
+      "get": {
+        "description": "このカタログは参考情報です。生成したメッセージを使う前に、選択した規約とリポジトリの貢献ルールを確認してください。",
+        "operationId": "get_terms",
+        "responses": {
+          "200": {
+            "description": "このカタログは参考情報です。生成したメッセージを使う前に、選択した規約とリポジトリの貢献ルールを確認してください。"
+          }
+        },
+        "summary": "利用規約"
+      }
+    },
+    "/api/v1/templates": {
+      "get": {
+        "description": "厳選されたメッセージテンプレートです。",
+        "operationId": "list_templates",
+        "responses": {
+          "200": {
+            "description": "厳選されたメッセージテンプレートです。"
+          }
+        },
+        "summary": "メッセージテンプレートを一覧表示"
+      }
+    },
+    "/api/v1/templates/random": {
+      "get": {
+        "description": "ランダムなメッセージテンプレートです。",
+        "operationId": "get_random_template",
+        "responses": {
+          "200": {
+            "description": "ランダムなメッセージテンプレートです。"
+          }
+        },
+        "summary": "ランダムなテンプレートを取得"
+      }
+    },
+    "/api/v1/types": {
+      "get": {
+        "description": "コミットの種類のカタログです。",
+        "operationId": "list_commit_types",
+        "responses": {
+          "200": {
+            "description": "コミットの種類のカタログです。"
+          }
+        },
+        "summary": "コミットの種類を一覧表示"
+      }
+    },
+    "/mcp": {
+      "post": {
+        "description": "Streamable HTTP を使用して公開カタログとステートレスなメッセージビルダーに接続します。",
+        "operationId": "mcp_endpoint_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Streamable HTTP を使用して公開カタログとステートレスなメッセージビルダーに接続します。"
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "リクエストが多すぎます"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Git Messages MCP 接続ヘルプ"
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_root_metrics_metrics",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/grafana": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_root_metrics_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/loki": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_root_metrics_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/prometheus": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_root_metrics_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/server/metrics": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_metrics_server_metrics",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/grafana": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_metrics_server_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/loki": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_metrics_server_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/prometheus": {
+      "get": {
+        "description": "認証が必要な内部メトリクスエンドポイント",
+        "operationId": "get_metrics_server_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "認証が必要な内部メトリクスエンドポイント"
+          },
+          "400": {
+            "description": "無効なリクエストです"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "メトリクスサービス",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://openapi.invalid"
+    }
+  ]
+}

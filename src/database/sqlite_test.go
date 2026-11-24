@@ -14,7 +14,7 @@ import (
 )
 
 func TestOpenSQLiteSchemaPermissionsAndTransactions(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nested", "server.db")
+	path := filepath.Join(projectTestDir(t), "nested", "server.db")
 	store, err := OpenSQLite(path, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func TestOpenSQLiteSchemaPermissionsAndTransactions(t *testing.T) {
 	if err := store.EnsureSchema(context.Background()); err != nil {
 		t.Fatalf("repeat schema initialization: %v", err)
 	}
-	for name, want := range map[string]os.FileMode{filepath.Dir(path): 0700, path: 0600} {
+	for name, want := range map[string]os.FileMode{filepath.Dir(path): 0o700, path: 0o600} {
 		info, err := os.Stat(name)
 		if err != nil {
 			t.Fatal(err)
@@ -59,9 +59,105 @@ func TestOpenSQLiteSchemaPermissionsAndTransactions(t *testing.T) {
 	}
 }
 
+func TestSchedulerSchemaUsesCanonicalColumnsAndMigratesLegacyRows(t *testing.T) {
+	store, err := OpenSQLite(filepath.Join(projectTestDir(t), "server.db"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Write(context.Background(), func(tx *sql.Tx) error {
+		statements := []string{
+			`ALTER TABLE scheduler_tasks RENAME TO scheduler_tasks_current`,
+			`ALTER TABLE scheduler_history RENAME TO scheduler_history_current`,
+			`DROP TABLE scheduler_tasks_current`,
+			`DROP TABLE scheduler_history_current`,
+			`CREATE TABLE scheduler_tasks (
+				task_id TEXT PRIMARY KEY, task_name TEXT NOT NULL, schedule TEXT NOT NULL,
+				last_run INTEGER, last_status TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '',
+				next_run INTEGER, run_count INTEGER NOT NULL DEFAULT 0, fail_count INTEGER NOT NULL DEFAULT 0,
+				enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)))`,
+			`CREATE TABLE scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, ran_at INTEGER NOT NULL, status TEXT NOT NULL, error TEXT)`,
+			`INSERT INTO scheduler_tasks(task_id,task_name,schedule,last_status,run_count,fail_count,enabled)
+				VALUES('backup_daily','Daily Backup','0 2 * * *','success',4,1,1)`,
+			`INSERT INTO scheduler_history(task_id,ran_at,status,error) VALUES('backup_daily',12345,'failed','disk full')`,
+		}
+		for _, statement := range statements {
+			if _, err := tx.ExecContext(context.Background(), statement); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureSchema(context.Background()); err != nil {
+		t.Fatalf("migrate legacy scheduler schema: %v", err)
+	}
+	var name, schedule, status string
+	var runs, failures, enabled int
+	if err := store.Read().QueryRow(`SELECT name,schedule,last_status,run_count,fail_count,enabled FROM scheduler_tasks WHERE id='backup_daily'`).Scan(&name, &schedule, &status, &runs, &failures, &enabled); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Daily Backup" || schedule != "0 2 * * *" || status != "success" || runs != 4 || failures != 1 || enabled != 1 {
+		t.Fatalf("migrated task = %q, %q, %q, %d, %d, %d", name, schedule, status, runs, failures, enabled)
+	}
+	var oldTaskColumns, oldHistoryColumns int
+	if err := store.Read().QueryRow(`SELECT COUNT(*) FROM pragma_table_info('scheduler_tasks') WHERE name IN ('task_id','task_name')`).Scan(&oldTaskColumns); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Read().QueryRow(`SELECT COUNT(*) FROM pragma_table_info('scheduler_history') WHERE name='ran_at'`).Scan(&oldHistoryColumns); err != nil {
+		t.Fatal(err)
+	}
+	if oldTaskColumns != 0 || oldHistoryColumns != 0 {
+		t.Fatalf("legacy columns remain: task=%d history=%d", oldTaskColumns, oldHistoryColumns)
+	}
+	var started int64
+	var historyStatus, historyError string
+	var finished sql.NullInt64
+	if err := store.Read().QueryRow(`SELECT started_at,status,error,finished_at FROM scheduler_history WHERE task_id='backup_daily'`).Scan(&started, &historyStatus, &historyError, &finished); err != nil {
+		t.Fatal(err)
+	}
+	if started != 12345 || historyStatus != "failed" || historyError != "disk full" || finished.Valid {
+		t.Fatalf("migrated history = %d %q %q finished=%v", started, historyStatus, historyError, finished)
+	}
+	var historyTableCount int
+	if err := store.Read().QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='scheduler_history'`).Scan(&historyTableCount); err != nil {
+		t.Fatal(err)
+	}
+	if historyTableCount != 1 {
+		t.Fatal("scheduler_history table was not created")
+	}
+}
+
+func TestEnsureSchemaMigratesTokenLastFourColumnIdempotently(t *testing.T) {
+	store, err := OpenSQLite(filepath.Join(projectTestDir(t), "server.db"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Write(context.Background(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(), `ALTER TABLE api_tokens DROP COLUMN token_last4`)
+		return err
+	}); err != nil {
+		t.Fatalf("prepare legacy API token schema: %v", err)
+	}
+	for range 2 {
+		if err := store.EnsureSchema(context.Background()); err != nil {
+			t.Fatalf("ensure migrated schema: %v", err)
+		}
+	}
+	var suffixColumns int
+	if err := store.Read().QueryRow(`SELECT COUNT(*) FROM pragma_table_info('api_tokens') WHERE name='token_last4'`).Scan(&suffixColumns); err != nil {
+		t.Fatal(err)
+	}
+	if suffixColumns != 1 {
+		t.Fatalf("migrated token_last4 column count = %d, want 1", suffixColumns)
+	}
+}
+
 func TestOpenSQLiteRejectsInvalidDatabasePath(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "directory.db")
-	if err := os.Mkdir(path, 0700); err != nil {
+	path := filepath.Join(projectTestDir(t), "directory.db")
+	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if store, err := OpenSQLite(path, 1); err == nil {
@@ -70,11 +166,42 @@ func TestOpenSQLiteRejectsInvalidDatabasePath(t *testing.T) {
 	}
 }
 
+func TestSnapshotIncludesCommittedDatabaseState(t *testing.T) {
+	root := projectTestDir(t)
+	store, err := OpenSQLite(filepath.Join(root, "server.db"), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Write(context.Background(), func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO app_secrets(name,value,updated_at) VALUES('snapshot-test','present','now')`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshotPath := filepath.Join(root, "snapshot.db")
+	if err := store.Snapshot(context.Background(), snapshotPath); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := OpenSQLite(snapshotPath, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = snapshot.Close() }()
+	var value string
+	if err := snapshot.Read().QueryRow(`SELECT value FROM app_secrets WHERE name='snapshot-test'`).Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	if value != "present" {
+		t.Fatalf("snapshot value = %q, want present", value)
+	}
+}
+
 func TestWriteRejectsNilCallbackAndCloseNil(t *testing.T) {
 	if err := (*Store)(nil).Close(); err != nil {
 		t.Fatalf("closing nil store: %v", err)
 	}
-	store, err := OpenSQLite(filepath.Join(t.TempDir(), "server.db"), 1)
+	store, err := OpenSQLite(filepath.Join(projectTestDir(t), "server.db"), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +212,7 @@ func TestWriteRejectsNilCallbackAndCloseNil(t *testing.T) {
 }
 
 func TestSQLiteConcurrentReadersAndWriters(t *testing.T) {
-	store, err := OpenSQLite(filepath.Join(t.TempDir(), "concurrent.db"), 20)
+	store, err := OpenSQLite(filepath.Join(projectTestDir(t), "concurrent.db"), 20)
 	if err != nil {
 		t.Fatal(err)
 	}

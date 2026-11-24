@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -23,12 +24,21 @@ func InstallationSecret(ctx context.Context, store *database.Store) ([]byte, err
 	if store == nil {
 		return nil, errors.New("database store is required")
 	}
-	var secret string
+	var secret []byte
 	err := store.Write(ctx, func(tx *sql.Tx) error {
 		var existing string
 		err := tx.QueryRowContext(ctx, "SELECT value FROM app_secrets WHERE name = ?", installationSecretName).Scan(&existing)
 		if err == nil {
-			secret = existing
+			decoded, legacy, decodeErr := decodeInstallationSecret(existing)
+			if decodeErr != nil {
+				return decodeErr
+			}
+			secret = decoded
+			if legacy {
+				if _, err := tx.ExecContext(ctx, "UPDATE app_secrets SET value = ?, updated_at = ? WHERE name = ?", base64.StdEncoding.EncodeToString(decoded), time.Now().UTC().Format(time.RFC3339Nano), installationSecretName); err != nil {
+					return err
+				}
+			}
 			return nil
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -38,21 +48,29 @@ func InstallationSecret(ctx context.Context, store *database.Store) ([]byte, err
 		if _, err := rand.Read(raw); err != nil {
 			return err
 		}
-		encoded := hex.EncodeToString(raw)
+		encoded := base64.StdEncoding.EncodeToString(raw)
 		if _, err := tx.ExecContext(ctx, "INSERT INTO app_secrets(name, value, updated_at) VALUES(?, ?, ?)", installationSecretName, encoded, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
 		}
-		secret = encoded
+		secret = raw
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("load installation secret: %w", err)
 	}
-	decoded, err := hex.DecodeString(secret)
-	if err != nil || len(decoded) != 32 {
-		return nil, errors.New("stored installation secret is invalid")
+	return secret, nil
+}
+
+func decodeInstallationSecret(value string) ([]byte, bool, error) {
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err == nil && len(decoded) == 32 {
+		return decoded, false, nil
 	}
-	return decoded, nil
+	decoded, err = hex.DecodeString(value)
+	if err == nil && len(decoded) == 32 {
+		return decoded, true, nil
+	}
+	return nil, false, errors.New("stored installation secret is invalid")
 }
 
 // SecurityID returns the rotating security form token for the current or adjacent 48-hour window.

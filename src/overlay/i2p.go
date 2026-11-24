@@ -24,11 +24,14 @@ import (
 )
 
 type I2PStatus struct {
-	Enabled bool   `json:"enabled"`
-	Running bool   `json:"running"`
-	Status  string `json:"status"`
-	Address string `json:"address,omitempty"`
-	Error   string `json:"-"`
+	Enabled  bool   `json:"enabled"`
+	Running  bool   `json:"running"`
+	Status   string `json:"status"`
+	State    string `json:"state"`
+	Hostname string `json:"hostname"`
+	Provider string `json:"provider"`
+	Address  string `json:"address,omitempty"`
+	Error    string `json:"-"`
 }
 
 type I2PManager struct {
@@ -64,9 +67,11 @@ type samReply struct {
 
 var i2pBase64 = base64.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-~")
 
+var errNoI2PProvider = errors.New("no I2P provider is available")
+
 func NewI2PManager(configDir, dataDir, logsDir string, settings config.I2PConfig, handler http.Handler) *I2PManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &I2PManager{configDir: configDir, dataDir: dataDir, logsDir: logsDir, settings: settings, handler: handler, status: I2PStatus{Status: "disabled"}, ctx: ctx, cancel: cancel}
+	return &I2PManager{configDir: configDir, dataDir: dataDir, logsDir: logsDir, settings: settings, handler: handler, status: I2PStatus{Status: "disabled", State: "disabled", Provider: "none"}, ctx: ctx, cancel: cancel}
 }
 
 func (manager *I2PManager) Start() {
@@ -80,7 +85,7 @@ func (manager *I2PManager) Start() {
 	}
 	manager.started = true
 	manager.done = make(chan struct{})
-	manager.status = I2PStatus{Enabled: true, Status: "starting"}
+	manager.status = I2PStatus{Enabled: true, Status: "starting", State: "starting", Provider: "none"}
 	manager.mu.Unlock()
 	go func() {
 		defer close(manager.done)
@@ -88,13 +93,32 @@ func (manager *I2PManager) Start() {
 	}()
 }
 
+// Restart replaces the service lifetime context and starts a fresh provider session.
+func (manager *I2PManager) Restart() error {
+	if err := manager.Close(); err != nil {
+		return err
+	}
+	manager.mu.Lock()
+	manager.ctx, manager.cancel = context.WithCancel(context.Background())
+	manager.started = false
+	manager.done = nil
+	manager.mu.Unlock()
+	manager.Start()
+	return nil
+}
+
 func (manager *I2PManager) run() {
 	service, listener, err := manager.startService()
 	if err != nil {
 		log.Printf("I2P eepsite unavailable: %v", err)
 		manager.mu.Lock()
-		manager.status.Status = "unavailable"
-		manager.status.Error = err.Error()
+		if errors.Is(err, errNoI2PProvider) {
+			manager.status = I2PStatus{Status: "disabled", State: "no_provider", Provider: "none"}
+		} else {
+			manager.status.Status = "unavailable"
+			manager.status.State = "error"
+			manager.status.Error = err.Error()
+		}
 		manager.mu.Unlock()
 		return
 	}
@@ -107,7 +131,7 @@ func (manager *I2PManager) run() {
 	manager.service = service
 	manager.listener = listener
 	manager.server = &http.Server{Handler: manager.handler, ReadHeaderTimeout: 10 * time.Second}
-	manager.status = I2PStatus{Enabled: true, Running: true, Status: "healthy", Address: service.address}
+	manager.status = I2PStatus{Enabled: true, Running: true, Status: "healthy", State: "running", Hostname: service.address, Provider: service.provider, Address: service.address}
 	server := manager.server
 	manager.mu.Unlock()
 	log.Printf("I2P eepsite healthy: %s", service.address)
@@ -149,10 +173,10 @@ func (manager *I2PManager) startService() (*i2pService, net.Listener, error) {
 		return nil, nil, err
 	}
 	for _, directory := range []string{filepath.Join(manager.configDir, "i2p"), filepath.Join(manager.dataDir, "i2p"), filepath.Join(manager.dataDir, "i2p", "site")} {
-		if err := os.MkdirAll(directory, 0700); err != nil {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return nil, nil, fmt.Errorf("create I2P directory: %w", err)
 		}
-		if err := os.Chmod(directory, 0700); err != nil {
+		if err := os.Chmod(directory, 0o700); err != nil {
 			return nil, nil, fmt.Errorf("secure I2P directory: %w", err)
 		}
 	}
@@ -161,6 +185,9 @@ func (manager *I2PManager) startService() (*i2pService, net.Listener, error) {
 		return nil, nil, fmt.Errorf("allocate I2P backend listener: %w", err)
 	}
 	service := &i2pService{provider: provider}
+	manager.mu.Lock()
+	manager.status.Provider = provider
+	manager.mu.Unlock()
 	samAddress := manager.settings.SAMAddress
 	if provider == "i2pd" {
 		samAddress, err = manager.startI2PD(binary, service)
@@ -196,7 +223,7 @@ func (manager *I2PManager) resolveProvider() (string, string, error) {
 	defer cancel()
 	connection, reader, err := samDial(ctx, manager.settings.SAMAddress)
 	if err != nil {
-		return "", "", fmt.Errorf("I2P is enabled but neither i2pd nor a SAM bridge is available")
+		return "", "", errNoI2PProvider
 	}
 	_ = reader
 	_ = connection.Close()
@@ -223,10 +250,10 @@ func (manager *I2PManager) startI2PD(binary string, service *i2pService) (string
 		return "", fmt.Errorf("write empty I2P tunnel configuration: %w", err)
 	}
 	tunnelDirectory := filepath.Join(configDirectory, "tunnels.d")
-	if err := os.MkdirAll(tunnelDirectory, 0700); err != nil {
+	if err := os.MkdirAll(tunnelDirectory, 0o700); err != nil {
 		return "", fmt.Errorf("create empty I2P tunnel directory: %w", err)
 	}
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("open I2P log: %w", err)
 	}
@@ -268,7 +295,7 @@ func (manager *I2PManager) startI2PD(binary string, service *i2pService) (string
 }
 
 func atomicPrivateFile(path string, contents []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".i2p-*")
@@ -277,7 +304,7 @@ func atomicPrivateFile(path string, contents []byte) error {
 	}
 	temporaryPath := temporary.Name()
 	defer func() { _ = os.Remove(temporaryPath) }()
-	if err := temporary.Chmod(0600); err != nil {
+	if err := temporary.Chmod(0o600); err != nil {
 		_ = temporary.Close()
 		return err
 	}
@@ -316,6 +343,7 @@ func (service *i2pService) close() {
 func (manager *I2PManager) fail(err error) {
 	manager.mu.Lock()
 	manager.status.Status = "unavailable"
+	manager.status.State = "error"
 	manager.status.Running = false
 	manager.status.Error = err.Error()
 	service, listener, server := manager.service, manager.listener, manager.server
@@ -352,7 +380,7 @@ func (manager *I2PManager) Close() error {
 	manager.mu.Lock()
 	service, listener, server := manager.service, manager.listener, manager.server
 	manager.service = nil
-	manager.status = I2PStatus{Status: "disabled"}
+	manager.status = I2PStatus{Status: "disabled", State: "disabled", Provider: "none"}
 	manager.mu.Unlock()
 	if server != nil {
 		_ = server.Close()
@@ -417,7 +445,7 @@ func loadOrCreateI2PKey(connection net.Conn, reader *bufio.Reader, path string, 
 		if info.Size() > 1<<20 {
 			return "", fmt.Errorf("I2P destination key file is too large")
 		}
-		if err := os.Chmod(path, 0600); err != nil {
+		if err := os.Chmod(path, 0o600); err != nil {
 			return "", fmt.Errorf("secure I2P destination key: %w", err)
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {

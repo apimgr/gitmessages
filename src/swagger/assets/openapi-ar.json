@@ -1,0 +1,1584 @@
+{
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "فهرس مختار لاصطلاحات commit وأداة لإنشاء الرسائل.",
+    "title": "Git Messages API",
+    "version": "dev"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/autodiscover": {
+      "get": {
+        "description": "الموارد",
+        "operationId": "get_api_autodiscover",
+        "responses": {
+          "200": {
+            "description": "الموارد"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "summary": "واجهة REST البرمجية"
+      }
+    },
+    "/api/graphql": {
+      "post": {
+        "description": "استكشف فهرس الالتزامات العام باستخدام GraphiQL. يتوفر أيضًا نموذج استعلام يعمل دون JavaScript.",
+        "operationId": "graphql_query_api_graphql",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "description": "استعلام GraphQL",
+                    "type": "string"
+                  },
+                  "variables": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "استكشف فهرس الالتزامات العام باستخدام GraphiQL. يتوفر أيضًا نموذج استعلام يعمل دون JavaScript."
+          }
+        },
+        "summary": "GraphQL"
+      }
+    },
+    "/api/healthz": {
+      "get": {
+        "description": "الخدمة سليمة",
+        "operationId": "get_api_healthz",
+        "responses": {
+          "200": {
+            "description": "الخدمة سليمة"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "summary": "حالة الخدمة"
+      }
+    },
+    "/api/mcp": {
+      "post": {
+        "description": "اتصل بالكتالوج العام ومنشئ الرسائل عديم الحالة عبر Streamable HTTP.",
+        "operationId": "mcp_endpoint_api_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "اتصل بالكتالوج العام ومنشئ الرسائل عديم الحالة عبر Streamable HTTP."
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "طلبات كثيرة جداً"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "مساعدة اتصال MCP في Git Messages"
+      }
+    },
+    "/api/metrics": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_metrics_api_metrics",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/grafana": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_metrics_api_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/loki": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_metrics_api_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/prometheus": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_metrics_api_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/swagger": {
+      "get": {
+        "description": "واجهة REST البرمجية",
+        "operationId": "get_api_swagger",
+        "responses": {
+          "200": {
+            "description": "واجهة REST البرمجية"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "summary": "OpenAPI"
+      }
+    },
+    "/api/v1": {
+      "get": {
+        "description": "الموارد",
+        "operationId": "get_api_index",
+        "responses": {
+          "200": {
+            "description": "الموارد"
+          }
+        },
+        "summary": "واجهة REST البرمجية"
+      }
+    },
+    "/api/v1/conventions": {
+      "get": {
+        "description": "اصطلاحات commit المدعومة.",
+        "operationId": "list_conventions",
+        "responses": {
+          "200": {
+            "description": "اصطلاحات commit المدعومة."
+          }
+        },
+        "summary": "يسرد الاصطلاحات"
+      }
+    },
+    "/api/v1/messages": {
+      "post": {
+        "description": "رسالة commit المنسقة.",
+        "operationId": "build_commit_message",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "body": {
+                    "description": "المتن (اختياري)",
+                    "type": "string"
+                  },
+                  "breaking": {
+                    "description": "تغيير غير متوافق",
+                    "type": "boolean"
+                  },
+                  "convention": {
+                    "description": "الاصطلاح",
+                    "enum": [
+                      "conventional-commits",
+                      "angular"
+                    ],
+                    "type": "string"
+                  },
+                  "description": {
+                    "description": "وصف موجز",
+                    "type": "string"
+                  },
+                  "scope": {
+                    "description": "النطاق (اختياري)",
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "نوع الالتزام",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "description"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "رسالة commit المنسقة."
+          },
+          "400": {
+            "description": "يحتوي الطلب على حقول رسالة غير صالحة."
+          }
+        },
+        "summary": "ينشئ رسالة commit"
+      }
+    },
+    "/api/v1/messages/random": {
+      "get": {
+        "description": "رسالة commit نموذجية عشوائية.",
+        "operationId": "get_random_example",
+        "responses": {
+          "200": {
+            "description": "رسالة commit نموذجية عشوائية."
+          }
+        },
+        "summary": "يعرض رسالة نموذجية عشوائية"
+      }
+    },
+    "/api/v1/server/about": {
+      "get": {
+        "description": "Git Messages مرجع منتقى لاصطلاحات رسائل الالتزام وأداة لصياغة رسائل واضحة.",
+        "operationId": "get_about",
+        "responses": {
+          "200": {
+            "description": "Git Messages مرجع منتقى لاصطلاحات رسائل الالتزام وأداة لصياغة رسائل واضحة."
+          }
+        },
+        "summary": "حول Git Messages"
+      }
+    },
+    "/api/v1/server/contact": {
+      "get": {
+        "description": "Returns report-form descriptors and a one-use captcha challenge",
+        "operationId": "get_contact_form",
+        "responses": {
+          "200": {
+            "description": "Returns report-form descriptors and a one-use captcha challenge"
+          }
+        },
+        "summary": "Contact report form"
+      },
+      "post": {
+        "description": "Uses a submit and confirm review flow",
+        "operationId": "submit_contact_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "properties": {
+                  "captcha_answer": {
+                    "type": "string"
+                  },
+                  "captcha_id": {
+                    "type": "string"
+                  },
+                  "confirmed": {
+                    "type": "boolean"
+                  },
+                  "email": {
+                    "format": "email",
+                    "maxLength": 254,
+                    "type": "string"
+                  },
+                  "form_token": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 100,
+                    "type": "string"
+                  },
+                  "review_token": {
+                    "type": "string"
+                  },
+                  "step": {
+                    "enum": [
+                      "submit",
+                      "confirm",
+                      "edit"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "abuse",
+                      "dmca",
+                      "privacy",
+                      "security"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name",
+                  "email",
+                  "form_token"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Uses a submit and confirm review flow"
+          },
+          "400": {
+            "description": "يحتوي الطلب على حقول رسالة غير صالحة."
+          }
+        },
+        "summary": "Submit a contact report"
+      }
+    },
+    "/api/v1/server/dpo": {
+      "get": {
+        "description": "Public DPO contact information",
+        "operationId": "get_data_protection_contact",
+        "responses": {
+          "200": {
+            "description": "Public DPO contact information"
+          }
+        },
+        "summary": "Data protection contact"
+      }
+    },
+    "/api/v1/server/graphql": {
+      "post": {
+        "description": "استكشف فهرس الالتزامات العام باستخدام GraphiQL. يتوفر أيضًا نموذج استعلام يعمل دون JavaScript.",
+        "operationId": "graphql_query_api_v1_server_graphql",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "description": "استعلام GraphQL",
+                    "type": "string"
+                  },
+                  "variables": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "استكشف فهرس الالتزامات العام باستخدام GraphiQL. يتوفر أيضًا نموذج استعلام يعمل دون JavaScript."
+          }
+        },
+        "summary": "GraphQL"
+      }
+    },
+    "/api/v1/server/healthz": {
+      "get": {
+        "description": "الخدمة سليمة",
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "description": "الخدمة سليمة"
+          }
+        },
+        "summary": "حالة الخدمة"
+      }
+    },
+    "/api/v1/server/help": {
+      "get": {
+        "description": "راجع",
+        "operationId": "get_help",
+        "responses": {
+          "200": {
+            "description": "راجع"
+          }
+        },
+        "summary": "المساعدة"
+      }
+    },
+    "/api/v1/server/help/mcp": {
+      "get": {
+        "description": "اتصل بالكتالوج العام ومنشئ الرسائل عديم الحالة عبر Streamable HTTP.",
+        "operationId": "get_mcp_help",
+        "responses": {
+          "200": {
+            "description": "اتصل بالكتالوج العام ومنشئ الرسائل عديم الحالة عبر Streamable HTTP."
+          }
+        },
+        "summary": "مساعدة اتصال MCP في Git Messages"
+      }
+    },
+    "/api/v1/server/mcp": {
+      "post": {
+        "description": "اتصل بالكتالوج العام ومنشئ الرسائل عديم الحالة عبر Streamable HTTP.",
+        "operationId": "mcp_endpoint_api_v1_server_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "اتصل بالكتالوج العام ومنشئ الرسائل عديم الحالة عبر Streamable HTTP."
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "طلبات كثيرة جداً"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "مساعدة اتصال MCP في Git Messages"
+      }
+    },
+    "/api/v1/server/metrics": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_metrics_api_v1_server_metrics",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/grafana": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_metrics_api_v1_server_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/loki": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_metrics_api_v1_server_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/prometheus": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_metrics_api_v1_server_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/preferences": {
+      "get": {
+        "description": "التفضيلات",
+        "operationId": "get_preferences",
+        "responses": {
+          "200": {
+            "description": "التفضيلات"
+          }
+        },
+        "summary": "التفضيلات"
+      },
+      "post": {
+        "description": "التفضيلات",
+        "operationId": "save_preferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "properties": {
+                  "lang": {
+                    "type": "string"
+                  },
+                  "theme": {
+                    "enum": [
+                      "dark",
+                      "light",
+                      "auto"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "التفضيلات"
+          },
+          "400": {
+            "description": "يحتوي الطلب على حقول رسالة غير صالحة."
+          }
+        },
+        "summary": "حفظ"
+      }
+    },
+    "/api/v1/server/preferences/sync": {
+      "get": {
+        "description": "انقل تفضيلاتك إلى جهاز آخر.",
+        "operationId": "get_preferences_sync",
+        "responses": {
+          "200": {
+            "description": "انقل تفضيلاتك إلى جهاز آخر."
+          }
+        },
+        "summary": "مزامنة التفضيلات"
+      }
+    },
+    "/api/v1/server/preferences/sync/import": {
+      "get": {
+        "description": "انقل تفضيلاتك إلى جهاز آخر.",
+        "operationId": "import_preferences_sync",
+        "responses": {
+          "200": {
+            "description": "انقل تفضيلاتك إلى جهاز آخر."
+          }
+        },
+        "summary": "استيراد"
+      }
+    },
+    "/api/v1/server/preferences/tokens": {
+      "get": {
+        "description": "رموز المالك",
+        "operationId": "list_owner_tokens",
+        "responses": {
+          "200": {
+            "description": "رموز المالك"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "رموز المالك"
+      },
+      "post": {
+        "description": "وصول كامل إلى {resources}. احتفظ به سريًا.",
+        "operationId": "create_linked_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiry": {
+                    "enum": [
+                      "never",
+                      "7d",
+                      "30d",
+                      "90d",
+                      "1y"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "وصول كامل إلى {resources}. احتفظ به سريًا."
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "إنشاء رمز مرتبط"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary": {
+      "delete": {
+        "description": "سيؤدي ذلك إلى حذف {linked} من الرموز المرتبطة و{resources}، بما في ذلك كل ما أُنشئ باستخدام رمز مرتبط.",
+        "operationId": "revoke_primary_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "confirm": {
+                    "maxLength": 4,
+                    "minLength": 4,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "confirm"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "سيؤدي ذلك إلى حذف {linked} من الرموز المرتبطة و{resources}، بما في ذلك كل ما أُنشئ باستخدام رمز مرتبط."
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "إلغاء الرمز الأساسي"
+      },
+      "post": {
+        "description": "الرمز الأساسي",
+        "operationId": "issue_primary_token",
+        "responses": {
+          "200": {
+            "description": "الرمز الأساسي"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "summary": "رمز جديد"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary/reveal": {
+      "post": {
+        "description": "يظهر مرة واحدة في تحميل هذه الصفحة.",
+        "operationId": "reveal_primary_token",
+        "responses": {
+          "200": {
+            "description": "يظهر مرة واحدة في تحميل هذه الصفحة."
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "إظهار"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary/rotate": {
+      "post": {
+        "description": "الرمز الأساسي",
+        "operationId": "rotate_primary_token",
+        "responses": {
+          "200": {
+            "description": "الرمز الأساسي"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "تدوير"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}": {
+      "delete": {
+        "description": "إلغاء",
+        "operationId": "revoke_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "إلغاء"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "إلغاء"
+      },
+      "patch": {
+        "description": "حفظ",
+        "operationId": "update_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiry": {
+                    "enum": [
+                      "never",
+                      "7d",
+                      "30d",
+                      "90d",
+                      "1y"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "حفظ"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "تعديل"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}/reveal": {
+      "post": {
+        "description": "يظهر مرة واحدة في تحميل هذه الصفحة.",
+        "operationId": "reveal_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "يظهر مرة واحدة في تحميل هذه الصفحة."
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "إظهار"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}/rotate": {
+      "post": {
+        "description": "الرمز الأساسي",
+        "operationId": "rotate_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "الرمز الأساسي"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "تدوير"
+      }
+    },
+    "/api/v1/server/privacy": {
+      "get": {
+        "description": "تقدم هذه الخدمة فهرساً ثابتاً ومنتقًى لاصطلاحات الالتزام. لا توفر حسابات مستخدمين ولا تقبل مشاركات ولا تحفظ بيانات شخصية. قد يعالج مشغل الخادم سجلات التشغيل.",
+        "operationId": "get_privacy",
+        "responses": {
+          "200": {
+            "description": "تقدم هذه الخدمة فهرساً ثابتاً ومنتقًى لاصطلاحات الالتزام. لا توفر حسابات مستخدمين ولا تقبل مشاركات ولا تحفظ بيانات شخصية. قد يعالج مشغل الخادم سجلات التشغيل."
+          }
+        },
+        "summary": "الخصوصية"
+      }
+    },
+    "/api/v1/server/security": {
+      "get": {
+        "description": "أبلغ عن الثغرات عبر الإبلاغ الأمني الخاص في GitHub. لا تنشر تفاصيل الاستغلال في البلاغات العامة.",
+        "operationId": "get_security",
+        "responses": {
+          "200": {
+            "description": "أبلغ عن الثغرات عبر الإبلاغ الأمني الخاص في GitHub. لا تنشر تفاصيل الاستغلال في البلاغات العامة."
+          }
+        },
+        "summary": "الأمان"
+      }
+    },
+    "/api/v1/server/security/policy": {
+      "get": {
+        "description": "Public coordinated-disclosure policy",
+        "operationId": "get_security_policy",
+        "responses": {
+          "200": {
+            "description": "Public coordinated-disclosure policy"
+          }
+        },
+        "summary": "Security disclosure policy"
+      }
+    },
+    "/api/v1/server/security/thanks": {
+      "get": {
+        "description": "Public researcher acknowledgments",
+        "operationId": "get_security_thanks",
+        "responses": {
+          "200": {
+            "description": "Public researcher acknowledgments"
+          }
+        },
+        "summary": "Security acknowledgments"
+      }
+    },
+    "/api/v1/server/swagger": {
+      "get": {
+        "description": "واجهة REST البرمجية",
+        "operationId": "get_openapi",
+        "responses": {
+          "200": {
+            "description": "واجهة REST البرمجية"
+          }
+        },
+        "summary": "OpenAPI"
+      }
+    },
+    "/api/v1/server/terms": {
+      "get": {
+        "description": "يُقدّم الفهرس كمرجع. تحقق من الاصطلاح المحدد وقواعد المساهمة في مستودعك قبل استخدام رسالة مولدة.",
+        "operationId": "get_terms",
+        "responses": {
+          "200": {
+            "description": "يُقدّم الفهرس كمرجع. تحقق من الاصطلاح المحدد وقواعد المساهمة في مستودعك قبل استخدام رسالة مولدة."
+          }
+        },
+        "summary": "الشروط"
+      }
+    },
+    "/api/v1/templates": {
+      "get": {
+        "description": "قوالب الرسائل المختارة.",
+        "operationId": "list_templates",
+        "responses": {
+          "200": {
+            "description": "قوالب الرسائل المختارة."
+          }
+        },
+        "summary": "يسرد قوالب الرسائل"
+      }
+    },
+    "/api/v1/templates/random": {
+      "get": {
+        "description": "قالب رسالة عشوائي.",
+        "operationId": "get_random_template",
+        "responses": {
+          "200": {
+            "description": "قالب رسالة عشوائي."
+          }
+        },
+        "summary": "يعرض قالبًا عشوائيًا"
+      }
+    },
+    "/api/v1/types": {
+      "get": {
+        "description": "فهرس أنواع commit.",
+        "operationId": "list_commit_types",
+        "responses": {
+          "200": {
+            "description": "فهرس أنواع commit."
+          }
+        },
+        "summary": "يسرد أنواع commit"
+      }
+    },
+    "/mcp": {
+      "post": {
+        "description": "اتصل بالكتالوج العام ومنشئ الرسائل عديم الحالة عبر Streamable HTTP.",
+        "operationId": "mcp_endpoint_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "اتصل بالكتالوج العام ومنشئ الرسائل عديم الحالة عبر Streamable HTTP."
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "طلبات كثيرة جداً"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "مساعدة اتصال MCP في Git Messages"
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_root_metrics_metrics",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/grafana": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_root_metrics_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/loki": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_root_metrics_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/prometheus": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_root_metrics_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/server/metrics": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_metrics_server_metrics",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/grafana": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_metrics_server_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/loki": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_metrics_server_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/prometheus": {
+      "get": {
+        "description": "نقطة نهاية المقاييس الداخلية المصادق عليها",
+        "operationId": "get_metrics_server_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "نقطة نهاية المقاييس الداخلية المصادق عليها"
+          },
+          "400": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "خدمة المقاييس",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://openapi.invalid"
+    }
+  ]
+}

@@ -1,0 +1,1584 @@
+{
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Catalogue sélectionné de conventions de commit et générateur de messages.",
+    "title": "Git Messages API",
+    "version": "dev"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/autodiscover": {
+      "get": {
+        "description": "Ressources",
+        "operationId": "get_api_autodiscover",
+        "responses": {
+          "200": {
+            "description": "Ressources"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "summary": "API REST"
+      }
+    },
+    "/api/graphql": {
+      "post": {
+        "description": "Explorez le catalogue public des commits avec GraphiQL. Un formulaire de requête est également disponible sans JavaScript.",
+        "operationId": "graphql_query_api_graphql",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "description": "Requête GraphQL",
+                    "type": "string"
+                  },
+                  "variables": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Explorez le catalogue public des commits avec GraphiQL. Un formulaire de requête est également disponible sans JavaScript."
+          }
+        },
+        "summary": "GraphQL"
+      }
+    },
+    "/api/healthz": {
+      "get": {
+        "description": "Le service fonctionne",
+        "operationId": "get_api_healthz",
+        "responses": {
+          "200": {
+            "description": "Le service fonctionne"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "summary": "État du service"
+      }
+    },
+    "/api/mcp": {
+      "post": {
+        "description": "Accédez au catalogue public et au générateur sans état via Streamable HTTP.",
+        "operationId": "mcp_endpoint_api_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Accédez au catalogue public et au générateur sans état via Streamable HTTP."
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "Trop de requêtes"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Aide de connexion MCP de Git Messages"
+      }
+    },
+    "/api/metrics": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_metrics_api_metrics",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/grafana": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_metrics_api_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/loki": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_metrics_api_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/prometheus": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_metrics_api_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/swagger": {
+      "get": {
+        "description": "API REST",
+        "operationId": "get_api_swagger",
+        "responses": {
+          "200": {
+            "description": "API REST"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "summary": "OpenAPI"
+      }
+    },
+    "/api/v1": {
+      "get": {
+        "description": "Ressources",
+        "operationId": "get_api_index",
+        "responses": {
+          "200": {
+            "description": "Ressources"
+          }
+        },
+        "summary": "API REST"
+      }
+    },
+    "/api/v1/conventions": {
+      "get": {
+        "description": "Les conventions de commit prises en charge.",
+        "operationId": "list_conventions",
+        "responses": {
+          "200": {
+            "description": "Les conventions de commit prises en charge."
+          }
+        },
+        "summary": "Lister les conventions"
+      }
+    },
+    "/api/v1/messages": {
+      "post": {
+        "description": "Le message de commit mis en forme.",
+        "operationId": "build_commit_message",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "body": {
+                    "description": "Corps (facultatif)",
+                    "type": "string"
+                  },
+                  "breaking": {
+                    "description": "Changement incompatible",
+                    "type": "boolean"
+                  },
+                  "convention": {
+                    "description": "Convention",
+                    "enum": [
+                      "conventional-commits",
+                      "angular"
+                    ],
+                    "type": "string"
+                  },
+                  "description": {
+                    "description": "Description courte",
+                    "type": "string"
+                  },
+                  "scope": {
+                    "description": "Portée (facultative)",
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "Type de commit",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "description"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Le message de commit mis en forme."
+          },
+          "400": {
+            "description": "La requête contient des champs de message non valides."
+          }
+        },
+        "summary": "Créer un message de commit"
+      }
+    },
+    "/api/v1/messages/random": {
+      "get": {
+        "description": "Un exemple aléatoire de message de commit.",
+        "operationId": "get_random_example",
+        "responses": {
+          "200": {
+            "description": "Un exemple aléatoire de message de commit."
+          }
+        },
+        "summary": "Obtenir un exemple de message aléatoire"
+      }
+    },
+    "/api/v1/server/about": {
+      "get": {
+        "description": "Git Messages est une référence sélectionnée des conventions de message de commit et un outil pour composer des messages clairs.",
+        "operationId": "get_about",
+        "responses": {
+          "200": {
+            "description": "Git Messages est une référence sélectionnée des conventions de message de commit et un outil pour composer des messages clairs."
+          }
+        },
+        "summary": "À propos de Git Messages"
+      }
+    },
+    "/api/v1/server/contact": {
+      "get": {
+        "description": "Returns report-form descriptors and a one-use captcha challenge",
+        "operationId": "get_contact_form",
+        "responses": {
+          "200": {
+            "description": "Returns report-form descriptors and a one-use captcha challenge"
+          }
+        },
+        "summary": "Contact report form"
+      },
+      "post": {
+        "description": "Uses a submit and confirm review flow",
+        "operationId": "submit_contact_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "properties": {
+                  "captcha_answer": {
+                    "type": "string"
+                  },
+                  "captcha_id": {
+                    "type": "string"
+                  },
+                  "confirmed": {
+                    "type": "boolean"
+                  },
+                  "email": {
+                    "format": "email",
+                    "maxLength": 254,
+                    "type": "string"
+                  },
+                  "form_token": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 100,
+                    "type": "string"
+                  },
+                  "review_token": {
+                    "type": "string"
+                  },
+                  "step": {
+                    "enum": [
+                      "submit",
+                      "confirm",
+                      "edit"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "abuse",
+                      "dmca",
+                      "privacy",
+                      "security"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name",
+                  "email",
+                  "form_token"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Uses a submit and confirm review flow"
+          },
+          "400": {
+            "description": "La requête contient des champs de message non valides."
+          }
+        },
+        "summary": "Submit a contact report"
+      }
+    },
+    "/api/v1/server/dpo": {
+      "get": {
+        "description": "Public DPO contact information",
+        "operationId": "get_data_protection_contact",
+        "responses": {
+          "200": {
+            "description": "Public DPO contact information"
+          }
+        },
+        "summary": "Data protection contact"
+      }
+    },
+    "/api/v1/server/graphql": {
+      "post": {
+        "description": "Explorez le catalogue public des commits avec GraphiQL. Un formulaire de requête est également disponible sans JavaScript.",
+        "operationId": "graphql_query_api_v1_server_graphql",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "description": "Requête GraphQL",
+                    "type": "string"
+                  },
+                  "variables": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Explorez le catalogue public des commits avec GraphiQL. Un formulaire de requête est également disponible sans JavaScript."
+          }
+        },
+        "summary": "GraphQL"
+      }
+    },
+    "/api/v1/server/healthz": {
+      "get": {
+        "description": "Le service fonctionne",
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "description": "Le service fonctionne"
+          }
+        },
+        "summary": "État du service"
+      }
+    },
+    "/api/v1/server/help": {
+      "get": {
+        "description": "Consultez",
+        "operationId": "get_help",
+        "responses": {
+          "200": {
+            "description": "Consultez"
+          }
+        },
+        "summary": "Aide"
+      }
+    },
+    "/api/v1/server/help/mcp": {
+      "get": {
+        "description": "Accédez au catalogue public et au générateur sans état via Streamable HTTP.",
+        "operationId": "get_mcp_help",
+        "responses": {
+          "200": {
+            "description": "Accédez au catalogue public et au générateur sans état via Streamable HTTP."
+          }
+        },
+        "summary": "Aide de connexion MCP de Git Messages"
+      }
+    },
+    "/api/v1/server/mcp": {
+      "post": {
+        "description": "Accédez au catalogue public et au générateur sans état via Streamable HTTP.",
+        "operationId": "mcp_endpoint_api_v1_server_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Accédez au catalogue public et au générateur sans état via Streamable HTTP."
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "Trop de requêtes"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Aide de connexion MCP de Git Messages"
+      }
+    },
+    "/api/v1/server/metrics": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_metrics_api_v1_server_metrics",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/grafana": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_metrics_api_v1_server_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/loki": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_metrics_api_v1_server_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/prometheus": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_metrics_api_v1_server_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/preferences": {
+      "get": {
+        "description": "Préférences",
+        "operationId": "get_preferences",
+        "responses": {
+          "200": {
+            "description": "Préférences"
+          }
+        },
+        "summary": "Préférences"
+      },
+      "post": {
+        "description": "Préférences",
+        "operationId": "save_preferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "properties": {
+                  "lang": {
+                    "type": "string"
+                  },
+                  "theme": {
+                    "enum": [
+                      "dark",
+                      "light",
+                      "auto"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Préférences"
+          },
+          "400": {
+            "description": "La requête contient des champs de message non valides."
+          }
+        },
+        "summary": "Enregistrer"
+      }
+    },
+    "/api/v1/server/preferences/sync": {
+      "get": {
+        "description": "Déplacez vos préférences vers un autre appareil.",
+        "operationId": "get_preferences_sync",
+        "responses": {
+          "200": {
+            "description": "Déplacez vos préférences vers un autre appareil."
+          }
+        },
+        "summary": "Synchroniser les préférences"
+      }
+    },
+    "/api/v1/server/preferences/sync/import": {
+      "get": {
+        "description": "Déplacez vos préférences vers un autre appareil.",
+        "operationId": "import_preferences_sync",
+        "responses": {
+          "200": {
+            "description": "Déplacez vos préférences vers un autre appareil."
+          }
+        },
+        "summary": "Importer"
+      }
+    },
+    "/api/v1/server/preferences/tokens": {
+      "get": {
+        "description": "Jetons du propriétaire",
+        "operationId": "list_owner_tokens",
+        "responses": {
+          "200": {
+            "description": "Jetons du propriétaire"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Jetons du propriétaire"
+      },
+      "post": {
+        "description": "Accès complet à vos {resources}. Gardez-le privé.",
+        "operationId": "create_linked_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiry": {
+                    "enum": [
+                      "never",
+                      "7d",
+                      "30d",
+                      "90d",
+                      "1y"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Accès complet à vos {resources}. Gardez-le privé."
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Créer un jeton lié"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary": {
+      "delete": {
+        "description": "Cela supprime {linked} jetons liés et {resources}, y compris tout ce qui a été créé avec un jeton lié.",
+        "operationId": "revoke_primary_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "confirm": {
+                    "maxLength": 4,
+                    "minLength": 4,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "confirm"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Cela supprime {linked} jetons liés et {resources}, y compris tout ce qui a été créé avec un jeton lié."
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Révoquer le jeton principal"
+      },
+      "post": {
+        "description": "Jeton principal",
+        "operationId": "issue_primary_token",
+        "responses": {
+          "200": {
+            "description": "Jeton principal"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "summary": "Nouveau jeton"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary/reveal": {
+      "post": {
+        "description": "Affiché une seule fois sur cette page.",
+        "operationId": "reveal_primary_token",
+        "responses": {
+          "200": {
+            "description": "Affiché une seule fois sur cette page."
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Révéler"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary/rotate": {
+      "post": {
+        "description": "Jeton principal",
+        "operationId": "rotate_primary_token",
+        "responses": {
+          "200": {
+            "description": "Jeton principal"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Renouveler"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}": {
+      "delete": {
+        "description": "Révoquer",
+        "operationId": "revoke_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Révoquer"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Révoquer"
+      },
+      "patch": {
+        "description": "Enregistrer",
+        "operationId": "update_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiry": {
+                    "enum": [
+                      "never",
+                      "7d",
+                      "30d",
+                      "90d",
+                      "1y"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Enregistrer"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Modifier"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}/reveal": {
+      "post": {
+        "description": "Affiché une seule fois sur cette page.",
+        "operationId": "reveal_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Affiché une seule fois sur cette page."
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Révéler"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}/rotate": {
+      "post": {
+        "description": "Jeton principal",
+        "operationId": "rotate_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Jeton principal"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Renouveler"
+      }
+    },
+    "/api/v1/server/privacy": {
+      "get": {
+        "description": "Ce service fournit un catalogue statique et sélectionné de conventions de commit. Il ne propose pas de comptes, n'accepte pas de contributions d'utilisateurs et ne conserve aucune donnée personnelle. L'opérateur du serveur peut gérer les journaux opérationnels.",
+        "operationId": "get_privacy",
+        "responses": {
+          "200": {
+            "description": "Ce service fournit un catalogue statique et sélectionné de conventions de commit. Il ne propose pas de comptes, n'accepte pas de contributions d'utilisateurs et ne conserve aucune donnée personnelle. L'opérateur du serveur peut gérer les journaux opérationnels."
+          }
+        },
+        "summary": "Confidentialité"
+      }
+    },
+    "/api/v1/server/security": {
+      "get": {
+        "description": "Signalez les vulnérabilités via le signalement privé de GitHub. Ne publiez pas de détails d’exploitation dans les tickets publics.",
+        "operationId": "get_security",
+        "responses": {
+          "200": {
+            "description": "Signalez les vulnérabilités via le signalement privé de GitHub. Ne publiez pas de détails d’exploitation dans les tickets publics."
+          }
+        },
+        "summary": "Sécurité"
+      }
+    },
+    "/api/v1/server/security/policy": {
+      "get": {
+        "description": "Public coordinated-disclosure policy",
+        "operationId": "get_security_policy",
+        "responses": {
+          "200": {
+            "description": "Public coordinated-disclosure policy"
+          }
+        },
+        "summary": "Security disclosure policy"
+      }
+    },
+    "/api/v1/server/security/thanks": {
+      "get": {
+        "description": "Public researcher acknowledgments",
+        "operationId": "get_security_thanks",
+        "responses": {
+          "200": {
+            "description": "Public researcher acknowledgments"
+          }
+        },
+        "summary": "Security acknowledgments"
+      }
+    },
+    "/api/v1/server/swagger": {
+      "get": {
+        "description": "API REST",
+        "operationId": "get_openapi",
+        "responses": {
+          "200": {
+            "description": "API REST"
+          }
+        },
+        "summary": "OpenAPI"
+      }
+    },
+    "/api/v1/server/terms": {
+      "get": {
+        "description": "Le catalogue est fourni à titre de référence. Vérifiez la convention choisie et les règles de contribution de votre dépôt avant d'utiliser un message généré.",
+        "operationId": "get_terms",
+        "responses": {
+          "200": {
+            "description": "Le catalogue est fourni à titre de référence. Vérifiez la convention choisie et les règles de contribution de votre dépôt avant d'utiliser un message généré."
+          }
+        },
+        "summary": "Conditions"
+      }
+    },
+    "/api/v1/templates": {
+      "get": {
+        "description": "Les modèles sélectionnés de messages.",
+        "operationId": "list_templates",
+        "responses": {
+          "200": {
+            "description": "Les modèles sélectionnés de messages."
+          }
+        },
+        "summary": "Lister les modèles de messages"
+      }
+    },
+    "/api/v1/templates/random": {
+      "get": {
+        "description": "Un modèle de message aléatoire.",
+        "operationId": "get_random_template",
+        "responses": {
+          "200": {
+            "description": "Un modèle de message aléatoire."
+          }
+        },
+        "summary": "Obtenir un modèle aléatoire"
+      }
+    },
+    "/api/v1/types": {
+      "get": {
+        "description": "Le catalogue des types de commit.",
+        "operationId": "list_commit_types",
+        "responses": {
+          "200": {
+            "description": "Le catalogue des types de commit."
+          }
+        },
+        "summary": "Lister les types de commit"
+      }
+    },
+    "/mcp": {
+      "post": {
+        "description": "Accédez au catalogue public et au générateur sans état via Streamable HTTP.",
+        "operationId": "mcp_endpoint_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Accédez au catalogue public et au générateur sans état via Streamable HTTP."
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "Trop de requêtes"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Aide de connexion MCP de Git Messages"
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_root_metrics_metrics",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/grafana": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_root_metrics_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/loki": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_root_metrics_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/prometheus": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_root_metrics_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/server/metrics": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_metrics_server_metrics",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/grafana": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_metrics_server_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/loki": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_metrics_server_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/prometheus": {
+      "get": {
+        "description": "Point de terminaison interne de métriques authentifié",
+        "operationId": "get_metrics_server_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "Point de terminaison interne de métriques authentifié"
+          },
+          "400": {
+            "description": "Requête invalide"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Service de métriques",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://openapi.invalid"
+    }
+  ]
+}

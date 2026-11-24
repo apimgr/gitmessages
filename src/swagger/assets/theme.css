@@ -1,0 +1,12 @@
+.swagger-ui { color: var(--color-text); background: var(--color-bg); font-family: inherit; }
+.swagger-ui .topbar { background: var(--color-bg-active); }
+.swagger-ui .info .title, .swagger-ui .opblock-tag, .swagger-ui .opblock .opblock-summary-description { color: var(--color-text); }
+.swagger-ui .opblock { border-color: var(--color-border); background: var(--color-bg-secondary); }
+.swagger-ui .opblock.opblock-get { border-color: var(--color-info); background: color-mix(in srgb, var(--color-info) 10%, var(--color-bg)); }
+.swagger-ui .opblock.opblock-post { border-color: var(--color-success); background: color-mix(in srgb, var(--color-success) 10%, var(--color-bg)); }
+.swagger-ui .opblock.opblock-put, .swagger-ui .opblock.opblock-patch { border-color: var(--color-warning); background: color-mix(in srgb, var(--color-warning) 10%, var(--color-bg)); }
+.swagger-ui .opblock.opblock-delete { border-color: var(--color-error); background: color-mix(in srgb, var(--color-error) 10%, var(--color-bg)); }
+.swagger-ui input, .swagger-ui textarea, .swagger-ui select { color: var(--color-text); background: var(--color-bg-active); border-color: var(--color-border); }
+.swagger-ui .btn { color: var(--color-text); background: var(--color-bg-active); border-color: var(--color-border); }
+.swagger-ui .model-box, .swagger-ui .responses-inner, .swagger-ui .response-col_description__inner div.markdown { color: var(--color-text); background: var(--color-bg-secondary); }
+.swagger-ui .markdown p, .swagger-ui .markdown li { color: var(--color-text); }

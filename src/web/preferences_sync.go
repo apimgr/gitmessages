@@ -19,8 +19,8 @@ var preferenceControls = map[string]bool{"csrf_token": true, "code": true, "redi
 func registerPreferenceSyncRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/server/preferences/sync", preferenceSyncPage)
 	mux.HandleFunc("/server/preferences/sync/import", preferenceSyncImport)
-	mux.HandleFunc(apiBase+"/server/preferences/sync", preferenceSyncAPI)
-	mux.HandleFunc(apiBase+"/server/preferences/sync/import", preferenceSyncImportAPI)
+	mux.HandleFunc(APIBasePath()+"/server/preferences/sync", preferenceSyncAPI)
+	mux.HandleFunc(APIBasePath()+"/server/preferences/sync/import", preferenceSyncImportAPI)
 }
 
 func preferenceState(r *http.Request) (string, string, url.Values) {
@@ -43,7 +43,7 @@ func canonicalPreferences(r *http.Request) (string, string, string) {
 func preferenceSyncPage(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		if !validCSRF(r) {
-			http.Error(w, "CSRF token validation failed", http.StatusForbidden)
+			writeHTTPError(w, r, "CSRF token validation failed", http.StatusForbidden)
 			return
 		}
 		if err := r.ParseForm(); err != nil {
@@ -57,7 +57,7 @@ func preferenceSyncPage(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET, POST")
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeHTTPError(w, r, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	_, _, code, exportURL := preferenceExport(r)
@@ -72,7 +72,7 @@ func preferenceSyncPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	csrf := ensureCSRFCookie(w, r)
-	body := `<section class="section-card" aria-labelledby="sync-export"><h2 id="sync-export">` + tr(r, "preferences.sync") + `</h2><div class="form-group"><label for="sync-url">` + tr(r, "preferences.sync.export_link") + `</label><input id="sync-url" class="user-select-all" value="` + htmlEscape(exportURL) + `" readonly><button type="button" data-copy-text="` + htmlEscape(exportURL) + `">` + tr(r, "preferences.sync.copy") + `</button></div><div class="form-group"><label for="sync-code">` + tr(r, "preferences.sync.export_code") + `</label><input id="sync-code" class="user-select-all" value="` + htmlEscape(code) + `" readonly><button type="button" data-copy-text="` + htmlEscape(code) + `">` + tr(r, "preferences.sync.copy") + `</button></div><form method="post" action="/server/preferences/sync"><input type="hidden" name="csrf_token" value="` + htmlEscape(csrf) + `"><div class="form-group"><label for="sync-import">` + tr(r, "preferences.sync.import") + `</label><input id="sync-import" name="code" maxlength="2048" autocomplete="off"></div><button type="submit">` + tr(r, "preferences.sync.import") + `</button></form></section>`
+	body := `<section class="section-card" aria-labelledby="sync-export"><h2 id="sync-export">` + tr(r, "preferences.sync") + `</h2><div class="form-group"><label for="sync-url">` + tr(r, "preferences.sync.export_link") + `</label><input id="sync-url" class="user-select-all" value="` + htmlEscape(exportURL) + `" readonly><button class="copy-btn" type="button" data-copy-text="` + htmlEscape(exportURL) + `" data-copy-label="` + htmlEscape(tr(r, "preferences.sync.copy")) + `" data-copied-label="` + htmlEscape(tr(r, "copied")) + `" aria-label="` + htmlEscape(tr(r, "preferences.sync.copy")) + `" aria-live="polite">` + htmlEscape(tr(r, "preferences.sync.copy")) + `</button></div><div class="form-group"><label for="sync-code">` + tr(r, "preferences.sync.export_code") + `</label><input id="sync-code" class="user-select-all" value="` + htmlEscape(code) + `" readonly><button class="copy-btn" type="button" data-copy-text="` + htmlEscape(code) + `" data-copy-label="` + htmlEscape(tr(r, "preferences.sync.copy")) + `" data-copied-label="` + htmlEscape(tr(r, "copied")) + `" aria-label="` + htmlEscape(tr(r, "preferences.sync.copy")) + `" aria-live="polite">` + htmlEscape(tr(r, "preferences.sync.copy")) + `</button></div><form method="post" action="/server/preferences/sync"><input type="hidden" name="csrf_token" value="` + htmlEscape(csrf) + `"><div class="form-group"><label for="sync-import">` + tr(r, "preferences.sync.import") + `</label><input id="sync-import" name="code" maxlength="2048" autocomplete="off"></div><button type="submit">` + tr(r, "preferences.sync.import") + `</button></form></section>`
 	page(w, r, tr(r, "preferences.sync"), templateHTML(body))
 }
 
@@ -85,7 +85,7 @@ func preferenceExport(r *http.Request) (string, string, string, string) {
 func preferenceSyncImport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeHTTPError(w, r, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	applyPreferenceValues(w, r, mergePreferenceValues(r.URL.Query(), r.URL.Query().Get("code")))
@@ -94,7 +94,7 @@ func preferenceSyncImport(w http.ResponseWriter, r *http.Request) {
 }
 
 func preferenceSyncAPI(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != apiBase+"/server/preferences/sync" || !method(w, r, http.MethodGet) {
+	if r.URL.Path != APIBasePath()+"/server/preferences/sync" || !method(w, r, http.MethodGet) {
 		return
 	}
 	_, code, exportURL := canonicalPreferences(r)
@@ -108,7 +108,7 @@ func preferenceSyncAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func preferenceSyncImportAPI(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != apiBase+"/server/preferences/sync/import" || !method(w, r, http.MethodGet) {
+	if r.URL.Path != APIBasePath()+"/server/preferences/sync/import" || !method(w, r, http.MethodGet) {
 		return
 	}
 	values := mergePreferenceValues(r.URL.Query(), r.URL.Query().Get("code"))

@@ -129,6 +129,25 @@ func TestCheckReleaseChannelsAndFailures(t *testing.T) {
 	}
 }
 
+func TestCheckDeferredSelectsNewestEligibleRelease(t *testing.T) {
+	oldAPI := releaseAPI
+	t.Cleanup(func() { releaseAPI = oldAPI })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"tag_name":"v1.2.3","published_at":"2026-01-01T00:00:00Z"},{"tag_name":"v1.2.4","published_at":"2026-02-05T00:00:00Z"}]`))
+	}))
+	defer server.Close()
+	releaseAPI = server.URL
+	now := time.Date(2026, 2, 10, 0, 0, 0, 0, time.UTC)
+	got, found, err := CheckDeferred(context.Background(), "stable", "1.2.2", 0, 30, now)
+	if err != nil || !found || got.TagName != "v1.2.3" {
+		t.Fatalf("CheckDeferred() = %#v, %v, %v; want eligible v1.2.3", got, found, err)
+	}
+	got, found, err = CheckDeferred(context.Background(), "devel", "1.2.2", 0, 365, now)
+	if err != nil || !found || got.TagName != "v1.2.4" {
+		t.Fatalf("devel CheckDeferred() = %#v, %v, %v; defer must not apply", got, found, err)
+	}
+}
+
 func TestInstallRejectsMissingAssets(t *testing.T) {
 	if err := Install(context.Background(), Release{TagName: "v1.2.3"}); err == nil || !strings.Contains(err.Error(), "missing") {
 		t.Fatalf("Install without assets error = %v", err)

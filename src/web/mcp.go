@@ -40,8 +40,10 @@ type mcpResponse struct {
 	Meta    map[string]any  `json:"_meta,omitempty"`
 }
 
-var serverFQDNMu sync.RWMutex
-var serverFQDN string
+var (
+	serverFQDNMu sync.RWMutex
+	serverFQDN   string
+)
 
 type apiOperation struct {
 	name        string
@@ -280,37 +282,36 @@ func handleMCPRequest(r *http.Request, request mcpRequest) (any, int, *mcpError)
 }
 
 func mcpResponseMetadata() map[string]any {
-	return map[string]any{"io.modelcontextprotocol/serverInfo": map[string]string{"name": "Git Messages API", "version": serverVersion}}
+	return map[string]any{"io.modelcontextprotocol/serverInfo": map[string]string{"name": seoBrandingTitle() + " API", "version": serverVersion}}
 }
 
 func apiOperationDefinitions(r *http.Request) []apiOperation {
 	return []apiOperation{
-		{name: "get_api_index", path: apiBase, method: http.MethodGet, summary: tr(r, "api.rest"), description: tr(r, "api.resources"), handler: apiRoot, inputSchema: emptyInputSchema()},
-		{name: "list_commit_types", path: apiBase + "/types", method: http.MethodGet, summary: tr(r, "swagger.types.summary"), description: tr(r, "swagger.types.response"), handler: apiTypes, inputSchema: emptyInputSchema()},
-		{name: "list_conventions", path: apiBase + "/conventions", method: http.MethodGet, summary: tr(r, "swagger.conventions.summary"), description: tr(r, "swagger.conventions.response"), handler: apiConventions, inputSchema: emptyInputSchema()},
-		{name: "list_templates", path: apiBase + "/templates", method: http.MethodGet, summary: tr(r, "swagger.templates.summary"), description: tr(r, "swagger.templates.response"), handler: apiTemplates, inputSchema: emptyInputSchema()},
-		{name: "get_random_template", path: apiBase + "/templates/random", method: http.MethodGet, summary: tr(r, "swagger.random_template.summary"), description: tr(r, "swagger.random_template.response"), handler: apiRandomTemplate, inputSchema: emptyInputSchema()},
-		{name: "get_random_example", path: apiBase + "/messages/random", method: http.MethodGet, summary: tr(r, "swagger.random_message.summary"), description: tr(r, "swagger.random_message.response"), handler: apiRandom, inputSchema: emptyInputSchema()},
-		{name: "build_commit_message", path: apiBase + "/messages", method: http.MethodPost, summary: tr(r, "swagger.build_message.summary"), description: tr(r, "swagger.build_message.response"), handler: apiMessages, inputSchema: buildMessageInputSchema(r)},
-		{name: "get_health", path: apiBase + "/server/healthz", method: http.MethodGet, summary: tr(r, "health.title"), description: tr(r, "health.ok"), handler: apiHealth, inputSchema: emptyInputSchema()},
-		{name: "get_about", path: apiBase + "/server/about", method: http.MethodGet, summary: tr(r, "about.title"), description: tr(r, "about.body"), handler: apiAbout, inputSchema: emptyInputSchema()},
-		{name: "get_help", path: apiBase + "/server/help", method: http.MethodGet, summary: tr(r, "help.title"), description: tr(r, "help.api.docs"), handler: apiHelp, inputSchema: emptyInputSchema()},
-		{name: "get_mcp_help", path: apiBase + "/server/help/mcp", method: http.MethodGet, summary: tr(r, "mcp.title"), description: tr(r, "mcp.help.description"), handler: apiMCPHelp, inputSchema: emptyInputSchema()},
-		{name: "get_privacy", path: apiBase + "/server/privacy", method: http.MethodGet, summary: tr(r, "privacy.title"), description: tr(r, "privacy.body"), handler: apiPrivacy, inputSchema: emptyInputSchema()},
-		{name: "get_terms", path: apiBase + "/server/terms", method: http.MethodGet, summary: tr(r, "terms.title"), description: tr(r, "terms.body"), handler: apiTerms, inputSchema: emptyInputSchema()},
-		{name: "get_security", path: apiBase + "/server/security", method: http.MethodGet, summary: tr(r, "security.title"), description: tr(r, "security.body"), handler: apiContactSecurity, inputSchema: emptyInputSchema()},
-		{name: "get_security_policy", path: apiBase + "/server/security/policy", method: http.MethodGet, summary: "Security disclosure policy", description: "Public coordinated-disclosure policy", handler: apiSecurityPolicy, inputSchema: emptyInputSchema()},
-		{name: "get_security_thanks", path: apiBase + "/server/security/thanks", method: http.MethodGet, summary: "Security acknowledgments", description: "Public researcher acknowledgments", handler: apiSecurityThanks, inputSchema: emptyInputSchema()},
-		{name: "get_data_protection_contact", path: apiBase + "/server/dpo", method: http.MethodGet, summary: "Data protection contact", description: "Public DPO contact information", handler: apiDPO, inputSchema: emptyInputSchema()},
-		{name: "get_contact_form", path: apiBase + "/server/contact", method: http.MethodGet, summary: "Contact report form", description: "Returns report-form descriptors and a one-use captcha challenge", handler: apiContact, inputSchema: emptyInputSchema()},
-		{name: "submit_contact_report", path: apiBase + "/server/contact", method: http.MethodPost, summary: "Submit a contact report", description: "Uses a submit and confirm review flow", handler: apiContact, inputSchema: contactInputSchema()},
-		{name: "get_preferences", path: apiBase + "/server/preferences", method: http.MethodGet, summary: tr(r, "preferences.title"), description: tr(r, "preferences.title"), handler: apiPreferences, inputSchema: emptyInputSchema()},
-		{name: "save_preferences", path: apiBase + "/server/preferences", method: http.MethodPost, summary: tr(r, "preferences.save"), description: tr(r, "preferences.title"), handler: apiPreferences, inputSchema: map[string]any{"type": "object", "properties": map[string]any{"theme": map[string]any{"type": "string", "enum": []string{"dark", "light", "auto"}}, "lang": map[string]any{"type": "string"}}, "additionalProperties": true}},
-		{name: "get_preferences_sync", path: apiBase + "/server/preferences/sync", method: http.MethodGet, summary: tr(r, "preferences.sync"), description: tr(r, "preferences.sync.description"), handler: preferenceSyncAPI, inputSchema: emptyInputSchema()},
-		{name: "import_preferences_sync", path: apiBase + "/server/preferences/sync/import", method: http.MethodGet, summary: tr(r, "preferences.sync.import"), description: tr(r, "preferences.sync.description"), handler: preferenceSyncImportAPI, inputSchema: emptyInputSchema()},
-		{name: "get_openapi", path: apiBase + "/server/swagger", method: http.MethodGet, summary: tr(r, "api.openapi"), description: tr(r, "api.rest"), handler: swaggerJSON, inputSchema: emptyInputSchema()},
-		{name: "graphql_query_get", path: apiBase + "/server/graphql", method: http.MethodGet, summary: tr(r, "graphql.title"), description: tr(r, "graphql.description"), handler: graphqlapi.Handler().ServeHTTP, inputSchema: graphqlInputSchema(r)},
-		{name: "graphql_query", path: apiBase + "/server/graphql", method: http.MethodPost, summary: tr(r, "graphql.title"), description: tr(r, "graphql.description"), handler: graphqlapi.Handler().ServeHTTP, inputSchema: graphqlInputSchema(r)},
+		{name: "get_api_index", path: APIBasePath(), method: http.MethodGet, summary: tr(r, "api.rest"), description: tr(r, "api.resources"), handler: apiRoot, inputSchema: emptyInputSchema()},
+		{name: "list_commit_types", path: APIBasePath() + "/types", method: http.MethodGet, summary: tr(r, "swagger.types.summary"), description: tr(r, "swagger.types.response"), handler: apiTypes, inputSchema: emptyInputSchema()},
+		{name: "list_conventions", path: APIBasePath() + "/conventions", method: http.MethodGet, summary: tr(r, "swagger.conventions.summary"), description: tr(r, "swagger.conventions.response"), handler: apiConventions, inputSchema: emptyInputSchema()},
+		{name: "list_templates", path: APIBasePath() + "/templates", method: http.MethodGet, summary: tr(r, "swagger.templates.summary"), description: tr(r, "swagger.templates.response"), handler: apiTemplates, inputSchema: emptyInputSchema()},
+		{name: "get_random_template", path: APIBasePath() + "/templates/random", method: http.MethodGet, summary: tr(r, "swagger.random_template.summary"), description: tr(r, "swagger.random_template.response"), handler: apiRandomTemplate, inputSchema: emptyInputSchema()},
+		{name: "get_random_example", path: APIBasePath() + "/messages/random", method: http.MethodGet, summary: tr(r, "swagger.random_message.summary"), description: tr(r, "swagger.random_message.response"), handler: apiRandom, inputSchema: emptyInputSchema()},
+		{name: "build_commit_message", path: APIBasePath() + "/messages", method: http.MethodPost, summary: tr(r, "swagger.build_message.summary"), description: tr(r, "swagger.build_message.response"), handler: apiMessages, inputSchema: buildMessageInputSchema(r)},
+		{name: "get_health", path: APIBasePath() + "/server/healthz", method: http.MethodGet, summary: tr(r, "health.title"), description: tr(r, "health.ok"), handler: apiHealth, inputSchema: emptyInputSchema()},
+		{name: "get_about", path: APIBasePath() + "/server/about", method: http.MethodGet, summary: tr(r, "about.title"), description: tr(r, "about.body"), handler: apiAbout, inputSchema: emptyInputSchema()},
+		{name: "get_help", path: APIBasePath() + "/server/help", method: http.MethodGet, summary: tr(r, "help.title"), description: tr(r, "help.api.docs"), handler: apiHelp, inputSchema: emptyInputSchema()},
+		{name: "get_mcp_help", path: APIBasePath() + "/server/help/mcp", method: http.MethodGet, summary: tr(r, "mcp.title"), description: tr(r, "mcp.help.description"), handler: apiMCPHelp, inputSchema: emptyInputSchema()},
+		{name: "get_privacy", path: APIBasePath() + "/server/privacy", method: http.MethodGet, summary: tr(r, "privacy.title"), description: tr(r, "privacy.body"), handler: apiPrivacy, inputSchema: emptyInputSchema()},
+		{name: "get_terms", path: APIBasePath() + "/server/terms", method: http.MethodGet, summary: tr(r, "terms.title"), description: tr(r, "terms.body"), handler: apiTerms, inputSchema: emptyInputSchema()},
+		{name: "get_security", path: APIBasePath() + "/server/security", method: http.MethodGet, summary: tr(r, "security.title"), description: tr(r, "security.body"), handler: apiContactSecurity, inputSchema: emptyInputSchema()},
+		{name: "get_security_policy", path: APIBasePath() + "/server/security/policy", method: http.MethodGet, summary: "Security disclosure policy", description: "Public coordinated-disclosure policy", handler: apiSecurityPolicy, inputSchema: emptyInputSchema()},
+		{name: "get_security_thanks", path: APIBasePath() + "/server/security/thanks", method: http.MethodGet, summary: "Security acknowledgments", description: "Public researcher acknowledgments", handler: apiSecurityThanks, inputSchema: emptyInputSchema()},
+		{name: "get_data_protection_contact", path: APIBasePath() + "/server/dpo", method: http.MethodGet, summary: "Data protection contact", description: "Public DPO contact information", handler: apiDPO, inputSchema: emptyInputSchema()},
+		{name: "get_contact_form", path: APIBasePath() + "/server/contact", method: http.MethodGet, summary: "Contact report form", description: "Returns report-form descriptors and a one-use captcha challenge", handler: apiContact, inputSchema: emptyInputSchema()},
+		{name: "submit_contact_report", path: APIBasePath() + "/server/contact", method: http.MethodPost, summary: "Submit a contact report", description: "Uses a submit and confirm review flow", handler: apiContact, inputSchema: contactInputSchema()},
+		{name: "get_preferences", path: APIBasePath() + "/server/preferences", method: http.MethodGet, summary: tr(r, "preferences.title"), description: tr(r, "preferences.title"), handler: apiPreferences, inputSchema: emptyInputSchema()},
+		{name: "save_preferences", path: APIBasePath() + "/server/preferences", method: http.MethodPost, summary: tr(r, "preferences.save"), description: tr(r, "preferences.title"), handler: apiPreferences, inputSchema: map[string]any{"type": "object", "properties": map[string]any{"theme": map[string]any{"type": "string", "enum": []string{"dark", "light", "auto"}}, "lang": map[string]any{"type": "string"}}, "additionalProperties": true}},
+		{name: "get_preferences_sync", path: APIBasePath() + "/server/preferences/sync", method: http.MethodGet, summary: tr(r, "preferences.sync"), description: tr(r, "preferences.sync.description"), handler: preferenceSyncAPI, inputSchema: emptyInputSchema()},
+		{name: "import_preferences_sync", path: APIBasePath() + "/server/preferences/sync/import", method: http.MethodGet, summary: tr(r, "preferences.sync.import"), description: tr(r, "preferences.sync.description"), handler: preferenceSyncImportAPI, inputSchema: emptyInputSchema()},
+		{name: "get_openapi", path: APIBasePath() + "/server/swagger", method: http.MethodGet, summary: tr(r, "api.openapi"), description: tr(r, "api.rest"), handler: swaggerJSON, inputSchema: emptyInputSchema()},
+		{name: "graphql_query", path: APIBasePath() + "/server/graphql", method: http.MethodPost, summary: tr(r, "graphql.title"), description: tr(r, "graphql.description"), handler: graphqlapi.Handler().ServeHTTP, inputSchema: graphqlInputSchema(r)},
 	}
 }
 
@@ -380,7 +381,7 @@ func callMCPTool(r *http.Request, params map[string]any) (any, int, *mcpError) {
 	if definition == nil {
 		return mcpToolError(tr(r, "api.invalid_request")), http.StatusOK, nil
 	}
-	if definition.method == http.MethodGet && len(arguments) > 0 && definition.name != "graphql_query_get" || definition.name == "build_commit_message" && !validBuildArguments(arguments) || (definition.name == "graphql_query" || definition.name == "graphql_query_get") && !validGraphQLArguments(arguments) {
+	if definition.method == http.MethodGet && len(arguments) > 0 || definition.name == "build_commit_message" && !validBuildArguments(arguments) || definition.name == "graphql_query" && !validGraphQLArguments(arguments) {
 		return mcpToolError(tr(r, "api.invalid_request")), http.StatusOK, nil
 	}
 	request := r.Clone(r.Context())
@@ -388,15 +389,6 @@ func callMCPTool(r *http.Request, params map[string]any) (any, int, *mcpError) {
 	urlCopy.Path = definition.path
 	urlCopy.RawPath = ""
 	urlCopy.RawQuery = ""
-	if definition.name == "graphql_query_get" {
-		query := url.Values{}
-		query.Set("query", arguments["query"].(string))
-		if variables, ok := arguments["variables"]; ok {
-			encoded, _ := json.Marshal(variables)
-			query.Set("variables", string(encoded))
-		}
-		urlCopy.RawQuery = query.Encode()
-	}
 	request.URL = &urlCopy
 	request.Method = definition.method
 	request.Header = r.Header.Clone()

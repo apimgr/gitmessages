@@ -9,22 +9,24 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
+	htmlnode "golang.org/x/net/html"
 )
 
 func TestContactPagesExposeProviderFallbackAndFreshCaptchaErrors(t *testing.T) {
-	configDir := t.TempDir()
+	configDir := projectTestDir(t)
 	configPath := filepath.Join(configDir, "server.yml")
-	if err := os.WriteFile(configPath, []byte("server:\n  pages:\n    contact:\n      captcha: recaptcha\n      captcha_site_key: public-site-key\n      captcha_secret_key: private-test-secret\n      antispam:\n        min_fill_seconds: 0\n"), 0600); err != nil {
+	if err := os.WriteFile(configPath, []byte("server:\n  pages:\n    contact:\n      captcha: recaptcha\n      captcha_site_key: public-site-key\n      captcha_secret_key: private-test-secret\n      antispam:\n        min_fill_seconds: 0\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	secretData := "server:\n  token: adm_test-token-for-contact-routes\n  security:\n    encryption_key: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=\n    encryption_key_version: 1\n  metrics:\n    auth:\n      tokens:\n        prometheus: test-prometheus-token\n        grafana: test-grafana-token\n        loki: test-loki-token\n"
-	if err := os.WriteFile(filepath.Join(configDir, "secrets.yml"), []byte(secretData), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "secrets.yml"), []byte(secretData), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := config.Load(configPath); err != nil {
@@ -41,7 +43,7 @@ func TestContactPagesExposeProviderFallbackAndFreshCaptchaErrors(t *testing.T) {
 		if err := os.RemoveAll(filepath.Join(configDir, "yaml.d")); err != nil {
 			t.Errorf("remove temporary contact config area: %v", err)
 		}
-		if err := os.WriteFile(configPath, []byte("server:\n"), 0600); err != nil {
+		if err := os.WriteFile(configPath, []byte("server:\n"), 0o600); err != nil {
 			t.Errorf("reset temporary server config: %v", err)
 			return
 		}
@@ -88,14 +90,79 @@ func TestContactPagesExposeProviderFallbackAndFreshCaptchaErrors(t *testing.T) {
 		"subject": {"Terms report"}, "message": {"A report for https://messages.example.test/post/1"},
 		"form_token": {apiBody.Data.FormToken}, "captcha_id": {challengeID}, "captcha_answer": {answer},
 	}
+	csrfPage := httptest.NewRecorder()
+	formRequest := httptest.NewRequest(http.MethodGet, "https://messages.example.test/server/contact?type=abuse", nil)
+	formRequest.Header.Set("Accept-Language", "en")
+	handler.ServeHTTP(csrfPage, formRequest)
+	var csrfCookie *http.Cookie
+	for _, cookie := range csrfPage.Result().Cookies() {
+		if cookie.Name == csrfCookieName {
+			csrfCookie = cookie
+			break
+		}
+	}
+	if csrfCookie == nil || !strings.Contains(csrfPage.Body.String(), `name="csrf_token"`) {
+		t.Fatal("HTML contact form omitted its CSRF cookie or field")
+	}
+	formDocument, err := htmlnode.Parse(strings.NewReader(csrfPage.Body.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var formToken, formCaptchaID, captchaQuestion string
+	var readFormFields func(*htmlnode.Node)
+	readFormFields = func(node *htmlnode.Node) {
+		if node.Type == htmlnode.ElementNode && node.Data == "input" {
+			switch attrValue(node, "name") {
+			case "form_token":
+				formToken = attrValue(node, "value")
+			case "captcha_id":
+				formCaptchaID = attrValue(node, "value")
+			}
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			readFormFields(child)
+		}
+	}
+	readFormFields(formDocument)
+	captchaQuestion = regexp.MustCompile(`[0-9]+\s*[+-]\s*[0-9]+`).FindString(csrfPage.Body.String())
+	if formToken == "" || formCaptchaID == "" || captchaQuestion == "" {
+		t.Fatal("HTML form omitted its current submission token or fallback CAPTCHA")
+	}
+	formAnswer, err := solveSimpleCaptcha(captchaQuestion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	formValues.Set("form_token", formToken)
+	formValues.Set("captcha_id", formCaptchaID)
+	formValues.Set("captcha_answer", formAnswer)
+	formValues.Set("csrf_token", csrfCookie.Value)
 	reviewRequest := httptest.NewRequest(http.MethodPost, "https://messages.example.test/server/contact", strings.NewReader(formValues.Encode()))
 	reviewRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	reviewRequest.Header.Set("Origin", "https://messages.example.test")
 	reviewRequest.Header.Set("Sec-Fetch-Site", "same-origin")
+	reviewRequest.AddCookie(csrfCookie)
 	reviewResponse := httptest.NewRecorder()
 	handler.ServeHTTP(reviewResponse, reviewRequest)
-	if reviewResponse.Code != http.StatusOK || !strings.Contains(reviewResponse.Body.String(), "Review your report") {
+	if reviewResponse.Code != http.StatusOK || !strings.Contains(reviewResponse.Body.String(), tr(webTestRequest(http.MethodGet, "/server/contact", nil), "contact.review_title")) || strings.Count(reviewResponse.Body.String(), `<h1 class="page-title">`) != 1 {
 		t.Fatalf("valid HTML report did not reach review: status=%d body=%s", reviewResponse.Code, reviewResponse.Body.String())
+	}
+	if strings.Count(reviewResponse.Body.String(), `name="csrf_token"`) != 3 {
+		t.Fatalf("contact review forms omitted CSRF tokens: %s", reviewResponse.Body.String())
+	}
+	missingCSRF := make(url.Values, len(formValues))
+	for key, values := range formValues {
+		missingCSRF[key] = append([]string(nil), values...)
+	}
+	missingCSRF.Del("csrf_token")
+	invalidRequest := httptest.NewRequest(http.MethodPost, "https://messages.example.test/server/contact", strings.NewReader(missingCSRF.Encode()))
+	invalidRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	invalidRequest.Header.Set("Origin", "https://messages.example.test")
+	invalidRequest.Header.Set("Sec-Fetch-Site", "same-origin")
+	invalidRequest.Header.Set("Accept", "text/html")
+	invalidResponse := httptest.NewRecorder()
+	handler.ServeHTTP(invalidResponse, invalidRequest)
+	if invalidResponse.Code != http.StatusForbidden || !strings.Contains(invalidResponse.Body.String(), `<h1 class="page-title">`) {
+		t.Fatalf("HTML contact POST without CSRF returned %d without a themed 403 page", invalidResponse.Code)
 	}
 	if strings.Contains(reviewResponse.Body.String(), "captcha_answer") || !strings.Contains(reviewResponse.Body.String(), `name="reported_url"`) {
 		t.Fatalf("review form retained CAPTCHA metadata or omitted report data: %s", reviewResponse.Body.String())
@@ -145,7 +212,7 @@ func TestContactPagesExposeProviderFallbackAndFreshCaptchaErrors(t *testing.T) {
 		t.Fatalf("valid API report did not return a review token: status=%d body=%s", apiSubmitResponse.Code, apiSubmitResponse.Body.String())
 	}
 
-	formRequest := httptest.NewRequest(http.MethodGet, "https://messages.example.test/server/contact?type=abuse", nil)
+	formRequest = httptest.NewRequest(http.MethodGet, "https://messages.example.test/server/contact?type=abuse", nil)
 	formResponse := httptest.NewRecorder()
 	handler.ServeHTTP(formResponse, formRequest)
 	form := formResponse.Body.String()
@@ -294,12 +361,12 @@ func TestContactFormIsNoIndex(t *testing.T) {
 }
 
 func TestWellKnownSecurityOverrideIsAllowlistedAndBounded(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := projectTestDir(t)
 	path := filepath.Join(dataDir, "web", ".well-known", "security.txt")
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte("Contact: mailto:security@example.test\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("Contact: mailto:security@example.test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if body, ok := wellKnownOverrideAt(dataDir, "security.txt"); !ok || string(body) != "Contact: mailto:security@example.test\n" {
@@ -308,7 +375,7 @@ func TestWellKnownSecurityOverrideIsAllowlistedAndBounded(t *testing.T) {
 	if _, ok := wellKnownOverrideAt(dataDir, "../server.yml"); ok {
 		t.Fatal("unallowlisted override was served")
 	}
-	if err := os.WriteFile(path, make([]byte, (1<<20)+1), 0600); err != nil {
+	if err := os.WriteFile(path, make([]byte, (1<<20)+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := wellKnownOverrideAt(dataDir, "security.txt"); ok {

@@ -39,6 +39,7 @@ var schemaStatements = []string{
 		name TEXT,
 		token_hash TEXT NOT NULL UNIQUE,
 		token_prefix TEXT NOT NULL,
+		token_last4 TEXT NOT NULL,
 		token_enc TEXT NOT NULL,
 		created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
 		rotated_at INTEGER,
@@ -79,10 +80,41 @@ var schemaStatements = []string{
 		closed_at TIMESTAMP
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_security_reports_status ON security_reports(status, created_at)`,
+	`CREATE TABLE IF NOT EXISTS scheduler_tasks (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		schedule TEXT NOT NULL,
+		last_run INTEGER,
+		last_status TEXT NOT NULL DEFAULT '',
+		last_error TEXT NOT NULL DEFAULT '',
+		next_run INTEGER,
+		run_count INTEGER NOT NULL DEFAULT 0,
+		fail_count INTEGER NOT NULL DEFAULT 0,
+		enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))
+	)`,
+	`CREATE TABLE IF NOT EXISTS scheduler_history (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		task_id TEXT NOT NULL,
+		started_at INTEGER NOT NULL,
+		finished_at INTEGER,
+		status TEXT NOT NULL,
+		error TEXT,
+		duration_ms INTEGER
+	)`,
 	`CREATE TABLE IF NOT EXISTS security_thanks (
 		tracking_id TEXT PRIMARY KEY,
 		credit TEXT NOT NULL,
 		severity TEXT NOT NULL,
 		disclosed_on DATE NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS backups (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+		action TEXT NOT NULL,
+		filename TEXT NOT NULL,
+		size INTEGER NOT NULL DEFAULT 0,
+		encrypted INTEGER NOT NULL DEFAULT 0,
+		success INTEGER NOT NULL DEFAULT 1,
+		details TEXT
 	)`,
 }

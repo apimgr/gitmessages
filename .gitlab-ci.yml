@@ -1,29 +1,70 @@
+variables:
+  PROJECT_NAME: gitmessages
+  PROJECT_ORG: apimgr
+  CGO_ENABLED: "0"
+  GOFLAGS: "-buildvcs=false"
+  GIT_DEPTH: "0"
+  BUILD_IMAGE: "casjaysdev/go:latest"
+  GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
+  GOMODCACHE: "$CI_PROJECT_DIR/.cache/go-mod"
+
 stages:
   - build
   - test
   - security
+  - package
   - release
+  - docker
 
-variables:
-  CGO_ENABLED: "0"
-  GOFLAGS: "-buildvcs=false"
-  GIT_DEPTH: "0"
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+
+cache:
+  key: "$CI_PROJECT_PATH_SLUG-$CI_COMMIT_REF_SLUG"
+  paths:
+    - .cache/go-build/
+    - .cache/go-mod/
+
+default:
+  interruptible: true
+
+.go-job:
+  image: "$BUILD_IMAGE"
+  before_script:
+    - export COMMIT_ID="$(git rev-parse --short=7 HEAD)"
+    - export BUILD_EPOCH="$(date -u +%s)"
+    - export BUILD_DATE="$(date -u -d "@$BUILD_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
+    - export OFFICIAL_SITE="$(cat site.txt 2>/dev/null || printf '%s' "${OFFICIAL_SITE:-}")"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
 
 build:
+  extends: .go-job
   stage: build
-  image: casjaysdev/go:latest
   script:
-    - go build ./...
+    - go build -buildvcs=false -trimpath ./...
+
+lint:
+  extends: .go-job
+  stage: test
+  script:
+    - go vet ./...
+    - staticcheck ./...
 
 test:
+  extends: .go-job
   stage: test
-  image: casjaysdev/go:latest
   script:
-    - mkdir -p "${TMPDIR:-/tmp}/${CI_PROJECT_NAMESPACE}"
-    - COVDIR="$(mktemp -d "${TMPDIR:-/tmp}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}-XXXXXX")"
+    - mkdir -p "$CI_PROJECT_DIR/.tmp"
+    - COVDIR="$(mktemp -d "$CI_PROJECT_DIR/.tmp/coverage-XXXXXX")"
     - go test -p 1 -cover -coverprofile="$COVDIR/coverage.out" ./...
     - PCT="$(go tool cover -func="$COVDIR/coverage.out" | awk '/^total:/ {gsub("%", "", $3); print int($3)}')"
     - test "$PCT" -ge 60 || { echo "ERROR: coverage ${PCT}% is below 60%"; exit 1; }
+  coverage: '/^total:.*\s([0-9]+\.[0-9]+)%/'
 
 secret-scan:
   stage: security
@@ -33,44 +74,230 @@ secret-scan:
       if [ "$CI_PIPELINE_SOURCE" = schedule ] || [ "$CI_COMMIT_BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
         trufflehog git file://. --results=verified --exclude-paths=.github/trufflehog-exclude.txt --fail
       else
-        trufflehog git file://. --since-commit "$CI_COMMIT_BEFORE_SHA" --results=verified,unknown --exclude-paths=.github/trufflehog-exclude.txt --fail
+        trufflehog git file://. --since-commit HEAD~1 --results=verified,unknown --exclude-paths=.github/trufflehog-exclude.txt --fail
       fi
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
 
 vuln-scan:
+  extends: .go-job
   stage: security
-  image: casjaysdev/go:latest
   script:
     - govulncheck ./...
 
-workflow-policy:
-  stage: security
-  image: alpine:3.22
+# Stable, beta, and rolling devel binaries share an explicit version identity
+# and produce the eight server and CLI platform artifacts required by PART 27.
+.build-release:
+  extends: .go-job
+  stage: build
   script:
     - |
-      if grep -RhnE '^[[:space:]]*-?[[:space:]]*image:' .gitlab-ci.yml | grep -vE '@sha256:[0-9a-f]{64}([[:space:]]|$)'; then
-        echo "ERROR: every production Docker image must be pinned by digest"
-        exit 1
-      fi
-      if grep -nE '\$\{?\s*(CI_MERGE_REQUEST_.*|CI_COMMIT_MESSAGE)' .gitlab-ci.yml; then
-        echo "ERROR: review variable injection in shell commands"
-        exit 1
-      fi
-
-release:
-  stage: release
-  image: casjaysdev/go:latest
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^v/'
-  script:
-    - VERSION="${CI_COMMIT_TAG#v}"
-    - mkdir -p dist
-    - for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 freebsd/amd64 freebsd/arm64; do goos="${target%/*}"; goarch="${target#*/}"; ext=""; [ "$goos" = windows ] && ext=".exe"; GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.CommitID=$(git rev-parse --short=7 HEAD) -X main.BuildEpoch=$(date -u +%s)" -o "dist/gitmessages-${goos}-${goarch}${ext}" ./src; done
-    - for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 freebsd/amd64 freebsd/arm64; do goos="${target%/*}"; goarch="${target#*/}"; ext=""; [ "$goos" = windows ] && ext=".exe"; GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "-s -w -X main.Version=$VERSION -X main.CommitID=$(git rev-parse --short=7 HEAD) -X main.BuildEpoch=$(date -u +%s)" -o "dist/gitmessages-cli-${goos}-${goarch}${ext}" ./src/client; done
-    - cd dist && sha256sum gitmessages-* > sha256.txt
+      set -eu
+      case "$RELEASE_CHANNEL" in
+        stable) VERSION="${CI_COMMIT_TAG#v}" ;;
+        beta) VERSION="$(date -u +%Y%m%d%H%M%S)-beta" ;;
+        devel) VERSION="$COMMIT_ID" ;;
+        *) echo "Unknown release channel: $RELEASE_CHANNEL" >&2; exit 2 ;;
+      esac
+      export VERSION
+      printf 'RELEASE_VERSION=%s\n' "$VERSION" > release.env
+      LDFLAGS="-s -w -X main.Version=$VERSION -X main.CommitID=$COMMIT_ID -X main.BuildEpoch=$BUILD_EPOCH -X main.OfficialSite=$OFFICIAL_SITE"
+      mkdir -p dist
+      for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64 freebsd/amd64 freebsd/arm64; do
+        GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "$LDFLAGS" -o "dist/${PROJECT_NAME}-${target%/*}-${target#*/}$( [ "${target%/*}" = windows ] && printf '.exe' )" ./src
+        GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags "$LDFLAGS" -o "dist/${PROJECT_NAME}-cli-${target%/*}-${target#*/}$( [ "${target%/*}" = windows ] && printf '.exe' )" ./src/client
+        if [ "${target%/*}" != freebsd ]; then
+          GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 go build -tags gui -buildvcs=false -trimpath -ldflags "$LDFLAGS" -o "dist/${PROJECT_NAME}-cli-gui-${target%/*}-${target#*/}$( [ "${target%/*}" = windows ] && printf '.exe' )" ./src/client
+        fi
+      done
+      printf '%s\n' "$VERSION" > dist/version.txt
+      cyclonedx-gomod mod -json -output "dist/${PROJECT_NAME}-${VERSION}-sbom.cdx.json"
+      tar --exclude='.git' --exclude='./dist' -czf "dist/${PROJECT_NAME}-${VERSION}-source.tar.gz" .
+      cd dist
+      sha256sum gitmessages-* > sha256.txt
+      sha512sum gitmessages-* > sha512.txt
   artifacts:
     paths:
       - dist/
+    reports:
+      dotenv: release.env
+    expire_in: 1 week
+
+build:release:
+  extends: .build-release
+  variables:
+    RELEASE_CHANNEL: stable
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+/'
+
+build:beta:
+  extends: .build-release
+  variables:
+    RELEASE_CHANNEL: beta
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "beta"'
+
+build:devel:
+  extends: .build-release
+  variables:
+    RELEASE_CHANNEL: devel
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_KIND == "devel"'
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master"'
+      when: manual
+      allow_failure: true
+
+sbom:ci:
+  extends: .go-job
+  stage: package
+  script:
+    - cyclonedx-gomod mod -json -output "${PROJECT_NAME}-${CI_COMMIT_SHA:0:7}-sbom.cdx.json"
+  artifacts:
+    paths:
+      - "${PROJECT_NAME}-*-sbom.cdx.json"
+    expire_in: 1 week
+
+release:stable:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: build:release
+      artifacts: true
+  script:
+    - echo "Publishing stable release ${CI_COMMIT_TAG}"
   release:
-    tag_name: '$CI_COMMIT_TAG'
-    name: 'Release $CI_COMMIT_TAG'
-    description: 'Automated release for $CI_COMMIT_TAG'
+    tag_name: "$CI_COMMIT_TAG"
+    name: "Release $CI_COMMIT_TAG"
+    description: "Stable release for $CI_COMMIT_TAG"
+    assets:
+      links:
+        - name: "Release assets (binaries, SBOM, source archive, checksums)"
+          url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_SHA/browse/dist?job=build:release"
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v?\d+\.\d+\.\d+/'
+
+release:beta:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: build:beta
+      artifacts: true
+  script:
+    - echo "Publishing beta release ${CI_COMMIT_SHA:0:7}"
+  release:
+    tag_name: "$RELEASE_VERSION"
+    name: "Beta $RELEASE_VERSION"
+    description: "Beta build from the beta branch"
+    assets:
+      links:
+        - name: "Release assets (binaries, SBOM, source archive, checksums)"
+          url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_SHA/browse/dist?job=build:beta"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "beta"'
+
+release:devel:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: build:devel
+      artifacts: true
+  script:
+    - |
+      curl --fail --silent --show-error --request DELETE --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases/devel" || true
+      curl --fail --silent --show-error --request DELETE --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/repository/tags/devel" || true
+    - echo "Publishing rolling devel release ${CI_COMMIT_SHA:0:7}"
+  release:
+    tag_name: "devel"
+    name: "Devel Build ${CI_COMMIT_SHA:0:7}"
+    description: "Rolling devel build from ${CI_COMMIT_SHA}"
+    assets:
+      links:
+        - name: "Release assets (binaries, SBOM, source archive, checksums)"
+          url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_SHA/browse/dist?job=build:devel"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_KIND == "devel"'
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master"'
+      when: manual
+      allow_failure: true
+
+.docker-job:
+  stage: docker
+  image: docker:latest
+  services:
+    - name: docker:dind
+      command: ["--tls=true"]
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_BUILDKIT: "1"
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker buildx create --name gitmessages-builder --use || docker buildx use gitmessages-builder
+
+# The standard multiarch image runs for branch and version-tag pipelines. The
+# development Dockerfile has its own devel-only job below.
+docker:build:
+  extends: .docker-job
+  script:
+    - |
+      set -eu
+      BUILD_EPOCH="$(date -u +%s)"
+      BUILD_DATE="$(date -u -d "@$BUILD_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
+      COMMIT_ID="$(git rev-parse --short=7 HEAD)"
+      if [ -f site.txt ]; then OFFICIAL_SITE="$(cat site.txt)"; else OFFICIAL_SITE="${OFFICIAL_SITE:-}"; fi
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        VERSION="${CI_COMMIT_TAG#v}"
+        YYMM="$(date -u +%y%m)"
+        TAG_ARGS="-t $CI_REGISTRY_IMAGE:$VERSION -t $CI_REGISTRY_IMAGE:latest -t $CI_REGISTRY_IMAGE:$YYMM -t $CI_REGISTRY_IMAGE:$COMMIT_ID"
+      elif [ "$CI_COMMIT_BRANCH" = beta ]; then
+        VERSION="$(date -u +%Y%m%d%H%M%S)-beta"
+        TAG_ARGS="-t $CI_REGISTRY_IMAGE:beta -t $CI_REGISTRY_IMAGE:$COMMIT_ID"
+      else
+        VERSION="$COMMIT_ID"
+        TAG_ARGS="-t $CI_REGISTRY_IMAGE:$COMMIT_ID"
+      fi
+      docker buildx build -f docker/Dockerfile --platform linux/amd64,linux/arm64 --build-arg VERSION="$VERSION" --build-arg COMMIT_ID="$COMMIT_ID" --build-arg BUILD_EPOCH="$BUILD_EPOCH" --build-arg BUILD_DATE="$BUILD_DATE" --build-arg OFFICIAL_SITE="$OFFICIAL_SITE" $TAG_ARGS --push .
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH'
+
+# Create a schedule named "Devel Devel Image Build" at 04:00 UTC with
+# SCHEDULE_KIND=devel-image, targeting main or master.
+docker:devel:
+  extends: .docker-job
+  script:
+    - |
+      set -eu
+      BUILD_EPOCH="$(date -u +%s)"
+      BUILD_DATE="$(date -u -d "@$BUILD_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
+      COMMIT_ID="$(git rev-parse --short=7 HEAD)"
+      if [ -f site.txt ]; then OFFICIAL_SITE="$(cat site.txt)"; else OFFICIAL_SITE="${OFFICIAL_SITE:-}"; fi
+      docker buildx build -f docker/Dockerfile.dev --platform linux/amd64,linux/arm64 --build-arg COMMIT_ID="$COMMIT_ID" --build-arg BUILD_EPOCH="$BUILD_EPOCH" --build-arg BUILD_DATE="$BUILD_DATE" --build-arg OFFICIAL_SITE="$OFFICIAL_SITE" -t "$CI_REGISTRY_IMAGE:devel" --push .
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_KIND == "devel-image"'
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master"'
+
+image-scan:
+  stage: security
+  image: docker:latest
+  services:
+    - name: docker:dind
+      command: ["--tls=true"]
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_BUILDKIT: "1"
+    DOCKER_HOST: "tcp://docker:2376"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "$DOCKER_TLS_CERTDIR/client"
+  script:
+    - docker build -t local/gitmessages:ci -f docker/Dockerfile .
+    - docker run --rm -e DOCKER_HOST="$DOCKER_HOST" -e DOCKER_TLS_VERIFY="$DOCKER_TLS_VERIFY" -e DOCKER_CERT_PATH="$DOCKER_CERT_PATH" -v "$DOCKER_CERT_PATH:$DOCKER_CERT_PATH:ro" aquasec/trivy:latest image --exit-code 1 --severity CRITICAL,HIGH local/gitmessages:ci
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_TAG'

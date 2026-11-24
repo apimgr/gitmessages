@@ -1,0 +1,1584 @@
+{
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "精选的提交约定目录和消息生成器。",
+    "title": "Git Messages API",
+    "version": "dev"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/autodiscover": {
+      "get": {
+        "description": "资源",
+        "operationId": "get_api_autodiscover",
+        "responses": {
+          "200": {
+            "description": "资源"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "summary": "REST API"
+      }
+    },
+    "/api/graphql": {
+      "post": {
+        "description": "使用 GraphiQL 浏览公开提交目录。也提供无需 JavaScript 的查询表单。",
+        "operationId": "graphql_query_api_graphql",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "description": "GraphQL 查询",
+                    "type": "string"
+                  },
+                  "variables": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "使用 GraphiQL 浏览公开提交目录。也提供无需 JavaScript 的查询表单。"
+          }
+        },
+        "summary": "GraphQL"
+      }
+    },
+    "/api/healthz": {
+      "get": {
+        "description": "服务运行正常",
+        "operationId": "get_api_healthz",
+        "responses": {
+          "200": {
+            "description": "服务运行正常"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "summary": "服务状态"
+      }
+    },
+    "/api/mcp": {
+      "post": {
+        "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。",
+        "operationId": "mcp_endpoint_api_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。"
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "请求过多"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Git Messages MCP 连接帮助"
+      }
+    },
+    "/api/metrics": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_metrics_api_metrics",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/grafana": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_metrics_api_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/loki": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_metrics_api_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/prometheus": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_metrics_api_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/swagger": {
+      "get": {
+        "description": "REST API",
+        "operationId": "get_api_swagger",
+        "responses": {
+          "200": {
+            "description": "REST API"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "summary": "OpenAPI"
+      }
+    },
+    "/api/v1": {
+      "get": {
+        "description": "资源",
+        "operationId": "get_api_index",
+        "responses": {
+          "200": {
+            "description": "资源"
+          }
+        },
+        "summary": "REST API"
+      }
+    },
+    "/api/v1/conventions": {
+      "get": {
+        "description": "受支持的提交约定。",
+        "operationId": "list_conventions",
+        "responses": {
+          "200": {
+            "description": "受支持的提交约定。"
+          }
+        },
+        "summary": "列出约定"
+      }
+    },
+    "/api/v1/messages": {
+      "post": {
+        "description": "格式化后的提交消息。",
+        "operationId": "build_commit_message",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "body": {
+                    "description": "正文（可选）",
+                    "type": "string"
+                  },
+                  "breaking": {
+                    "description": "破坏性更改",
+                    "type": "boolean"
+                  },
+                  "convention": {
+                    "description": "规范",
+                    "enum": [
+                      "conventional-commits",
+                      "angular"
+                    ],
+                    "type": "string"
+                  },
+                  "description": {
+                    "description": "简短说明",
+                    "type": "string"
+                  },
+                  "scope": {
+                    "description": "范围（可选）",
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "提交类型",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "description"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "格式化后的提交消息。"
+          },
+          "400": {
+            "description": "请求包含无效的消息字段。"
+          }
+        },
+        "summary": "构建提交消息"
+      }
+    },
+    "/api/v1/messages/random": {
+      "get": {
+        "description": "随机提交消息示例。",
+        "operationId": "get_random_example",
+        "responses": {
+          "200": {
+            "description": "随机提交消息示例。"
+          }
+        },
+        "summary": "获取随机示例消息"
+      }
+    },
+    "/api/v1/server/about": {
+      "get": {
+        "description": "Git Messages 是精选的提交消息规范参考工具，也可用于编写清晰的消息。",
+        "operationId": "get_about",
+        "responses": {
+          "200": {
+            "description": "Git Messages 是精选的提交消息规范参考工具，也可用于编写清晰的消息。"
+          }
+        },
+        "summary": "关于 Git Messages"
+      }
+    },
+    "/api/v1/server/contact": {
+      "get": {
+        "description": "Returns report-form descriptors and a one-use captcha challenge",
+        "operationId": "get_contact_form",
+        "responses": {
+          "200": {
+            "description": "Returns report-form descriptors and a one-use captcha challenge"
+          }
+        },
+        "summary": "Contact report form"
+      },
+      "post": {
+        "description": "Uses a submit and confirm review flow",
+        "operationId": "submit_contact_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "properties": {
+                  "captcha_answer": {
+                    "type": "string"
+                  },
+                  "captcha_id": {
+                    "type": "string"
+                  },
+                  "confirmed": {
+                    "type": "boolean"
+                  },
+                  "email": {
+                    "format": "email",
+                    "maxLength": 254,
+                    "type": "string"
+                  },
+                  "form_token": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 100,
+                    "type": "string"
+                  },
+                  "review_token": {
+                    "type": "string"
+                  },
+                  "step": {
+                    "enum": [
+                      "submit",
+                      "confirm",
+                      "edit"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "abuse",
+                      "dmca",
+                      "privacy",
+                      "security"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name",
+                  "email",
+                  "form_token"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Uses a submit and confirm review flow"
+          },
+          "400": {
+            "description": "请求包含无效的消息字段。"
+          }
+        },
+        "summary": "Submit a contact report"
+      }
+    },
+    "/api/v1/server/dpo": {
+      "get": {
+        "description": "Public DPO contact information",
+        "operationId": "get_data_protection_contact",
+        "responses": {
+          "200": {
+            "description": "Public DPO contact information"
+          }
+        },
+        "summary": "Data protection contact"
+      }
+    },
+    "/api/v1/server/graphql": {
+      "post": {
+        "description": "使用 GraphiQL 浏览公开提交目录。也提供无需 JavaScript 的查询表单。",
+        "operationId": "graphql_query_api_v1_server_graphql",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "description": "GraphQL 查询",
+                    "type": "string"
+                  },
+                  "variables": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "使用 GraphiQL 浏览公开提交目录。也提供无需 JavaScript 的查询表单。"
+          }
+        },
+        "summary": "GraphQL"
+      }
+    },
+    "/api/v1/server/healthz": {
+      "get": {
+        "description": "服务运行正常",
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "description": "服务运行正常"
+          }
+        },
+        "summary": "服务状态"
+      }
+    },
+    "/api/v1/server/help": {
+      "get": {
+        "description": "查看",
+        "operationId": "get_help",
+        "responses": {
+          "200": {
+            "description": "查看"
+          }
+        },
+        "summary": "帮助"
+      }
+    },
+    "/api/v1/server/help/mcp": {
+      "get": {
+        "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。",
+        "operationId": "get_mcp_help",
+        "responses": {
+          "200": {
+            "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。"
+          }
+        },
+        "summary": "Git Messages MCP 连接帮助"
+      }
+    },
+    "/api/v1/server/mcp": {
+      "post": {
+        "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。",
+        "operationId": "mcp_endpoint_api_v1_server_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。"
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "请求过多"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Git Messages MCP 连接帮助"
+      }
+    },
+    "/api/v1/server/metrics": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_metrics_api_v1_server_metrics",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/grafana": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_metrics_api_v1_server_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/loki": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_metrics_api_v1_server_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/prometheus": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_metrics_api_v1_server_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/preferences": {
+      "get": {
+        "description": "偏好设置",
+        "operationId": "get_preferences",
+        "responses": {
+          "200": {
+            "description": "偏好设置"
+          }
+        },
+        "summary": "偏好设置"
+      },
+      "post": {
+        "description": "偏好设置",
+        "operationId": "save_preferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "properties": {
+                  "lang": {
+                    "type": "string"
+                  },
+                  "theme": {
+                    "enum": [
+                      "dark",
+                      "light",
+                      "auto"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "偏好设置"
+          },
+          "400": {
+            "description": "请求包含无效的消息字段。"
+          }
+        },
+        "summary": "保存"
+      }
+    },
+    "/api/v1/server/preferences/sync": {
+      "get": {
+        "description": "将偏好设置移至另一台设备。",
+        "operationId": "get_preferences_sync",
+        "responses": {
+          "200": {
+            "description": "将偏好设置移至另一台设备。"
+          }
+        },
+        "summary": "同步偏好设置"
+      }
+    },
+    "/api/v1/server/preferences/sync/import": {
+      "get": {
+        "description": "将偏好设置移至另一台设备。",
+        "operationId": "import_preferences_sync",
+        "responses": {
+          "200": {
+            "description": "将偏好设置移至另一台设备。"
+          }
+        },
+        "summary": "导入"
+      }
+    },
+    "/api/v1/server/preferences/tokens": {
+      "get": {
+        "description": "所有者令牌",
+        "operationId": "list_owner_tokens",
+        "responses": {
+          "200": {
+            "description": "所有者令牌"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "所有者令牌"
+      },
+      "post": {
+        "description": "可完全访问你的{resources}。请妥善保密。",
+        "operationId": "create_linked_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiry": {
+                    "enum": [
+                      "never",
+                      "7d",
+                      "30d",
+                      "90d",
+                      "1y"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "可完全访问你的{resources}。请妥善保密。"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "创建关联令牌"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary": {
+      "delete": {
+        "description": "这会删除 {linked} 个关联令牌和 {resources}，包括使用关联令牌创建的所有内容。",
+        "operationId": "revoke_primary_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "confirm": {
+                    "maxLength": 4,
+                    "minLength": 4,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "confirm"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "这会删除 {linked} 个关联令牌和 {resources}，包括使用关联令牌创建的所有内容。"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "撤销主令牌"
+      },
+      "post": {
+        "description": "主令牌",
+        "operationId": "issue_primary_token",
+        "responses": {
+          "200": {
+            "description": "主令牌"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "summary": "新令牌"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary/reveal": {
+      "post": {
+        "description": "此页面加载时仅显示一次。",
+        "operationId": "reveal_primary_token",
+        "responses": {
+          "200": {
+            "description": "此页面加载时仅显示一次。"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "显示"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary/rotate": {
+      "post": {
+        "description": "主令牌",
+        "operationId": "rotate_primary_token",
+        "responses": {
+          "200": {
+            "description": "主令牌"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "轮换"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}": {
+      "delete": {
+        "description": "撤销",
+        "operationId": "revoke_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "撤销"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "撤销"
+      },
+      "patch": {
+        "description": "保存",
+        "operationId": "update_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiry": {
+                    "enum": [
+                      "never",
+                      "7d",
+                      "30d",
+                      "90d",
+                      "1y"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "保存"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "编辑"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}/reveal": {
+      "post": {
+        "description": "此页面加载时仅显示一次。",
+        "operationId": "reveal_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "此页面加载时仅显示一次。"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "显示"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}/rotate": {
+      "post": {
+        "description": "主令牌",
+        "operationId": "rotate_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "主令牌"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "轮换"
+      }
+    },
+    "/api/v1/server/privacy": {
+      "get": {
+        "description": "此服务提供静态精选的提交规范目录，不提供用户账户、不接收用户提交，也不保存个人数据。服务器运营者可能会处理运行日志。",
+        "operationId": "get_privacy",
+        "responses": {
+          "200": {
+            "description": "此服务提供静态精选的提交规范目录，不提供用户账户、不接收用户提交，也不保存个人数据。服务器运营者可能会处理运行日志。"
+          }
+        },
+        "summary": "隐私"
+      }
+    },
+    "/api/v1/server/security": {
+      "get": {
+        "description": "请通过 GitHub 私密漏洞报告渠道报告漏洞。请勿在公开问题中发布利用细节。",
+        "operationId": "get_security",
+        "responses": {
+          "200": {
+            "description": "请通过 GitHub 私密漏洞报告渠道报告漏洞。请勿在公开问题中发布利用细节。"
+          }
+        },
+        "summary": "安全"
+      }
+    },
+    "/api/v1/server/security/policy": {
+      "get": {
+        "description": "Public coordinated-disclosure policy",
+        "operationId": "get_security_policy",
+        "responses": {
+          "200": {
+            "description": "Public coordinated-disclosure policy"
+          }
+        },
+        "summary": "Security disclosure policy"
+      }
+    },
+    "/api/v1/server/security/thanks": {
+      "get": {
+        "description": "Public researcher acknowledgments",
+        "operationId": "get_security_thanks",
+        "responses": {
+          "200": {
+            "description": "Public researcher acknowledgments"
+          }
+        },
+        "summary": "Security acknowledgments"
+      }
+    },
+    "/api/v1/server/swagger": {
+      "get": {
+        "description": "REST API",
+        "operationId": "get_openapi",
+        "responses": {
+          "200": {
+            "description": "REST API"
+          }
+        },
+        "summary": "OpenAPI"
+      }
+    },
+    "/api/v1/server/terms": {
+      "get": {
+        "description": "此目录仅供参考。使用生成的消息前，请检查所选规范和仓库的贡献规则。",
+        "operationId": "get_terms",
+        "responses": {
+          "200": {
+            "description": "此目录仅供参考。使用生成的消息前，请检查所选规范和仓库的贡献规则。"
+          }
+        },
+        "summary": "条款"
+      }
+    },
+    "/api/v1/templates": {
+      "get": {
+        "description": "精选的消息模板。",
+        "operationId": "list_templates",
+        "responses": {
+          "200": {
+            "description": "精选的消息模板。"
+          }
+        },
+        "summary": "列出消息模板"
+      }
+    },
+    "/api/v1/templates/random": {
+      "get": {
+        "description": "随机消息模板。",
+        "operationId": "get_random_template",
+        "responses": {
+          "200": {
+            "description": "随机消息模板。"
+          }
+        },
+        "summary": "获取随机模板"
+      }
+    },
+    "/api/v1/types": {
+      "get": {
+        "description": "提交类型目录。",
+        "operationId": "list_commit_types",
+        "responses": {
+          "200": {
+            "description": "提交类型目录。"
+          }
+        },
+        "summary": "列出提交类型"
+      }
+    },
+    "/mcp": {
+      "post": {
+        "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。",
+        "operationId": "mcp_endpoint_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。"
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "请求过多"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Git Messages MCP 连接帮助"
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_root_metrics_metrics",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/grafana": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_root_metrics_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/loki": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_root_metrics_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/prometheus": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_root_metrics_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/server/metrics": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_metrics_server_metrics",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/grafana": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_metrics_server_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/loki": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_metrics_server_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/prometheus": {
+      "get": {
+        "description": "需要身份验证的内部指标端点",
+        "operationId": "get_metrics_server_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "需要身份验证的内部指标端点"
+          },
+          "400": {
+            "description": "请求无效"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "指标服务",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://openapi.invalid"
+    }
+  ]
+}

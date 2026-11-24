@@ -220,6 +220,11 @@ func ValidateParity() map[string][]string {
 				problems[code] = append(problems[code], "extra:"+key)
 			}
 		}
+		for key, value := range locale.Strings {
+			if hasForbiddenFormatToken(value) {
+				problems[code] = append(problems[code], "format_token:"+key)
+			}
+		}
 		for key, englishForms := range english.Plurals {
 			forms, ok := locale.Plurals[key]
 			if !ok {
@@ -235,6 +240,9 @@ func ValidateParity() map[string][]string {
 				if !sameNonCountPlaceholders(englishForms["other"], value) {
 					problems[code] = append(problems[code], "plural_placeholders:"+key+":"+category)
 				}
+				if hasForbiddenFormatToken(value) {
+					problems[code] = append(problems[code], "plural_format_token:"+key+":"+category)
+				}
 			}
 			for category := range forms {
 				if !contains(locale.Meta.PluralCategories, category) && category != "zero" {
@@ -249,6 +257,28 @@ func ValidateParity() map[string][]string {
 		}
 	}
 	return problems
+}
+
+func hasForbiddenFormatToken(value string) bool {
+	if strings.Contains(value, "{0}") {
+		return true
+	}
+	runes := []rune(value)
+	for index, current := range runes {
+		if current != '%' {
+			continue
+		}
+		for next := index + 1; next < len(runes); next++ {
+			if strings.ContainsRune("#+- 0123456789.", runes[next]) {
+				continue
+			}
+			if strings.ContainsRune("sdvt", runes[next]) {
+				return true
+			}
+			break
+		}
+	}
+	return false
 }
 
 func samePlaceholders(first, second string) bool {

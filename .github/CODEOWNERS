@@ -1,14 +1,15 @@
+# Global owners — review required for all files.
 * @apimgr
 
-# Build, release, and supply-chain configuration
-/.github/ @apimgr
-/renovate.json @apimgr
-/Dockerfile @apimgr
+# CI, release, and container changes require maintainer review.
+/.github/workflows/ @apimgr
+/.gitlab-ci.yml @apimgr
+/Jenkinsfile @apimgr
 /docker/ @apimgr
-/Makefile @apimgr
+/Dockerfile* @apimgr
 
-# Security-sensitive application paths
-/src/config/ @apimgr
-/src/service/ @apimgr
-/src/ssl/ @apimgr
+# Authentication, cryptography, backup, security data, and updates require maintainer review.
+/src/auth/ @apimgr
+/src/backup/ @apimgr
+/src/securitydata/ @apimgr
 /src/update/ @apimgr

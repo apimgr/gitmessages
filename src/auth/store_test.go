@@ -15,7 +15,7 @@ func testStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	operator := "adm_0123456789ABCDEFGHIJKLMNOPQRSTUV"
 	key := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
-	store, err := Open(filepath.Join(t.TempDir(), "server.db"), operator, key, 25, 0, time.Hour)
+	store, err := Open(filepath.Join(projectTestDir(t), "server.db"), operator, key, 25, 0, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +46,48 @@ func TestIssueAuthenticateAndOperatorToken(t *testing.T) {
 	}
 	if _, err := store.AuthenticateBearer(ctx, operator+"x"); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("wrong operator token error = %v", err)
+	}
+}
+
+func TestAuthenticationObserverUsesBoundedMethodAndStatusValues(t *testing.T) {
+	store, operator := testStore(t)
+	var events []struct {
+		method  string
+		success bool
+	}
+	store.SetAuthObserver(func(method string, success bool) {
+		events = append(events, struct {
+			method  string
+			success bool
+		}{method: method, success: success})
+	})
+	ownerToken, _, err := store.IssueOwner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AuthenticateBearer(context.Background(), ownerToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AuthenticateBearer(context.Background(), "own_invalid"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("invalid owner token error = %v", err)
+	}
+	if _, err := store.AuthenticateBearer(context.Background(), operator); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AuthenticateBearer(context.Background(), operator+"x"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("invalid operator token error = %v", err)
+	}
+	want := []struct {
+		method  string
+		success bool
+	}{{"owner_token", true}, {"owner_token", false}, {"operator_token", true}, {"operator_token", false}}
+	if len(events) != len(want) {
+		t.Fatalf("authentication events = %+v, want %+v", events, want)
+	}
+	for index, event := range events {
+		if event != want[index] {
+			t.Errorf("authentication event %d = %+v, want %+v", index, event, want[index])
+		}
 	}
 }
 
@@ -157,6 +199,59 @@ func TestOperatorRevokingPrimaryRevokesWholeOwner(t *testing.T) {
 		if _, err := store.Authenticate(ctx, raw); !errors.Is(err, ErrInvalidToken) {
 			t.Fatalf("owner token remained valid after primary revocation: %v", err)
 		}
+	}
+	var owners, tokens int
+	if err := store.db.Read().QueryRowContext(ctx, `SELECT COUNT(*) FROM owners WHERE id = ?`, identity.OwnerID).Scan(&owners); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.Read().QueryRowContext(ctx, `SELECT COUNT(*) FROM api_tokens WHERE owner_id = ?`, identity.OwnerID).Scan(&tokens); err != nil {
+		t.Fatal(err)
+	}
+	if owners != 0 || tokens != 0 {
+		t.Fatalf("primary revocation left owner or tokens: owners=%d tokens=%d", owners, tokens)
+	}
+	var details string
+	if err := store.db.Read().QueryRowContext(ctx, `SELECT details FROM audit_log WHERE action = 'token.revoked' AND target_id = ?`, identity.OwnerID).Scan(&details); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`"scope":"owner"`, `"tokens":2`, `"resources":0`, `"source":"cli"`} {
+		if !strings.Contains(details, expected) {
+			t.Errorf("primary revocation audit omitted %s: %s", expected, details)
+		}
+	}
+}
+
+func TestTokenLastFourIsStoredBackfilledAndMaskedWithoutDecryption(t *testing.T) {
+	store, operator := testStore(t)
+	ctx := context.Background()
+	raw, identity, err := store.IssueOwner(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.Write(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_last4 = '' WHERE id = ?`, identity.TokenID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	migrated, err := NewStore(store.db, operator, key, 25, 0, time.Hour)
+	if err != nil {
+		t.Fatalf("backfill token suffix: %v", err)
+	}
+	tokens, err := migrated.List(ctx, identity.OwnerID)
+	if err != nil || len(tokens) != 1 || tokens[0].Last4 != raw[len(raw)-4:] {
+		t.Fatalf("migrated token suffix = %#v, %v", tokens, err)
+	}
+	if err := store.db.Write(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_enc = 'invalid-ciphertext' WHERE id = ?`, identity.TokenID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	masked, err := migrated.MaskedValue(ctx, identity.OwnerID, identity.TokenID)
+	if err != nil || !strings.HasSuffix(masked, raw[len(raw)-4:]) {
+		t.Fatalf("masked value depended on decrypting the token: %q, %v", masked, err)
 	}
 }
 

@@ -87,10 +87,10 @@ func (manager *TorManager) Start() error {
 		return nil
 	}
 	for _, directory := range []string{filepath.Join(manager.configDir, "tor"), filepath.Join(manager.dataDir, "tor"), filepath.Join(manager.dataDir, "tor", "site"), manager.logsDir} {
-		if err := os.MkdirAll(directory, 0700); err != nil {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return fmt.Errorf("create Tor directory: %w", err)
 		}
-		if err := os.Chmod(directory, 0700); err != nil {
+		if err := os.Chmod(directory, 0o700); err != nil {
 			return fmt.Errorf("secure Tor directory: %w", err)
 		}
 	}
@@ -108,11 +108,11 @@ func (manager *TorManager) Start() error {
 	controlPath := filepath.Join(manager.dataDir, "tor", "control_port")
 	_ = os.Remove(controlPath)
 	torrc := manager.torrc(binary, controlPath)
-	if err := os.WriteFile(torrcPath, []byte(torrc), 0600); err != nil {
+	if err := os.WriteFile(torrcPath, []byte(torrc), 0o600); err != nil {
 		_ = manager.listener.Close()
 		return fmt.Errorf("write Tor configuration: %w", err)
 	}
-	logFile, err := os.OpenFile(filepath.Join(manager.logsDir, "tor.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	logFile, err := os.OpenFile(filepath.Join(manager.logsDir, "tor.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		_ = manager.listener.Close()
 		return fmt.Errorf("open Tor log: %w", err)
@@ -134,6 +134,18 @@ func (manager *TorManager) Start() error {
 	go manager.watchProcess(command)
 	go manager.initializeControl(controlPath)
 	return nil
+}
+
+// Restart replaces the process and its canceled lifetime context.
+func (manager *TorManager) Restart() error {
+	if err := manager.Close(); err != nil {
+		return err
+	}
+	manager.mu.Lock()
+	manager.ctx, manager.cancel = context.WithCancel(context.Background())
+	manager.status.Enabled = true
+	manager.mu.Unlock()
+	return manager.Start()
 }
 
 func (manager *TorManager) resolveBinary() (string, error) {

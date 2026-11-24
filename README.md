@@ -18,7 +18,7 @@ Git Messages is a curated reference and builder for git commit message conventio
 - Server-rendered, mobile-friendly web UI and installable PWA
 - Eight embedded interface languages: English, Spanish, French, German, Italian, Arabic, Chinese, and Japanese
 - Versioned REST API, OpenAPI JSON, GraphQL, and Bearer-authenticated MCP tools
-- Owner tokens for MCP access and owner-scoped API resources
+- Owner tokens for MCP access and owner-scoped API resources, with secure browser storage and transparent migration for existing browsers
 - Contact and coordinated security-report pages
 - Internal Prometheus, Grafana, and Loki-compatible metrics endpoints
 - Companion `gitmessages-cli` for shell use

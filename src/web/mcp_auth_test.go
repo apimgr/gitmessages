@@ -13,7 +13,7 @@ import (
 
 func TestMCPRequiresBearerAndDoesNotLeakToken(t *testing.T) {
 	key := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
-	store, err := auth.Open(t.TempDir()+"/server.db", "adm_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", key, 25, 0, 0)
+	store, err := auth.Open(projectTestDir(t)+"/server.db", "adm_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", key, 25, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestMCPNameSentinelDecoding(t *testing.T) {
 
 func TestLinkedTokenCannotManageTokens(t *testing.T) {
 	key := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
-	store, err := auth.Open(t.TempDir()+"/server.db", "adm_0123456789ABCDEFGHIJKLMNOPQRSTUV", key, 25, 0, 0)
+	store, err := auth.Open(projectTestDir(t)+"/server.db", "adm_0123456789ABCDEFGHIJKLMNOPQRSTUV", key, 25, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestLinkedTokenCannotManageTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest(http.MethodPost, apiBase+"/server/preferences/tokens", strings.NewReader(`{"name":"another","expiry":"never"}`))
+	r := httptest.NewRequest(http.MethodPost, APIBasePath()+"/server/preferences/tokens", strings.NewReader(`{"name":"another","expiry":"never"}`))
 	r.Header.Set("Authorization", "Bearer "+linked)
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -132,7 +132,7 @@ func TestLinkedTokenCannotManageTokens(t *testing.T) {
 
 func TestLegacyMCPInitializeReturnsUnsupportedProtocolVersion(t *testing.T) {
 	key := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
-	store, err := auth.Open(t.TempDir()+"/server.db", "adm_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", key, 25, 0, 0)
+	store, err := auth.Open(projectTestDir(t)+"/server.db", "adm_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", key, 25, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

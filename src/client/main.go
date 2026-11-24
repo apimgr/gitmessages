@@ -14,10 +14,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/messages"
+	projectpaths "github.com/apimgr/gitmessages/src/paths"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,7 +42,9 @@ func clientBuildDate() string {
 // debugEnabled prints each API request to stderr when --debug is set
 var debugEnabled bool
 
-const projectName = "gitmessages"
+var apiVersions sync.Map
+
+const projectName = projectpaths.ProjectName
 
 var configProfile string
 
@@ -50,7 +54,8 @@ type clientConfig struct {
 		Mode string `yaml:"mode"`
 	} `yaml:"display"`
 	Server struct {
-		Primary string `yaml:"primary"`
+		Primary    string `yaml:"primary"`
+		APIVersion string `yaml:"api_version"`
 	} `yaml:"server"`
 }
 
@@ -82,7 +87,7 @@ func run(args []string) error {
 	flags.BoolVar(helpFlag, "h", false, "Print help")
 	debugFlag := flags.Bool("debug", false, "Print API requests to stderr")
 	colorFlag := flags.String("color", "auto", "Color output: auto, yes, no")
-	shellFlag := flags.String("shell", "", "Print shell completions: bash, zsh, fish, or powershell")
+	shellFlag := flags.String("shell", "", "Print shell completions or shell initialization")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("%s: %w", binary, err)
 	}
@@ -92,6 +97,9 @@ func run(args []string) error {
 		_ = os.Setenv("NO_COLOR", "1")
 	case "yes":
 		_ = os.Unsetenv("NO_COLOR")
+	}
+	if *shellFlag != "" {
+		return printClientShellIntegration(*shellFlag, flags.Args(), binary)
 	}
 	if *versionFlag {
 		printVersion(binary)
@@ -111,10 +119,6 @@ func run(args []string) error {
 		printUsage(binary, lang)
 		return nil
 	}
-	if *shellFlag != "" {
-		return printClientCompletions(*shellFlag, binary)
-	}
-
 	server := strings.TrimSpace(*serverFlag)
 	if server == "" {
 		server = strings.TrimSpace(os.Getenv("GITMESSAGES_SERVER_PRIMARY"))
@@ -133,19 +137,40 @@ func run(args []string) error {
 			}
 		}
 	}
+	if !validServer(server) {
+		if flags.NArg() == 0 {
+			return launchInteractive(server, lang, config)
+		}
+		return fmt.Errorf("%s", i18n.T(lang, "cli.server_required"))
+	}
+	paths := map[string]string{
+		"types": "/api/{api_version}/types", "list": "/api/{api_version}/types", "conventions": "/api/{api_version}/conventions",
+		"templates": "/api/{api_version}/templates", "random": "/api/{api_version}/messages/random",
+	}
+	if flags.NArg() > 0 {
+		command := flags.Arg(0)
+		if command != "build" {
+			if _, ok := paths[command]; !ok {
+				return fmt.Errorf("%s %q; use %s --help", i18n.T(lang, "cli.unknown_command"), command, binary)
+			}
+		}
+	}
+	apiVersion, err := discoverAPIVersion(server, lang)
+	if err != nil {
+		return err
+	}
+	if config.Server.Primary == server && config.Server.APIVersion != apiVersion {
+		config.Server.APIVersion = apiVersion
+		if err := saveConfig(config); err != nil {
+			return err
+		}
+	}
 	if flags.NArg() == 0 {
 		return launchInteractive(server, lang, config)
-	}
-	if !validServer(server) {
-		return fmt.Errorf("%s", i18n.T(lang, "cli.server_required"))
 	}
 	command := flags.Arg(0)
 	if command == "build" {
 		return runBuild(server, flags.Args()[1:], *jsonOutput, lang)
-	}
-	paths := map[string]string{
-		"types": "/api/v1/types", "list": "/api/v1/types", "conventions": "/api/v1/conventions",
-		"templates": "/api/v1/templates", "random": "/api/v1/messages/random",
 	}
 	path, ok := paths[command]
 	if !ok {
@@ -207,7 +232,7 @@ func runBuild(server string, args []string, jsonOutput bool, lang string) error 
 	if err != nil {
 		return err
 	}
-	data, err := request(server, http.MethodPost, "/api/v1/messages", payload, lang)
+	data, err := request(server, http.MethodPost, "/api/{api_version}/messages", payload, lang)
 	if err != nil {
 		return err
 	}
@@ -226,6 +251,53 @@ func runBuild(server string, args []string, jsonOutput bool, lang string) error 
 }
 
 func request(server, method, path string, payload []byte, lang string) ([]byte, error) {
+	if strings.HasPrefix(path, "/api/{api_version}") {
+		version, err := discoverAPIVersion(server, lang)
+		if err != nil {
+			return nil, err
+		}
+		path = strings.Replace(path, "/api/{api_version}", "/api/"+version, 1)
+	}
+	return requestRaw(server, method, path, payload, lang)
+}
+
+func discoverAPIVersion(server, lang string) (string, error) {
+	if value, ok := apiVersions.Load(server); ok {
+		return value.(string), nil
+	}
+	data, err := requestRaw(server, http.MethodGet, "/api/autodiscover", nil, lang)
+	if err != nil {
+		return "", fmt.Errorf("discover API version: %w", err)
+	}
+	var result struct {
+		Server struct {
+			APIVersion string `json:"api_version"`
+		} `json:"server"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return "", fmt.Errorf("decode API discovery response: %w", err)
+	}
+	version := result.Server.APIVersion
+	if !validAPIVersion(version) {
+		return "", fmt.Errorf("server returned invalid API version %q", version)
+	}
+	apiVersions.Store(server, version)
+	return version, nil
+}
+
+func validAPIVersion(value string) bool {
+	if len(value) < 2 || value[0] != 'v' {
+		return false
+	}
+	for _, digit := range value[1:] {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func requestRaw(server, method, path string, payload []byte, lang string) ([]byte, error) {
 	endpoint := strings.TrimRight(server, "/") + path
 	request, err := http.NewRequest(method, endpoint, bytes.NewReader(payload))
 	if err != nil {
@@ -269,6 +341,7 @@ func request(server, method, path string, payload []byte, lang string) ([]byte, 
 
 func loadConfig() (*clientConfig, error) {
 	config := &clientConfig{}
+	config.Server.APIVersion = "v1"
 	path, err := configPath()
 	if err != nil {
 		return nil, err
@@ -299,7 +372,7 @@ func saveConfig(config *clientConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create client config directory: %w", err)
 	}
 	data, err := yaml.Marshal(config)
@@ -312,7 +385,7 @@ func saveConfig(config *clientConfig) error {
 	}
 	temporaryPath := file.Name()
 	defer func() { _ = os.Remove(temporaryPath) }()
-	if err := file.Chmod(0600); err != nil {
+	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()
 		return fmt.Errorf("secure temporary client config: %w", err)
 	}
@@ -338,7 +411,7 @@ func configPath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve user config directory: %w", err)
 	}
-	base := filepath.Join(dir, "apimgr", projectName)
+	base := filepath.Join(dir, projectpaths.OrgName, projectName)
 	if configProfile == "" {
 		return filepath.Join(base, "cli.yml"), nil
 	}
@@ -385,28 +458,28 @@ func ensureClientDirectories() error {
 		logDir = filepath.Join(dataDir, "log")
 	}
 	dirs := []string{
-		filepath.Join(configDir, "apimgr", projectName),
-		filepath.Join(dataDir, "apimgr", projectName),
-		filepath.Join(cacheDir, "apimgr", projectName),
-		filepath.Join(logDir, "apimgr", projectName),
+		filepath.Join(configDir, projectpaths.OrgName, projectName),
+		filepath.Join(dataDir, projectpaths.OrgName, projectName),
+		filepath.Join(cacheDir, projectpaths.OrgName, projectName),
+		filepath.Join(logDir, projectpaths.OrgName, projectName),
 	}
 	for _, path := range dirs {
-		if err := os.MkdirAll(path, 0700); err != nil {
+		if err := os.MkdirAll(path, 0o700); err != nil {
 			return fmt.Errorf("create client directory: %w", err)
 		}
 		if runtime.GOOS != "windows" {
-			if err := os.Chmod(path, 0700); err != nil {
+			if err := os.Chmod(path, 0o700); err != nil {
 				return fmt.Errorf("secure client directory: %w", err)
 			}
 		}
 	}
 	logPath := filepath.Join(dirs[3], "cli.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("create client log: %w", err)
 	}
 	if runtime.GOOS != "windows" {
-		if err := logFile.Chmod(0600); err != nil {
+		if err := logFile.Chmod(0o600); err != nil {
 			_ = logFile.Close()
 			return fmt.Errorf("secure client log: %w", err)
 		}

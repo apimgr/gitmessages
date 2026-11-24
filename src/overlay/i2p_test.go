@@ -55,7 +55,7 @@ func TestCreateI2PSessionPersistsKeyAndForwards(t *testing.T) {
 		}
 	}()
 
-	directory := t.TempDir()
+	directory := projectTestDir(t)
 	service := &i2pService{}
 	settings := config.DefaultConfig().Server.I2P
 	address, err := createI2PSession(context.Background(), listener.Addr().String(), filepath.Join(directory, "site-keys.dat"), 12345, settings, service)
@@ -66,7 +66,7 @@ func TestCreateI2PSessionPersistsKeyAndForwards(t *testing.T) {
 		t.Fatalf("I2P session = address %q, session %v, forward %v", address, service.session, service.forward)
 	}
 	info, err := os.Stat(filepath.Join(directory, "site-keys.dat"))
-	if err != nil || info.Mode().Perm() != 0600 {
+	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("destination key mode/stat = %v, %v", info, err)
 	}
 	_ = service.forward.Close()
@@ -114,7 +114,7 @@ func TestI2PAddressUsesDestinationHash(t *testing.T) {
 }
 
 func TestI2PManagerDisabledDoesNotAllocateResources(t *testing.T) {
-	manager := NewI2PManager(t.TempDir(), t.TempDir(), t.TempDir(), config.I2PConfig{Enabled: false}, nil)
+	manager := NewI2PManager(projectTestDir(t), projectTestDir(t), projectTestDir(t), config.I2PConfig{Enabled: false}, nil)
 	manager.Start()
 	status := manager.Status()
 	if status.Status != "disabled" || status.Enabled || status.Running {
@@ -126,7 +126,7 @@ func TestI2PManagerDisabledDoesNotAllocateResources(t *testing.T) {
 }
 
 func TestI2PProviderResolutionDoesNotAllocateBackendWithoutProvider(t *testing.T) {
-	manager := NewI2PManager(t.TempDir(), t.TempDir(), t.TempDir(), config.I2PConfig{
+	manager := NewI2PManager(projectTestDir(t), projectTestDir(t), projectTestDir(t), config.I2PConfig{
 		Enabled: true, Binary: "/missing/i2pd", SAMAddress: "127.0.0.1:1",
 	}, nil)
 	_, _, err := manager.startService()
@@ -139,7 +139,7 @@ func TestI2PProviderResolutionDoesNotAllocateBackendWithoutProvider(t *testing.T
 }
 
 func TestI2PStartReportsProviderFailureAndCloses(t *testing.T) {
-	manager := NewI2PManager(t.TempDir(), t.TempDir(), t.TempDir(), config.I2PConfig{
+	manager := NewI2PManager(projectTestDir(t), projectTestDir(t), projectTestDir(t), config.I2PConfig{
 		Enabled: true, Binary: "/missing/i2pd", SAMAddress: "127.0.0.1:1",
 	}, nil)
 	manager.Start()
@@ -189,12 +189,12 @@ func TestI2PKeyParsingAtomicStorageAndErrors(t *testing.T) {
 	if _, err := i2pDestination(i2pBase64.EncodeToString(truncated)); err == nil {
 		t.Fatal("truncated destination key was accepted")
 	}
-	path := filepath.Join(t.TempDir(), "private", "site-keys.dat")
+	path := filepath.Join(projectTestDir(t), "private", "site-keys.dat")
 	if err := atomicPrivateFile(path, []byte("private destination")); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0600 {
+	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("private key mode/stat = %v, %v", info, err)
 	}
 	if err := atomicPrivateFile(path, []byte("replacement")); err != nil {

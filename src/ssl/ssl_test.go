@@ -3,6 +3,7 @@ package ssl
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -29,6 +31,7 @@ func generateSelfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "test"},
+		DNSNames:     []string{"example.com", "example.org"},
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().Add(time.Hour),
 	}
@@ -41,6 +44,111 @@ func generateSelfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
 	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 	return certPEM, keyPEM
+}
+
+func TestGetTLSConfig_ExplicitCertificateAndMinimumVersion(t *testing.T) {
+	tmp := projectTestDir(t)
+	certPEM, keyPEM := generateSelfSignedPEM(t)
+	certPath := filepath.Join(tmp, "server.crt")
+	keyPath := filepath.Join(tmp, "server.key")
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(Config{Enabled: true, Cert: certPath, Key: keyPath, MinVersion: "TLS1.3"})
+	got, err := manager.GetTLSConfig([]string{"example.com"})
+	if err != nil {
+		t.Fatalf("GetTLSConfig() error: %v", err)
+	}
+	if got.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("minimum TLS version = %d, want TLS 1.3", got.MinVersion)
+	}
+}
+
+func TestGetTLSConfig_RejectsCertificateForWrongHost(t *testing.T) {
+	tmp := projectTestDir(t)
+	certPEM, keyPEM := generateSelfSignedPEM(t)
+	certPath := filepath.Join(tmp, "server.crt")
+	keyPath := filepath.Join(tmp, "server.key")
+	if err := os.WriteFile(certPath, certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, keyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(Config{Enabled: true, Cert: certPath, Key: keyPath})
+	if _, err := manager.GetTLSConfig([]string{"wrong.example"}); err == nil {
+		t.Fatal("certificate for an unrelated hostname was accepted")
+	}
+}
+
+func TestGetTLSConfig_UsesACMEStagingDirectory(t *testing.T) {
+	manager := NewManager(Config{
+		Enabled:  true,
+		CertPath: projectTestDir(t),
+		LetsEncrypt: LetsEncryptConfig{
+			Enabled: true,
+			Email:   "operator@example.com",
+			Staging: true,
+		},
+	})
+	if _, err := manager.GetTLSConfig([]string{"example.com"}); err != nil {
+		t.Fatalf("GetTLSConfig() error: %v", err)
+	}
+	if manager.certManager.Client == nil || manager.certManager.Client.DirectoryURL != "https://acme-staging-v02.api.letsencrypt.org/directory" {
+		t.Fatalf("ACME directory = %+v, want Let's Encrypt staging", manager.certManager.Client)
+	}
+	if manager.certManager.RenewBefore != 7*24*time.Hour {
+		t.Fatalf("autocert renewal window = %s, want 7 days", manager.certManager.RenewBefore)
+	}
+}
+
+func TestNewDNSProviderRestoresCredentialEnvironment(t *testing.T) {
+	t.Setenv("DNSUPDATE_NAMESERVER", "original.example.test:53")
+	manager := NewManager(Config{LetsEncrypt: LetsEncryptConfig{
+		DNSProvider:    "dnsupdate",
+		DNSCredentials: map[string]string{"DNSUPDATE_NAMESERVER": "temporary.example.test:53"},
+	}})
+	provider, err := manager.newDNSProvider()
+	if err != nil {
+		t.Fatalf("newDNSProvider() error: %v", err)
+	}
+	if provider == nil {
+		t.Fatal("newDNSProvider() returned a nil provider")
+	}
+	if got := os.Getenv("DNSUPDATE_NAMESERVER"); got != "original.example.test:53" {
+		t.Fatalf("DNSUPDATE_NAMESERVER after provider creation = %q, want original value", got)
+	}
+}
+
+func TestNewDNSProviderErrorDoesNotExposeCredentialValues(t *testing.T) {
+	manager := NewManager(Config{LetsEncrypt: LetsEncryptConfig{
+		DNSProvider:    "provider-that-does-not-exist",
+		DNSCredentials: map[string]string{"UNUSED_PROVIDER_SECRET": "credential-value-must-not-appear"},
+	}})
+	_, err := manager.newDNSProvider()
+	if err == nil {
+		t.Fatal("newDNSProvider() unexpectedly accepted an unknown provider")
+	}
+	if strings.Contains(err.Error(), "credential-value-must-not-appear") {
+		t.Fatal("provider error exposed a credential value")
+	}
+}
+
+func TestCertificateNeedsRenewal(t *testing.T) {
+	path := filepath.Join(projectTestDir(t), "certificate.pem")
+	if certificateNeedsRenewal(path, 7*24*time.Hour) != true {
+		t.Fatal("missing certificate should require issuance")
+	}
+	certPEM, _ := generateSelfSignedPEM(t)
+	if err := os.WriteFile(path, certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if certificateNeedsRenewal(path, 7*24*time.Hour) != true {
+		t.Fatal("certificate expiring within the renewal window should renew")
+	}
 }
 
 // TestParseChallenge is table-driven over every recognized alias plus the
@@ -153,7 +261,7 @@ func TestGetTLSConfig_Disabled(t *testing.T) {
 // when SSL is enabled but no certificates and no Let's Encrypt are
 // configured.
 func TestGetTLSConfig_NoCertsNoLetsEncrypt(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	m := NewManager(Config{Enabled: true, CertPath: tmp})
 	_, err := m.GetTLSConfig([]string{"example.com"})
 	if err == nil {
@@ -165,14 +273,14 @@ func TestGetTLSConfig_NoCertsNoLetsEncrypt(t *testing.T) {
 // <domain>.key naming convention is picked up by findManualCerts via the
 // real GetTLSConfig code path.
 func TestGetTLSConfig_ManualCertsDotCrtDotKey(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	domain := "example.com"
 	certPEM, keyPEM := generateSelfSignedPEM(t)
 
-	if err := os.WriteFile(filepath.Join(tmp, domain+".crt"), certPEM, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, domain+".crt"), certPEM, 0o644); err != nil {
 		t.Fatalf("failed to write cert: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(tmp, domain+".key"), keyPEM, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmp, domain+".key"), keyPEM, 0o644); err != nil {
 		t.Fatalf("failed to write key: %v", err)
 	}
 
@@ -192,18 +300,18 @@ func TestGetTLSConfig_ManualCertsDotCrtDotKey(t *testing.T) {
 // TestGetTLSConfig_ManualCertsFullchain verifies the <domain>/fullchain.pem
 // and <domain>/privkey.pem naming convention.
 func TestGetTLSConfig_ManualCertsFullchain(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	domain := "example.org"
 	domainDir := filepath.Join(tmp, domain)
-	if err := os.MkdirAll(domainDir, 0755); err != nil {
+	if err := os.MkdirAll(domainDir, 0o755); err != nil {
 		t.Fatalf("failed to create domain dir: %v", err)
 	}
 	certPEM, keyPEM := generateSelfSignedPEM(t)
 
-	if err := os.WriteFile(filepath.Join(domainDir, "fullchain.pem"), certPEM, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(domainDir, "fullchain.pem"), certPEM, 0o644); err != nil {
 		t.Fatalf("failed to write fullchain: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(domainDir, "privkey.pem"), keyPEM, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(domainDir, "privkey.pem"), keyPEM, 0o644); err != nil {
 		t.Fatalf("failed to write privkey: %v", err)
 	}
 

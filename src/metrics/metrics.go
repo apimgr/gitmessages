@@ -13,8 +13,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/apimgr/gitmessages/src/cache"
 	"github.com/apimgr/gitmessages/src/config"
+	"github.com/apimgr/gitmessages/src/database"
 	"github.com/apimgr/gitmessages/src/paths"
+	"github.com/apimgr/gitmessages/src/scheduler"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -33,25 +36,46 @@ var (
 )
 
 type Exporter struct {
-	registry         *prometheus.Registry
-	requests         *prometheus.CounterVec
-	duration         *prometheus.HistogramVec
-	requestSize      *prometheus.HistogramVec
-	responseSize     *prometheus.HistogramVec
-	active           prometheus.Gauge
-	appInfo          *prometheus.GaugeVec
-	rateLimits       *prometheus.CounterVec
-	rateLimitBlocked *prometheus.CounterVec
-	authAttempts     *prometheus.CounterVec
-	ownerTokens      *prometheus.GaugeVec
-	started          time.Time
-	includeRuntime   bool
-	includeSystem    bool
-	lokiMaxEntries   int
-	lokiMaxAge       time.Duration
-	logs             *logBuffer
-	torStatusMu      sync.RWMutex
-	torStatus        func() (bool, bool, bool, uint64)
+	registry          *prometheus.Registry
+	requests          *prometheus.CounterVec
+	duration          *prometheus.HistogramVec
+	requestSize       *prometheus.HistogramVec
+	responseSize      *prometheus.HistogramVec
+	active            prometheus.Gauge
+	appInfo           *prometheus.GaugeVec
+	rateLimits        *prometheus.CounterVec
+	rateLimitBlocked  *prometheus.CounterVec
+	authAttempts      *prometheus.CounterVec
+	ownerTokens       *prometheus.GaugeVec
+	messageBuilds     prometheus.Counter
+	cacheHits         *prometheus.CounterVec
+	cacheMisses       *prometheus.CounterVec
+	cacheEvictions    *prometheus.CounterVec
+	cacheSize         *prometheus.GaugeVec
+	cacheBytes        *prometheus.GaugeVec
+	cacheStatsMu      sync.Mutex
+	cacheEvictionSeen map[string]uint64
+	dbQueries         *prometheus.CounterVec
+	dbQueryDuration   *prometheus.HistogramVec
+	dbErrors          *prometheus.CounterVec
+	dbBusy            prometheus.Counter
+	dbWriteWait       prometheus.Histogram
+	schedulerTasks    *prometheus.CounterVec
+	schedulerDuration *prometheus.HistogramVec
+	schedulerRunning  *prometheus.GaugeVec
+	schedulerLastRun  *prometheus.GaugeVec
+	started           time.Time
+	includeRuntime    bool
+	includeSystem     bool
+	lokiMaxEntries    int
+	lokiMaxAge        time.Duration
+	logs              *logBuffer
+	torStatusMu       sync.RWMutex
+	torStatus         func() (bool, bool, bool, uint64)
+	dbStatsMu         sync.RWMutex
+	dbStatsProvider   func() (int, int)
+	ownerTokenMu      sync.RWMutex
+	ownerTokenCounts  func() (int, int)
 }
 
 func New(cfg config.MetricsConfig, version, commit, buildDate string) *Exporter {
@@ -60,18 +84,34 @@ func New(cfg config.MetricsConfig, version, commit, buildDate string) *Exporter 
 	buckets := validBuckets(cfg.DurationBuckets, durationBuckets)
 	sizes := validBuckets(cfg.SizeBuckets, sizeBuckets)
 	e := &Exporter{
-		registry:         registry,
-		requests:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: "http_requests_total", Help: "Total HTTP requests"}, []string{"method", "path", "status"}),
-		duration:         prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "http_request_duration_seconds", Help: "HTTP request duration in seconds", Buckets: buckets}, []string{"method", "path"}),
-		requestSize:      prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "http_request_size_bytes", Help: "HTTP request size in bytes", Buckets: sizes}, []string{"method", "path"}),
-		responseSize:     prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "http_response_size_bytes", Help: "HTTP response size in bytes", Buckets: sizes}, []string{"method", "path"}),
-		active:           prometheus.NewGauge(prometheus.GaugeOpts{Name: "http_active_requests", Help: "Number of active HTTP requests"}),
-		appInfo:          prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "app_info", Help: "Application information"}, []string{"version", "commit", "build_date", "go_version"}),
-		rateLimits:       prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ratelimit_requests_total", Help: "Total requests processed by the global rate limiter"}, []string{"limit", "status"}),
-		rateLimitBlocked: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ratelimit_blocked_total", Help: "Requests blocked by the rate limiter"}, []string{"limit"}),
-		authAttempts:     prometheus.NewCounterVec(prometheus.CounterOpts{Name: "auth_attempts_total", Help: "Total metrics bearer-token authentication attempts"}, []string{"method", "status"}),
-		ownerTokens:      prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "owner_tokens_active", Help: "Active owner tokens; this service has no owner-token system"}, []string{"kind"}),
-		started:          time.Now(), includeRuntime: cfg.IncludeRuntime, includeSystem: cfg.IncludeSystem,
+		registry:          registry,
+		requests:          prometheus.NewCounterVec(prometheus.CounterOpts{Name: "http_requests_total", Help: "Total HTTP requests"}, []string{"method", "path", "status"}),
+		duration:          prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "http_request_duration_seconds", Help: "HTTP request duration in seconds", Buckets: buckets}, []string{"method", "path"}),
+		requestSize:       prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "http_request_size_bytes", Help: "HTTP request size in bytes", Buckets: sizes}, []string{"method", "path"}),
+		responseSize:      prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "http_response_size_bytes", Help: "HTTP response size in bytes", Buckets: sizes}, []string{"method", "path"}),
+		active:            prometheus.NewGauge(prometheus.GaugeOpts{Name: "http_active_requests", Help: "Number of active HTTP requests"}),
+		appInfo:           prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "app_info", Help: "Application information"}, []string{"version", "commit", "build_date", "go_version"}),
+		rateLimits:        prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ratelimit_requests_total", Help: "Total requests processed by the global rate limiter"}, []string{"limit", "status"}),
+		rateLimitBlocked:  prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ratelimit_blocked_total", Help: "Requests blocked by the rate limiter"}, []string{"limit"}),
+		authAttempts:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "auth_attempts_total", Help: "Total metrics bearer-token authentication attempts"}, []string{"method", "status"}),
+		ownerTokens:       prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "owner_tokens_active", Help: "Active primary and linked owner tokens"}, []string{"kind"}),
+		messageBuilds:     prometheus.NewCounter(prometheus.CounterOpts{Name: "commit_message_builds_total", Help: "Successfully generated commit messages"}),
+		cacheHits:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: "cache_hits_total", Help: "Total cache hits"}, []string{"cache"}),
+		cacheMisses:       prometheus.NewCounterVec(prometheus.CounterOpts{Name: "cache_misses_total", Help: "Total cache misses"}, []string{"cache"}),
+		cacheEvictions:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "cache_evictions_total", Help: "Total cache entries evicted or expired"}, []string{"cache"}),
+		cacheSize:         prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "cache_size", Help: "Current number of tracked cache items"}, []string{"cache"}),
+		cacheBytes:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "cache_bytes", Help: "Current size of tracked cache items in bytes"}, []string{"cache"}),
+		cacheEvictionSeen: make(map[string]uint64),
+		dbQueries:         prometheus.NewCounterVec(prometheus.CounterOpts{Name: "db_queries_total", Help: "Total database queries"}, []string{"operation", "table"}),
+		dbQueryDuration:   prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "db_query_duration_seconds", Help: "Database query latency", Buckets: []float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1}}, []string{"operation", "table"}),
+		dbErrors:          prometheus.NewCounterVec(prometheus.CounterOpts{Name: "db_errors_total", Help: "Total database errors"}, []string{"operation", "error_type"}),
+		dbBusy:            prometheus.NewCounter(prometheus.CounterOpts{Name: "db_busy_total", Help: "Database writes delayed by SQLite lock contention"}),
+		dbWriteWait:       prometheus.NewHistogram(prometheus.HistogramOpts{Name: "db_write_wait_seconds", Help: "SQLite write wait time after lock contention", Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}}),
+		schedulerTasks:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "scheduler_tasks_total", Help: "Total scheduled task executions"}, []string{"task", "status"}),
+		schedulerDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "scheduler_task_duration_seconds", Help: "Scheduled task execution duration", Buckets: []float64{0.1, 0.5, 1, 5, 10, 30, 60, 300, 600}}, []string{"task"}),
+		schedulerRunning:  prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "scheduler_tasks_running", Help: "Currently running scheduled task instances"}, []string{"task"}),
+		schedulerLastRun:  prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "scheduler_last_run_timestamp", Help: "Unix timestamp of the last scheduled task execution"}, []string{"task"}),
+		started:           time.Now(), includeRuntime: cfg.IncludeRuntime, includeSystem: cfg.IncludeSystem,
 		lokiMaxEntries: cfg.Loki.MaxEntries, logs: applicationLogs,
 	}
 	e.logs.setRedactions(cfg.Auth.Tokens.Prometheus, cfg.Auth.Tokens.Grafana, cfg.Auth.Tokens.Loki)
@@ -82,9 +122,11 @@ func New(cfg config.MetricsConfig, version, commit, buildDate string) *Exporter 
 	if e.lokiMaxAge <= 0 {
 		e.lokiMaxAge = time.Hour
 	}
-	for _, collector := range []prometheus.Collector{e.requests, e.duration, e.requestSize, e.responseSize, e.active, e.appInfo, e.rateLimits, e.rateLimitBlocked, e.authAttempts, e.ownerTokens} {
+	for _, collector := range []prometheus.Collector{e.requests, e.duration, e.requestSize, e.responseSize, e.active, e.appInfo, e.rateLimits, e.rateLimitBlocked, e.authAttempts, e.ownerTokens, e.messageBuilds, e.cacheHits, e.cacheMisses, e.cacheEvictions, e.cacheSize, e.cacheBytes, e.dbQueries, e.dbQueryDuration, e.dbErrors, e.dbBusy, e.dbWriteWait, e.schedulerTasks, e.schedulerDuration, e.schedulerRunning, e.schedulerLastRun} {
 		registerer.MustRegister(collector)
 	}
+	registerer.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "db_connections_open", Help: "Number of open database connections"}, func() float64 { open, _ := e.dbStats(); return float64(open) }))
+	registerer.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "db_connections_in_use", Help: "Number of database connections in use"}, func() float64 { _, inUse := e.dbStats(); return float64(inUse) }))
 	e.ownerTokens.WithLabelValues("primary").Set(0)
 	e.ownerTokens.WithLabelValues("linked").Set(0)
 	registerer.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "app_uptime_seconds", Help: "Application uptime in seconds"}, func() float64 { return time.Since(e.started).Seconds() }))
@@ -121,6 +163,88 @@ func New(cfg config.MetricsConfig, version, commit, buildDate string) *Exporter 
 	return e
 }
 
+func (e *Exporter) SetDatabaseStatsProvider(provider func() (open, inUse int)) {
+	e.dbStatsMu.Lock()
+	e.dbStatsProvider = provider
+	e.dbStatsMu.Unlock()
+}
+
+func (e *Exporter) dbStats() (int, int) {
+	e.dbStatsMu.RLock()
+	provider := e.dbStatsProvider
+	e.dbStatsMu.RUnlock()
+	if provider == nil {
+		return 0, 0
+	}
+	return provider()
+}
+
+func (e *Exporter) ObserveDatabaseQuery(observation database.QueryObservation) {
+	if observation.Operation != "select" && observation.Operation != "insert" && observation.Operation != "update" && observation.Operation != "delete" {
+		return
+	}
+	table := observation.Table
+	if table == "" || len(table) > 64 {
+		table = "unknown"
+	}
+	e.dbQueries.WithLabelValues(observation.Operation, table).Inc()
+	e.dbQueryDuration.WithLabelValues(observation.Operation, table).Observe(observation.Duration.Seconds())
+	if observation.ErrorType != "" {
+		allowed := map[string]bool{"connection": true, "timeout": true, "constraint": true, "duplicate": true, "other": true}
+		errorType := observation.ErrorType
+		if !allowed[errorType] {
+			errorType = "other"
+		}
+		e.dbErrors.WithLabelValues(observation.Operation, errorType).Inc()
+	}
+}
+
+func (e *Exporter) RecordMessageBuild() { e.messageBuilds.Inc() }
+
+func (e *Exporter) ObserveCacheOperation(name string, hit bool, stats cache.Stats) {
+	if hit {
+		e.cacheHits.WithLabelValues(name).Inc()
+	} else {
+		e.cacheMisses.WithLabelValues(name).Inc()
+	}
+	e.cacheSize.WithLabelValues(name).Set(float64(stats.Items))
+	e.cacheBytes.WithLabelValues(name).Set(float64(stats.Bytes))
+	e.cacheStatsMu.Lock()
+	previous := e.cacheEvictionSeen[name]
+	if stats.Evictions >= previous {
+		if difference := stats.Evictions - previous; difference > 0 {
+			e.cacheEvictions.WithLabelValues(name).Add(float64(difference))
+		}
+	}
+	e.cacheEvictionSeen[name] = stats.Evictions
+	e.cacheStatsMu.Unlock()
+}
+
+func (e *Exporter) ObserveDatabaseBusy(wait time.Duration) {
+	e.dbBusy.Inc()
+	e.dbWriteWait.Observe(wait.Seconds())
+}
+
+func (e *Exporter) ObserveScheduler(event scheduler.ExecutionEvent) {
+	task := event.Task
+	if task == "" || len(task) > 64 {
+		task = "unknown"
+	}
+	if event.Running {
+		e.schedulerRunning.WithLabelValues(task).Inc()
+		return
+	}
+	e.schedulerRunning.WithLabelValues(task).Dec()
+	if event.Status != "success" && event.Status != "error" {
+		event.Status = "error"
+	}
+	e.schedulerTasks.WithLabelValues(task, event.Status).Inc()
+	e.schedulerDuration.WithLabelValues(task).Observe(event.Duration.Seconds())
+	if !event.LastRun.IsZero() {
+		e.schedulerLastRun.WithLabelValues(task).Set(float64(event.LastRun.Unix()))
+	}
+}
+
 func validBuckets(values, fallback []float64) []float64 {
 	if len(values) == 0 {
 		return fallback
@@ -152,11 +276,20 @@ func (e *Exporter) torState() (bool, bool, bool, uint64) {
 }
 
 func (e *Exporter) RecordAuth(success bool) {
+	e.RecordAuthMethod("metrics_token", success)
+}
+
+func (e *Exporter) RecordAuthMethod(method string, success bool) {
+	switch method {
+	case "metrics_token", "operator_token", "owner_token":
+	default:
+		method = "other"
+	}
 	status := "failed"
 	if success {
 		status = "success"
 	}
-	e.authAttempts.WithLabelValues("metrics_token", status).Inc()
+	e.authAttempts.WithLabelValues(method, status).Inc()
 }
 
 func (e *Exporter) Middleware(next http.Handler) http.Handler {
@@ -202,6 +335,7 @@ func (w *responseWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
 }
+
 func (w *responseWriter) Write(data []byte) (int, error) {
 	if w.status == 0 {
 		w.WriteHeader(http.StatusOK)
@@ -232,7 +366,32 @@ func normalizePath(path string) string {
 }
 
 func (e *Exporter) Prometheus() http.Handler {
-	return promhttp.HandlerFor(e.registry, promhttp.HandlerOpts{DisableCompression: true})
+	handler := promhttp.HandlerFor(e.registry, promhttp.HandlerOpts{DisableCompression: true})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		e.refreshOwnerTokenCounts()
+		handler.ServeHTTP(w, r)
+	})
+}
+
+func (e *Exporter) SetOwnerTokenProvider(provider func() (int, int)) {
+	e.ownerTokenMu.Lock()
+	e.ownerTokenCounts = provider
+	e.ownerTokenMu.Unlock()
+}
+
+func (e *Exporter) refreshOwnerTokenCounts() {
+	e.ownerTokenMu.RLock()
+	provider := e.ownerTokenCounts
+	e.ownerTokenMu.RUnlock()
+	primary, linked := 0, 0
+	if provider != nil {
+		func() {
+			defer func() { _ = recover() }()
+			primary, linked = provider()
+		}()
+	}
+	e.ownerTokens.WithLabelValues("primary").Set(float64(primary))
+	e.ownerTokens.WithLabelValues("linked").Set(float64(linked))
 }
 
 func (e *Exporter) Grafana() http.Handler {
@@ -245,6 +404,20 @@ func (e *Exporter) Grafana() http.Handler {
 		grafanaPanel(6, "timeseries", "Tor status", "gitmessages_tor_running"),
 		grafanaPanel(7, "timeseries", "Tor circuit established", "gitmessages_tor_circuit_established"),
 		grafanaPanel(8, "timeseries", "Tor requests", "rate(gitmessages_tor_requests_total[5m])"),
+		grafanaPanel(9, "timeseries", "Database queries per second", "sum by (operation) (rate(gitmessages_db_queries_total[5m]))"),
+		grafanaPanel(10, "timeseries", "Database query errors", "sum by (error_type) (rate(gitmessages_db_errors_total[5m]))"),
+		grafanaPanel(17, "timeseries", "SQLite write contention", "rate(gitmessages_db_busy_total[5m])"),
+		grafanaPanel(18, "timeseries", "SQLite write wait duration", "histogram_quantile(0.95, rate(gitmessages_db_write_wait_seconds_bucket[5m]))"),
+		grafanaPanel(11, "timeseries", "Scheduler task executions", "sum by (task, status) (rate(gitmessages_scheduler_tasks_total[5m]))"),
+		grafanaPanel(12, "timeseries", "Scheduler task duration", "histogram_quantile(0.95, sum by (task, le) (rate(gitmessages_scheduler_task_duration_seconds_bucket[5m])))"),
+		grafanaPanel(13, "timeseries", "System disk use", "gitmessages_system_disk_usage_percent"),
+		grafanaPanel(14, "timeseries", "System CPU use", "gitmessages_system_cpu_usage_percent"),
+		grafanaPanel(15, "timeseries", "Commit messages generated", "rate(gitmessages_commit_message_builds_total[5m])"),
+		grafanaPanel(16, "timeseries", "Rate-limit cache hits", "sum by (cache) (rate(gitmessages_cache_hits_total[5m]))"),
+		grafanaPanel(19, "timeseries", "Rate-limit cache misses", "sum by (cache) (rate(gitmessages_cache_misses_total[5m]))"),
+		grafanaPanel(20, "timeseries", "Rate-limit cache evictions", "sum by (cache) (rate(gitmessages_cache_evictions_total[5m]))"),
+		grafanaPanel(21, "timeseries", "Rate-limit cache items", "gitmessages_cache_size"),
+		grafanaPanel(22, "timeseries", "Rate-limit cache bytes", "gitmessages_cache_bytes"),
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -306,10 +479,12 @@ func (b *logBuffer) add(entry logEntry) {
 		b.entries = append([]logEntry(nil), b.entries[len(b.entries)-5000:]...)
 	}
 }
+
 func (b *logBuffer) addMessage(line string) {
 	line = b.sanitize(line)
 	b.add(logEntry{Time: time.Now(), Level: logLevel(line), Message: line})
 }
+
 func (b *logBuffer) setRedactions(values ...string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -319,6 +494,7 @@ func (b *logBuffer) setRedactions(values ...string) {
 		}
 	}
 }
+
 func (b *logBuffer) sanitize(line string) string {
 	b.mu.Lock()
 	redactions := append([]string(nil), b.redactions...)
@@ -332,6 +508,7 @@ func (b *logBuffer) sanitize(line string) string {
 	}
 	return line
 }
+
 func (b *logBuffer) recent(after time.Time, limit int) []logEntry {
 	b.mu.Lock()
 	defer b.mu.Unlock()

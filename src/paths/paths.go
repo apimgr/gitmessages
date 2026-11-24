@@ -6,6 +6,8 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"unicode"
 )
 
 const (
@@ -14,21 +16,48 @@ const (
 )
 
 type Directories struct {
-	Config string
-	Data   string
-	Cache  string
-	Logs   string
-	Backup string
-	PID    string
+	Config   string
+	Data     string
+	Database string
+	Cache    string
+	Logs     string
+	Backup   string
+	PID      string
 }
 
-var isContainer = IsRunningInContainer
-var isRootUser = func() bool {
-	if runtime.GOOS == "windows" {
-		return os.Getenv("USERDOMAIN") == os.Getenv("COMPUTERNAME")
-	}
-	return os.Geteuid() == 0
+// EnsurePrivateTempParent creates and validates an owner-only project temp parent.
+func EnsurePrivateTempParent(parent string) error {
+	return ensurePrivateTempParent(parent)
 }
+
+// SafeDirPath validates a filesystem directory override without changing its
+// absolute or relative meaning.
+func SafeDirPath(input string) (string, error) {
+	if input == "" {
+		return "", fmt.Errorf("empty path")
+	}
+	for _, character := range input {
+		if unicode.IsControl(character) {
+			return "", fmt.Errorf("path contains control characters")
+		}
+	}
+	for _, segment := range strings.Split(filepath.ToSlash(input), "/") {
+		if segment == ".." {
+			return "", fmt.Errorf("path contains traversal segment")
+		}
+	}
+	return filepath.Clean(input), nil
+}
+
+var (
+	isContainer = IsRunningInContainer
+	isRootUser  = func() bool {
+		if runtime.GOOS == "windows" {
+			return os.Getenv("USERDOMAIN") == os.Getenv("COMPUTERNAME")
+		}
+		return os.Geteuid() == 0
+	}
+)
 
 func GetDirectories() Directories {
 	currentUser, _ := user.Current()
@@ -42,18 +71,38 @@ func GetDirectories() Directories {
 	if home == "" {
 		home = os.Getenv("USERPROFILE")
 	}
-	return defaultDirs(runtime.GOOS, ProjectName, isContainer(), isRootUser(), home)
+	container := isContainer()
+	root := isRootUser()
+	dirs := defaultDirs(runtime.GOOS, ProjectName, container, root, home)
+	if databaseDir := os.Getenv("DATABASE_DIR"); databaseDir != "" {
+		if safe, err := SafeDirPath(databaseDir); err == nil {
+			if absolute, err := filepath.Abs(safe); err == nil {
+				dirs.Database = absolute
+			}
+		}
+	}
+	if backup := os.Getenv("BACKUP_DIR"); backup != "" {
+		if safe, err := SafeDirPath(backup); err == nil {
+			if absolute, err := filepath.Abs(safe); err == nil {
+				dirs.Backup = absolute
+			}
+		}
+	} else if !container {
+		dirs.Backup = defaultBackupDir(dirs.Data, root, home)
+	}
+	return dirs
 }
 
 func defaultDirs(goos, projectName string, container, root bool, home string) Directories {
 	if container {
 		base := filepath.Join("/data", projectName)
 		return Directories{
-			Config: filepath.Join("/config", projectName),
-			Data:   base,
-			Cache:  filepath.Join(base, "cache"),
-			Logs:   filepath.Join("/data", "log", projectName),
-			Backup: filepath.Join("/data", "backups", projectName),
+			Config:   filepath.Join("/config", projectName),
+			Data:     base,
+			Database: filepath.Join("/data", "db", "sqlite"),
+			Cache:    filepath.Join(base, "cache"),
+			Logs:     filepath.Join("/data", "log", projectName),
+			Backup:   filepath.Join("/data", "backups", projectName),
 		}
 	}
 	if root {
@@ -64,14 +113,18 @@ func defaultDirs(goos, projectName string, container, root bool, home string) Di
 				programData = `C:\ProgramData`
 			}
 			base := filepath.Join(programData, OrgName, projectName)
-			return Directories{Config: base, Data: filepath.Join(base, "data"), Cache: filepath.Join(base, "cache"), Logs: filepath.Join(base, "logs"), Backup: filepath.Join(programData, "Backups", OrgName, projectName), PID: filepath.Join(base, projectName+".pid")}
+			data := filepath.Join(base, "data")
+			return Directories{Config: base, Data: data, Database: filepath.Join(data, "db"), Cache: filepath.Join(base, "cache"), Logs: filepath.Join(base, "logs"), Backup: filepath.Join(programData, "Backups", OrgName, projectName)}
 		case "darwin":
 			base := filepath.Join("/Library/Application Support", OrgName, projectName)
-			return Directories{Config: base, Data: filepath.Join(base, "data"), Cache: filepath.Join("/Library/Caches", OrgName, projectName), Logs: filepath.Join("/Library/Logs", OrgName, projectName), Backup: filepath.Join("/Library/Backups", OrgName, projectName), PID: filepath.Join("/var/run", OrgName, projectName+".pid")}
+			data := filepath.Join(base, "data")
+			return Directories{Config: base, Data: data, Database: filepath.Join(data, "db"), Cache: filepath.Join("/Library/Caches", OrgName, projectName), Logs: filepath.Join("/Library/Logs", OrgName, projectName), Backup: filepath.Join("/Library/Backups", OrgName, projectName), PID: filepath.Join("/var/run", OrgName, projectName, projectName+".pid")}
 		case "freebsd", "openbsd", "netbsd":
-			return Directories{Config: filepath.Join("/usr/local/etc", OrgName, projectName), Data: filepath.Join("/var/db", OrgName, projectName), Cache: filepath.Join("/var/cache", OrgName, projectName), Logs: filepath.Join("/var/log", OrgName, projectName), Backup: filepath.Join("/var/backups", OrgName, projectName), PID: filepath.Join("/var/run", OrgName, projectName+".pid")}
+			data := filepath.Join("/var/db", OrgName, projectName)
+			return Directories{Config: filepath.Join("/usr/local/etc", OrgName, projectName), Data: data, Database: filepath.Join(data, "db"), Cache: filepath.Join("/var/cache", OrgName, projectName), Logs: filepath.Join("/var/log", OrgName, projectName), Backup: filepath.Join("/var/backups", OrgName, projectName), PID: filepath.Join("/var/run", OrgName, projectName, projectName+".pid")}
 		default:
-			return Directories{Config: filepath.Join("/etc", OrgName, projectName), Data: filepath.Join("/var/lib", OrgName, projectName), Cache: filepath.Join("/var/cache", OrgName, projectName), Logs: filepath.Join("/var/log", OrgName, projectName), Backup: filepath.Join("/mnt/Backups", OrgName, projectName), PID: filepath.Join("/var/run", OrgName, projectName+".pid")}
+			data := filepath.Join("/var/lib", OrgName, projectName)
+			return Directories{Config: filepath.Join("/etc", OrgName, projectName), Data: data, Database: filepath.Join(data, "db"), Cache: filepath.Join("/var/cache", OrgName, projectName), Logs: filepath.Join("/var/log", OrgName, projectName), Backup: filepath.Join("/mnt/Backups", OrgName, projectName), PID: filepath.Join("/var/run", OrgName, projectName, projectName+".pid")}
 		}
 	}
 	if home == "" {
@@ -88,10 +141,10 @@ func defaultDirs(goos, projectName string, container, root bool, home string) Di
 			localAppData = filepath.Join(home, "AppData", "Local")
 		}
 		base := filepath.Join(localAppData, OrgName, projectName)
-		return Directories{Config: filepath.Join(appData, OrgName, projectName), Data: base, Cache: filepath.Join(base, "cache"), Logs: filepath.Join(base, "logs"), Backup: filepath.Join(localAppData, "Backups", OrgName, projectName), PID: filepath.Join(base, projectName+".pid")}
+		return Directories{Config: filepath.Join(appData, OrgName, projectName), Data: base, Database: filepath.Join(base, "db"), Cache: filepath.Join(base, "cache"), Logs: filepath.Join(base, "logs"), Backup: filepath.Join(localAppData, "Backups", OrgName, projectName)}
 	case "darwin":
 		base := filepath.Join(home, "Library", "Application Support", OrgName, projectName)
-		return Directories{Config: base, Data: base, Cache: filepath.Join(home, "Library", "Caches", OrgName, projectName), Logs: filepath.Join(home, "Library", "Logs", OrgName, projectName), Backup: filepath.Join(home, "Library", "Backups", OrgName, projectName), PID: filepath.Join(base, projectName+".pid")}
+		return Directories{Config: base, Data: base, Database: filepath.Join(base, "db"), Cache: filepath.Join(home, "Library", "Caches", OrgName, projectName), Logs: filepath.Join(home, "Library", "Logs", OrgName, projectName), Backup: filepath.Join(home, "Library", "Backups", OrgName, projectName), PID: filepath.Join(base, projectName+".pid")}
 	default:
 		configBase := os.Getenv("XDG_CONFIG_HOME")
 		if configBase == "" {
@@ -106,7 +159,7 @@ func defaultDirs(goos, projectName string, container, root bool, home string) Di
 		if cacheBase == "" {
 			cacheBase = filepath.Join(home, ".cache")
 		}
-		return Directories{Config: filepath.Join(configBase, OrgName, projectName), Data: data, Cache: filepath.Join(cacheBase, OrgName, projectName), Logs: filepath.Join(home, ".local", "log", OrgName, projectName), Backup: filepath.Join(dataBase, "Backups", OrgName, projectName), PID: filepath.Join(data, projectName+".pid")}
+		return Directories{Config: filepath.Join(configBase, OrgName, projectName), Data: data, Database: filepath.Join(data, "db"), Cache: filepath.Join(cacheBase, OrgName, projectName), Logs: filepath.Join(home, ".local", "log", OrgName, projectName), Backup: filepath.Join(dataBase, "Backups", OrgName, projectName), PID: filepath.Join(data, projectName+".pid")}
 	}
 }
 
@@ -131,11 +184,11 @@ func GetDirectoriesFor(projectName string) Directories {
 }
 
 func EnsureDirectories(dirs Directories) error {
-	permission := os.FileMode(0700)
+	permission := os.FileMode(0o700)
 	if isRootUser() {
-		permission = 0755
+		permission = 0o755
 	}
-	for _, dir := range []string{dirs.Config, dirs.Data, dirs.Cache, dirs.Logs} {
+	for _, dir := range []string{dirs.Config, dirs.Data, dirs.Database, dirs.Cache, dirs.Logs, dirs.Backup} {
 		if dir == "" {
 			continue
 		}
@@ -152,9 +205,9 @@ func EnsureDirectories(dirs Directories) error {
 }
 
 func EnsureDir(path string) error {
-	permission := os.FileMode(0700)
+	permission := os.FileMode(0o700)
 	if isRootUser() {
-		permission = 0755
+		permission = 0o755
 	}
 	return EnsureDirMode(path, permission)
 }
@@ -193,23 +246,50 @@ func IsRunningInContainer() bool {
 }
 
 func GetBackupDir() string {
-	dirs := GetDirectories()
-	if isContainer() || !isRootUser() {
-		return dirs.Backup
-	}
-	systemBackup := filepath.Join("/mnt/Backups", OrgName, ProjectName)
-	if directoryWritable(systemBackup) {
-		return systemBackup
-	}
-	return filepath.Join(dirs.Data, "backup")
+	return GetDirectories().Backup
 }
 
-func directoryWritable(path string) bool {
-	info, err := os.Stat(path)
+func defaultBackupDir(dataDir string, root bool, home string) string {
+	systemBackup := systemBackupDir()
+	if parentWritable(systemBackup) {
+		return systemBackup
+	}
+	if root {
+		return filepath.Join(dataDir, "backup")
+	}
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(home, "Library", "Backups", OrgName, ProjectName)
+	case "windows":
+		return filepath.Join(os.Getenv("LOCALAPPDATA"), "Backups", OrgName, ProjectName)
+	default:
+		return filepath.Join(home, ".local", "share", "Backups", OrgName, ProjectName)
+	}
+}
+
+func systemBackupDir() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join("/Library/Backups", OrgName, ProjectName)
+	case "windows":
+		return filepath.Join(os.Getenv("ProgramData"), "Backups", OrgName, ProjectName)
+	case "freebsd", "openbsd", "netbsd":
+		return filepath.Join("/var/backups", OrgName, ProjectName)
+	default:
+		return filepath.Join("/mnt/Backups", OrgName, ProjectName)
+	}
+}
+
+func parentWritable(path string) bool {
+	parent := filepath.Dir(path)
+	info, err := os.Stat(parent)
 	if err != nil || !info.IsDir() {
 		return false
 	}
-	probe, err := os.CreateTemp(path, ".write-test-*")
+	probe, err := os.CreateTemp(parent, ".write-test-*")
 	if err != nil {
 		return false
 	}

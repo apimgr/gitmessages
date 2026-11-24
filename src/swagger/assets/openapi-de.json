@@ -1,0 +1,1584 @@
+{
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Kuratierter Katalog für Commit-Konventionen mit Nachrichtengenerator.",
+    "title": "Git Messages API",
+    "version": "dev"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/autodiscover": {
+      "get": {
+        "description": "Ressourcen",
+        "operationId": "get_api_autodiscover",
+        "responses": {
+          "200": {
+            "description": "Ressourcen"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "summary": "REST-API"
+      }
+    },
+    "/api/graphql": {
+      "post": {
+        "description": "Durchsuche den öffentlichen Commit-Katalog mit GraphiQL. Ein Abfrageformular ist auch ohne JavaScript verfügbar.",
+        "operationId": "graphql_query_api_graphql",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "description": "GraphQL-Abfrage",
+                    "type": "string"
+                  },
+                  "variables": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Durchsuche den öffentlichen Commit-Katalog mit GraphiQL. Ein Abfrageformular ist auch ohne JavaScript verfügbar."
+          }
+        },
+        "summary": "GraphQL"
+      }
+    },
+    "/api/healthz": {
+      "get": {
+        "description": "Dienst ist verfügbar",
+        "operationId": "get_api_healthz",
+        "responses": {
+          "200": {
+            "description": "Dienst ist verfügbar"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "summary": "Dienststatus"
+      }
+    },
+    "/api/mcp": {
+      "post": {
+        "description": "Greifen Sie per Streamable HTTP auf den öffentlichen Katalog und den zustandslosen Nachrichten-Generator zu.",
+        "operationId": "mcp_endpoint_api_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Greifen Sie per Streamable HTTP auf den öffentlichen Katalog und den zustandslosen Nachrichten-Generator zu."
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "Zu viele Anfragen"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Git Messages MCP-Verbindungshilfe"
+      }
+    },
+    "/api/metrics": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_metrics_api_metrics",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/grafana": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_metrics_api_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/loki": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_metrics_api_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/metrics/prometheus": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_metrics_api_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/swagger": {
+      "get": {
+        "description": "REST-API",
+        "operationId": "get_api_swagger",
+        "responses": {
+          "200": {
+            "description": "REST-API"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "summary": "OpenAPI"
+      }
+    },
+    "/api/v1": {
+      "get": {
+        "description": "Ressourcen",
+        "operationId": "get_api_index",
+        "responses": {
+          "200": {
+            "description": "Ressourcen"
+          }
+        },
+        "summary": "REST-API"
+      }
+    },
+    "/api/v1/conventions": {
+      "get": {
+        "description": "Die unterstützten Commit-Konventionen.",
+        "operationId": "list_conventions",
+        "responses": {
+          "200": {
+            "description": "Die unterstützten Commit-Konventionen."
+          }
+        },
+        "summary": "Konventionen auflisten"
+      }
+    },
+    "/api/v1/messages": {
+      "post": {
+        "description": "Die formatierte Commit-Nachricht.",
+        "operationId": "build_commit_message",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "body": {
+                    "description": "Textkörper (optional)",
+                    "type": "string"
+                  },
+                  "breaking": {
+                    "description": "Inkompatible Änderung",
+                    "type": "boolean"
+                  },
+                  "convention": {
+                    "description": "Konvention",
+                    "enum": [
+                      "conventional-commits",
+                      "angular"
+                    ],
+                    "type": "string"
+                  },
+                  "description": {
+                    "description": "Kurze Beschreibung",
+                    "type": "string"
+                  },
+                  "scope": {
+                    "description": "Bereich (optional)",
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "Commit-Typ",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "description"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Die formatierte Commit-Nachricht."
+          },
+          "400": {
+            "description": "Die Anfrage enthält ungültige Nachrichtenfelder."
+          }
+        },
+        "summary": "Eine Commit-Nachricht erstellen"
+      }
+    },
+    "/api/v1/messages/random": {
+      "get": {
+        "description": "Eine zufällige Beispiel-Commit-Nachricht.",
+        "operationId": "get_random_example",
+        "responses": {
+          "200": {
+            "description": "Eine zufällige Beispiel-Commit-Nachricht."
+          }
+        },
+        "summary": "Eine zufällige Beispielnachricht abrufen"
+      }
+    },
+    "/api/v1/server/about": {
+      "get": {
+        "description": "Git Messages ist eine kuratierte Referenz für Commit-Nachrichtenkonventionen und ein Werkzeug zum Verfassen klarer Nachrichten.",
+        "operationId": "get_about",
+        "responses": {
+          "200": {
+            "description": "Git Messages ist eine kuratierte Referenz für Commit-Nachrichtenkonventionen und ein Werkzeug zum Verfassen klarer Nachrichten."
+          }
+        },
+        "summary": "Über Git Messages"
+      }
+    },
+    "/api/v1/server/contact": {
+      "get": {
+        "description": "Returns report-form descriptors and a one-use captcha challenge",
+        "operationId": "get_contact_form",
+        "responses": {
+          "200": {
+            "description": "Returns report-form descriptors and a one-use captcha challenge"
+          }
+        },
+        "summary": "Contact report form"
+      },
+      "post": {
+        "description": "Uses a submit and confirm review flow",
+        "operationId": "submit_contact_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "properties": {
+                  "captcha_answer": {
+                    "type": "string"
+                  },
+                  "captcha_id": {
+                    "type": "string"
+                  },
+                  "confirmed": {
+                    "type": "boolean"
+                  },
+                  "email": {
+                    "format": "email",
+                    "maxLength": 254,
+                    "type": "string"
+                  },
+                  "form_token": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 100,
+                    "type": "string"
+                  },
+                  "review_token": {
+                    "type": "string"
+                  },
+                  "step": {
+                    "enum": [
+                      "submit",
+                      "confirm",
+                      "edit"
+                    ],
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "abuse",
+                      "dmca",
+                      "privacy",
+                      "security"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name",
+                  "email",
+                  "form_token"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Uses a submit and confirm review flow"
+          },
+          "400": {
+            "description": "Die Anfrage enthält ungültige Nachrichtenfelder."
+          }
+        },
+        "summary": "Submit a contact report"
+      }
+    },
+    "/api/v1/server/dpo": {
+      "get": {
+        "description": "Public DPO contact information",
+        "operationId": "get_data_protection_contact",
+        "responses": {
+          "200": {
+            "description": "Public DPO contact information"
+          }
+        },
+        "summary": "Data protection contact"
+      }
+    },
+    "/api/v1/server/graphql": {
+      "post": {
+        "description": "Durchsuche den öffentlichen Commit-Katalog mit GraphiQL. Ein Abfrageformular ist auch ohne JavaScript verfügbar.",
+        "operationId": "graphql_query_api_v1_server_graphql",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "query": {
+                    "description": "GraphQL-Abfrage",
+                    "type": "string"
+                  },
+                  "variables": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Durchsuche den öffentlichen Commit-Katalog mit GraphiQL. Ein Abfrageformular ist auch ohne JavaScript verfügbar."
+          }
+        },
+        "summary": "GraphQL"
+      }
+    },
+    "/api/v1/server/healthz": {
+      "get": {
+        "description": "Dienst ist verfügbar",
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "description": "Dienst ist verfügbar"
+          }
+        },
+        "summary": "Dienststatus"
+      }
+    },
+    "/api/v1/server/help": {
+      "get": {
+        "description": "Siehe",
+        "operationId": "get_help",
+        "responses": {
+          "200": {
+            "description": "Siehe"
+          }
+        },
+        "summary": "Hilfe"
+      }
+    },
+    "/api/v1/server/help/mcp": {
+      "get": {
+        "description": "Greifen Sie per Streamable HTTP auf den öffentlichen Katalog und den zustandslosen Nachrichten-Generator zu.",
+        "operationId": "get_mcp_help",
+        "responses": {
+          "200": {
+            "description": "Greifen Sie per Streamable HTTP auf den öffentlichen Katalog und den zustandslosen Nachrichten-Generator zu."
+          }
+        },
+        "summary": "Git Messages MCP-Verbindungshilfe"
+      }
+    },
+    "/api/v1/server/mcp": {
+      "post": {
+        "description": "Greifen Sie per Streamable HTTP auf den öffentlichen Katalog und den zustandslosen Nachrichten-Generator zu.",
+        "operationId": "mcp_endpoint_api_v1_server_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Greifen Sie per Streamable HTTP auf den öffentlichen Katalog und den zustandslosen Nachrichten-Generator zu."
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "Zu viele Anfragen"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Git Messages MCP-Verbindungshilfe"
+      }
+    },
+    "/api/v1/server/metrics": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_metrics_api_v1_server_metrics",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/grafana": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_metrics_api_v1_server_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/loki": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_metrics_api_v1_server_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/metrics/prometheus": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_metrics_api_v1_server_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/api/v1/server/preferences": {
+      "get": {
+        "description": "Einstellungen",
+        "operationId": "get_preferences",
+        "responses": {
+          "200": {
+            "description": "Einstellungen"
+          }
+        },
+        "summary": "Einstellungen"
+      },
+      "post": {
+        "description": "Einstellungen",
+        "operationId": "save_preferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "properties": {
+                  "lang": {
+                    "type": "string"
+                  },
+                  "theme": {
+                    "enum": [
+                      "dark",
+                      "light",
+                      "auto"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Einstellungen"
+          },
+          "400": {
+            "description": "Die Anfrage enthält ungültige Nachrichtenfelder."
+          }
+        },
+        "summary": "Speichern"
+      }
+    },
+    "/api/v1/server/preferences/sync": {
+      "get": {
+        "description": "Übertrage deine Einstellungen auf ein anderes Gerät.",
+        "operationId": "get_preferences_sync",
+        "responses": {
+          "200": {
+            "description": "Übertrage deine Einstellungen auf ein anderes Gerät."
+          }
+        },
+        "summary": "Einstellungen synchronisieren"
+      }
+    },
+    "/api/v1/server/preferences/sync/import": {
+      "get": {
+        "description": "Übertrage deine Einstellungen auf ein anderes Gerät.",
+        "operationId": "import_preferences_sync",
+        "responses": {
+          "200": {
+            "description": "Übertrage deine Einstellungen auf ein anderes Gerät."
+          }
+        },
+        "summary": "Importieren"
+      }
+    },
+    "/api/v1/server/preferences/tokens": {
+      "get": {
+        "description": "Eigene Tokens",
+        "operationId": "list_owner_tokens",
+        "responses": {
+          "200": {
+            "description": "Eigene Tokens"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Eigene Tokens"
+      },
+      "post": {
+        "description": "Vollzugriff auf deine {resources}. Halte ihn geheim.",
+        "operationId": "create_linked_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiry": {
+                    "enum": [
+                      "never",
+                      "7d",
+                      "30d",
+                      "90d",
+                      "1y"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Vollzugriff auf deine {resources}. Halte ihn geheim."
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Verknüpften Token erstellen"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary": {
+      "delete": {
+        "description": "Dadurch werden {linked} verknüpfte Tokens und {resources} gelöscht, einschließlich aller mit einem verknüpften Token erstellten Inhalte.",
+        "operationId": "revoke_primary_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "confirm": {
+                    "maxLength": 4,
+                    "minLength": 4,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "confirm"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Dadurch werden {linked} verknüpfte Tokens und {resources} gelöscht, einschließlich aller mit einem verknüpften Token erstellten Inhalte."
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Primäres Token widerrufen"
+      },
+      "post": {
+        "description": "Primärer Token",
+        "operationId": "issue_primary_token",
+        "responses": {
+          "200": {
+            "description": "Primärer Token"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "summary": "Neuer Token"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary/reveal": {
+      "post": {
+        "description": "Wird nur einmal auf dieser Seite angezeigt.",
+        "operationId": "reveal_primary_token",
+        "responses": {
+          "200": {
+            "description": "Wird nur einmal auf dieser Seite angezeigt."
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Anzeigen"
+      }
+    },
+    "/api/v1/server/preferences/tokens/primary/rotate": {
+      "post": {
+        "description": "Primärer Token",
+        "operationId": "rotate_primary_token",
+        "responses": {
+          "200": {
+            "description": "Primärer Token"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Erneuern"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}": {
+      "delete": {
+        "description": "Widerrufen",
+        "operationId": "revoke_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Widerrufen"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Widerrufen"
+      },
+      "patch": {
+        "description": "Speichern",
+        "operationId": "update_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "expiry": {
+                    "enum": [
+                      "never",
+                      "7d",
+                      "30d",
+                      "90d",
+                      "1y"
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Speichern"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Bearbeiten"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}/reveal": {
+      "post": {
+        "description": "Wird nur einmal auf dieser Seite angezeigt.",
+        "operationId": "reveal_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Wird nur einmal auf dieser Seite angezeigt."
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Anzeigen"
+      }
+    },
+    "/api/v1/server/preferences/tokens/{id}/rotate": {
+      "post": {
+        "description": "Primärer Token",
+        "operationId": "rotate_linked_token",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Primärer Token"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Erneuern"
+      }
+    },
+    "/api/v1/server/privacy": {
+      "get": {
+        "description": "Dieser Dienst stellt einen statischen, kuratierten Katalog von Commit-Konventionen bereit. Es gibt keine Benutzerkonten, Nutzereinreichungen oder Speicherung personenbezogener Daten. Der Serverbetreiber kann Betriebsprotokolle verwalten.",
+        "operationId": "get_privacy",
+        "responses": {
+          "200": {
+            "description": "Dieser Dienst stellt einen statischen, kuratierten Katalog von Commit-Konventionen bereit. Es gibt keine Benutzerkonten, Nutzereinreichungen oder Speicherung personenbezogener Daten. Der Serverbetreiber kann Betriebsprotokolle verwalten."
+          }
+        },
+        "summary": "Datenschutz"
+      }
+    },
+    "/api/v1/server/security": {
+      "get": {
+        "description": "Melden Sie Schwachstellen über GitHubs private Sicherheitsmeldungen. Veröffentlichen Sie keine Exploitdetails in öffentlichen Issues.",
+        "operationId": "get_security",
+        "responses": {
+          "200": {
+            "description": "Melden Sie Schwachstellen über GitHubs private Sicherheitsmeldungen. Veröffentlichen Sie keine Exploitdetails in öffentlichen Issues."
+          }
+        },
+        "summary": "Sicherheit"
+      }
+    },
+    "/api/v1/server/security/policy": {
+      "get": {
+        "description": "Public coordinated-disclosure policy",
+        "operationId": "get_security_policy",
+        "responses": {
+          "200": {
+            "description": "Public coordinated-disclosure policy"
+          }
+        },
+        "summary": "Security disclosure policy"
+      }
+    },
+    "/api/v1/server/security/thanks": {
+      "get": {
+        "description": "Public researcher acknowledgments",
+        "operationId": "get_security_thanks",
+        "responses": {
+          "200": {
+            "description": "Public researcher acknowledgments"
+          }
+        },
+        "summary": "Security acknowledgments"
+      }
+    },
+    "/api/v1/server/swagger": {
+      "get": {
+        "description": "REST-API",
+        "operationId": "get_openapi",
+        "responses": {
+          "200": {
+            "description": "REST-API"
+          }
+        },
+        "summary": "OpenAPI"
+      }
+    },
+    "/api/v1/server/terms": {
+      "get": {
+        "description": "Der Katalog dient als Referenz. Prüfe die ausgewählte Konvention und die Beitragsregeln deines Repositorys, bevor du eine erzeugte Nachricht verwendest.",
+        "operationId": "get_terms",
+        "responses": {
+          "200": {
+            "description": "Der Katalog dient als Referenz. Prüfe die ausgewählte Konvention und die Beitragsregeln deines Repositorys, bevor du eine erzeugte Nachricht verwendest."
+          }
+        },
+        "summary": "Nutzungsbedingungen"
+      }
+    },
+    "/api/v1/templates": {
+      "get": {
+        "description": "Die kuratierten Nachrichtenvorlagen.",
+        "operationId": "list_templates",
+        "responses": {
+          "200": {
+            "description": "Die kuratierten Nachrichtenvorlagen."
+          }
+        },
+        "summary": "Nachrichtenvorlagen auflisten"
+      }
+    },
+    "/api/v1/templates/random": {
+      "get": {
+        "description": "Eine zufällige Nachrichtenvorlage.",
+        "operationId": "get_random_template",
+        "responses": {
+          "200": {
+            "description": "Eine zufällige Nachrichtenvorlage."
+          }
+        },
+        "summary": "Eine zufällige Vorlage abrufen"
+      }
+    },
+    "/api/v1/types": {
+      "get": {
+        "description": "Der Katalog der Commit-Typen.",
+        "operationId": "list_commit_types",
+        "responses": {
+          "200": {
+            "description": "Der Katalog der Commit-Typen."
+          }
+        },
+        "summary": "Commit-Typen auflisten"
+      }
+    },
+    "/mcp": {
+      "post": {
+        "description": "Greifen Sie per Streamable HTTP auf den öffentlichen Katalog und den zustandslosen Nachrichten-Generator zu.",
+        "operationId": "mcp_endpoint_mcp",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Accept",
+            "required": true,
+            "schema": {
+              "example": "application/json, text/event-stream",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "MCP-Protocol-Version",
+            "required": true,
+            "schema": {
+              "enum": [
+                "2026-07-28"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Mcp-Method",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Required for tools/call and must match params.name.",
+            "in": "header",
+            "name": "Mcp-Name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "id": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "jsonrpc": {
+                    "enum": [
+                      "2.0"
+                    ],
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "properties": {
+                      "_meta": {
+                        "properties": {
+                          "io.modelcontextprotocol/protocolVersion": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "io.modelcontextprotocol/protocolVersion"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "id",
+                  "method",
+                  "params"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Greifen Sie per Streamable HTTP auf den öffentlichen Katalog und den zustandslosen Nachrichten-Generator zu."
+          },
+          "400": {
+            "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
+          },
+          "403": {
+            "description": "Origin is not allowed."
+          },
+          "406": {
+            "description": "Accept must include application/json and text/event-stream."
+          },
+          "413": {
+            "description": "Request body exceeds 1 MiB."
+          },
+          "415": {
+            "description": "Content-Type must be application/json."
+          },
+          "429": {
+            "description": "Zu viele Anfragen"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Git Messages MCP-Verbindungshilfe"
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_root_metrics_metrics",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/grafana": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_root_metrics_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/loki": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_root_metrics_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/metrics/prometheus": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_root_metrics_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.root.enabled"
+      }
+    },
+    "/server/metrics": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_metrics_server_metrics",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/grafana": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_metrics_server_metrics_grafana",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/loki": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_metrics_server_metrics_loki",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    },
+    "/server/metrics/prometheus": {
+      "get": {
+        "description": "Authentifizierter interner Metrik-Endpunkt",
+        "operationId": "get_metrics_server_metrics_prometheus",
+        "responses": {
+          "200": {
+            "description": "Authentifizierter interner Metrik-Endpunkt"
+          },
+          "400": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Metrikdienst",
+        "x-mounted-when": "server.metrics.enabled"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://openapi.invalid"
+    }
+  ]
+}

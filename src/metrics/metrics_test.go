@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apimgr/gitmessages/src/cache"
 	"github.com/apimgr/gitmessages/src/config"
+	"github.com/apimgr/gitmessages/src/database"
+	"github.com/apimgr/gitmessages/src/scheduler"
 )
 
 func TestMiddlewareExportsHTTPAndRuntimeMetrics(t *testing.T) {
@@ -93,6 +96,53 @@ func TestLokiLogBufferRedactsCredentials(t *testing.T) {
 	for _, secret := range []string{"private-token", "sensitive-value"} {
 		if strings.Contains(entries[0].Message, secret) {
 			t.Errorf("Loki log retained secret %q: %s", secret, entries[0].Message)
+		}
+	}
+}
+
+func TestDatabaseAndSchedulerMetricsAreExported(t *testing.T) {
+	cfg := config.DefaultConfig().Server.Metrics
+	cfg.IncludeSystem = false
+	cfg.IncludeRuntime = false
+	exporter := New(cfg, "dev", "unknown", "N/A")
+	exporter.SetDatabaseStatsProvider(func() (int, int) { return 3, 1 })
+	exporter.SetOwnerTokenProvider(func() (int, int) { return 2, 4 })
+	exporter.RecordAuthMethod("owner_token", true)
+	exporter.RecordAuthMethod("operator_token", false)
+	exporter.ObserveDatabaseQuery(database.QueryObservation{Operation: "select", Table: "owners", Duration: 5 * time.Millisecond})
+	exporter.ObserveDatabaseQuery(database.QueryObservation{Operation: "insert", Table: "audit_log", ErrorType: "constraint", Duration: 2 * time.Millisecond})
+	exporter.ObserveDatabaseBusy(1200 * time.Millisecond)
+	exporter.ObserveScheduler(scheduler.ExecutionEvent{Task: "geoip_update", Running: true})
+	exporter.ObserveScheduler(scheduler.ExecutionEvent{Task: "geoip_update", Status: "success", Duration: 2 * time.Second, LastRun: time.Unix(100, 0)})
+	exporter.RecordMessageBuild()
+	exporter.ObserveCacheOperation("rate_limit", false, cache.Stats{Items: 2, Bytes: 48})
+	exporter.ObserveCacheOperation("rate_limit", true, cache.Stats{Items: 3, Bytes: 72, Evictions: 1})
+	response := httptest.NewRecorder()
+	exporter.Prometheus().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := response.Body.String()
+	for _, metric := range []string{
+		"gitmessages_db_queries_total{operation=\"select\",table=\"owners\"} 1",
+		"gitmessages_db_errors_total{error_type=\"constraint\",operation=\"insert\"} 1",
+		"gitmessages_db_connections_open 3",
+		"gitmessages_db_connections_in_use 1",
+		"gitmessages_db_busy_total 1",
+		"gitmessages_db_write_wait_seconds_count 1",
+		"gitmessages_owner_tokens_active{kind=\"primary\"} 2",
+		"gitmessages_owner_tokens_active{kind=\"linked\"} 4",
+		"gitmessages_auth_attempts_total{method=\"owner_token\",status=\"success\"} 1",
+		"gitmessages_auth_attempts_total{method=\"operator_token\",status=\"failed\"} 1",
+		"gitmessages_scheduler_tasks_total{status=\"success\",task=\"geoip_update\"} 1",
+		"gitmessages_scheduler_tasks_running{task=\"geoip_update\"} 0",
+		"gitmessages_scheduler_last_run_timestamp{task=\"geoip_update\"} 100",
+		"gitmessages_commit_message_builds_total 1",
+		"gitmessages_cache_misses_total{cache=\"rate_limit\"} 1",
+		"gitmessages_cache_hits_total{cache=\"rate_limit\"} 1",
+		"gitmessages_cache_evictions_total{cache=\"rate_limit\"} 1",
+		"gitmessages_cache_size{cache=\"rate_limit\"} 3",
+		"gitmessages_cache_bytes{cache=\"rate_limit\"} 72",
+	} {
+		if !strings.Contains(body, metric) {
+			t.Errorf("metrics output does not contain %q", metric)
 		}
 	}
 }

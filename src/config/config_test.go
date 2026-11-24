@@ -13,6 +13,9 @@ import (
 // zero-config first-run experience is caught immediately.
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
+	if cfg.Server.Compliance.AnyEnabled() {
+		t.Fatal("compliance standards must be disabled by default")
+	}
 
 	if cfg.Server.Address != "[::]" {
 		t.Errorf("Server.Address = %q, want [::]", cfg.Server.Address)
@@ -20,8 +23,23 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Server.Mode != "production" {
 		t.Errorf("Server.Mode = %q, want production", cfg.Server.Mode)
 	}
+	if cfg.Server.APIVersion != "v1" {
+		t.Errorf("Server.APIVersion = %q, want v1", cfg.Server.APIVersion)
+	}
 	if cfg.Server.Update.Branch != "stable" {
 		t.Errorf("Server.Update.Branch = %q, want stable", cfg.Server.Update.Branch)
+	}
+	if cfg.Server.Security.Reports.RetentionDays != 365 {
+		t.Errorf("Server.Security.Reports.RetentionDays = %d, want 365", cfg.Server.Security.Reports.RetentionDays)
+	}
+	if !cfg.Server.GeoIP.Enabled || cfg.Server.Scheduler.Timezone != "America/New_York" || cfg.Server.Scheduler.Tasks["backup_hourly"].Enabled {
+		t.Errorf("security/scheduler defaults do not match the service defaults: GeoIP=%+v Scheduler=%+v", cfg.Server.GeoIP, cfg.Server.Scheduler)
+	}
+	if !cfg.Server.Notifications.DiskLow.Enabled || cfg.Server.Notifications.DiskLow.ThresholdPercent != 85 || cfg.Server.Notifications.DiskLow.CheckInterval != "5m" || cfg.Server.Notifications.DiskLow.Repeat != "24h" {
+		t.Errorf("disk-low notification defaults do not match the service defaults: %+v", cfg.Server.Notifications.DiskLow)
+	}
+	if cfg.Data.CVE.Source == "" || cfg.Data.Trivy.Source == "" || !cfg.Server.Security.Blocklists.Enabled {
+		t.Errorf("security feed defaults are incomplete: data=%+v blocklists=%+v", cfg.Data, cfg.Server.Security.Blocklists)
 	}
 	if cfg.Web.UI.Theme != "dark" {
 		t.Errorf("Web.UI.Theme = %q, want dark", cfg.Web.UI.Theme)
@@ -35,12 +53,416 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Server.Metrics.Enabled {
 		t.Error("Metrics.Enabled = true, want false by default")
 	}
+	privacy := cfg.Server.Privacy
+	if privacy.Data.Sold || !privacy.Data.StoredOnServer || privacy.Retention.Period == "" {
+		t.Error("privacy data and retention defaults are incomplete")
+	}
+	if !privacy.Cookies.Essential.Enabled || !privacy.Consent.ShowUntilAcknowledged || privacy.Consent.Policy.URL != "/server/privacy" {
+		t.Error("privacy consent and cookie defaults are incomplete")
+	}
+	if privacy.GetConsentMessage() == "" || privacy.GetAnalyticsDescription() == "" || privacy.GetDataUsageContent() == "" || privacy.IsCCPAApplicable() {
+		t.Error("privacy dynamic content does not match the default not-sold policy")
+	}
+}
+
+func TestI18NAndEmailEventSettingsLoadAndValidate(t *testing.T) {
+	cfg := DefaultConfig()
+	if err := yaml.Unmarshal([]byte("server:\n  i18n:\n    default_language: es\n    available_languages: [en, es, es, unsupported]\n  notifications:\n    email:\n      events:\n        startup: true\n        backup_failed: false\n"), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.I18N.DefaultLanguage != "es" || strings.Join(cfg.Server.I18N.AvailableLanguages, ",") != "en,es" {
+		t.Fatalf("validated i18n config = %+v", cfg.Server.I18N)
+	}
+	if !cfg.Server.Notifications.Email.Events["startup"] || cfg.Server.Notifications.Email.Events["backup_failed"] || !cfg.Server.Notifications.Email.Events["scheduler_error"] {
+		t.Fatalf("email event defaults/overrides = %+v", cfg.Server.Notifications.Email.Events)
+	}
+	cfg.Server.I18N.DefaultLanguage = "unsupported"
+	if err := validate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.I18N.DefaultLanguage != "en" {
+		t.Fatalf("unsupported default language = %q, want en", cfg.Server.I18N.DefaultLanguage)
+	}
+}
+
+func TestMalformedSMTPSettingsFallBackToDefaults(t *testing.T) {
+	configuration := DefaultConfig()
+	if err := yaml.Unmarshal([]byte("server:\n  notifications:\n    email:\n      smtp:\n        port: not-a-port\n        tls: invalid-mode\n"), configuration); err != nil {
+		t.Fatalf("malformed SMTP values prevented config loading: %v", err)
+	}
+	if err := validate(configuration); err != nil {
+		t.Fatalf("malformed SMTP values prevented config validation: %v", err)
+	}
+	if configuration.Server.Notifications.Email.SMTP.Port != 587 || configuration.Server.Notifications.Email.SMTP.TLS != "auto" {
+		t.Fatalf("SMTP defaults after malformed input = %+v", configuration.Server.Notifications.Email.SMTP)
+	}
+	t.Setenv("SMTP_PORT", "invalid")
+	if err := applySMTPEnvironment(configuration); err != nil {
+		t.Fatalf("malformed SMTP_PORT prevented config loading: %v", err)
+	}
+	if configuration.Server.Notifications.Email.SMTP.Port != 587 {
+		t.Fatalf("SMTP_PORT fallback = %d, want 587", configuration.Server.Notifications.Email.SMTP.Port)
+	}
+}
+
+func TestInvalidEmailReplyToFallsBackToUnset(t *testing.T) {
+	for _, value := range []string{"not-an-address", "operator@example.test\r\nBcc: attacker@example.test"} {
+		configuration := DefaultConfig()
+		configuration.Server.Notifications.Email.ReplyTo = value
+		if err := validate(configuration); err != nil {
+			t.Fatalf("invalid reply_to %q prevented config validation: %v", value, err)
+		}
+		if configuration.Server.Notifications.Email.ReplyTo != "" {
+			t.Errorf("invalid reply_to %q was not cleared", value)
+		}
+	}
+}
+
+func TestComplianceStandardsLoadIndividually(t *testing.T) {
+	var cfg Config
+	if err := yaml.Unmarshal([]byte("server:\n  compliance:\n    gdpr: true\n    pci_dss: true\n"), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Server.Compliance.GDPR || !cfg.Server.Compliance.PCIDSS || cfg.Server.Compliance.CCPA || !cfg.Server.Compliance.AnyEnabled() {
+		t.Fatalf("compliance settings were not loaded independently: %+v", cfg.Server.Compliance)
+	}
+}
+
+func TestSEOConfigurationValidationUsesSafeDefaults(t *testing.T) {
+	configuration := DefaultConfig()
+	configuration.Server.SEO.TitleSeparator = "123456789"
+	configuration.Server.SEO.Canonical = "http://untrusted.example"
+	configuration.Server.SEO.Twitter.Card = "unknown"
+	configuration.Server.SEO.MetaTags = map[string]string{
+		"description":  "duplicate generated tag",
+		"invalid name": "invalid key",
+		"valid.name":   "safe value",
+	}
+	configuration.Server.SEO.Verification.Google = "<script>"
+	configuration.Server.SEO.Verification.Custom = []SEOCustomMetaConfig{
+		{Name: "safe-name", Content: "valid"},
+		{Name: "unsafe name", Content: "invalid"},
+	}
+	validateSEOSettings(configuration)
+	if configuration.Server.SEO.TitleSeparator != " - " || configuration.Server.SEO.Canonical != "" || configuration.Server.SEO.Twitter.Card != "summary_large_image" {
+		t.Fatalf("SEO settings did not fall back safely: %+v", configuration.Server.SEO)
+	}
+	if len(configuration.Server.SEO.MetaTags) != 1 || configuration.Server.SEO.MetaTags["valid.name"] != "safe value" {
+		t.Fatalf("invalid or reserved meta tags were retained: %#v", configuration.Server.SEO.MetaTags)
+	}
+	if configuration.Server.SEO.Verification.Google != "" || len(configuration.Server.SEO.Verification.Custom) != 1 || configuration.Server.SEO.Verification.Custom[0].Name != "safe-name" {
+		t.Fatalf("invalid verification values were retained: %+v", configuration.Server.SEO.Verification)
+	}
+}
+
+func TestLoadSecurityFeedAndSchedulerConfiguration(t *testing.T) {
+	directory := projectTestDir(t)
+	configPath := filepath.Join(directory, "server.yml")
+	if err := os.WriteFile(configPath, []byte("server: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	areaDirectory := filepath.Join(directory, "yaml.d")
+	if err := os.Mkdir(areaDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	security := "server:\n  geoip:\n    enabled: false\n    deny_countries: [CN]\n  security:\n    reports:\n      retention_days: 180\n    allowlist:\n      - cidr: 192.0.2.1\n        description: monitor\n    blocklists:\n      enabled: true\n      extra_sources:\n        - id: example\n          type: domain\n          url: https://feeds.example.test/domains.txt\n          enabled: true\n        - id: disabled_feed\n          type: ip\n          url: https://feeds.example.test/disabled.txt\n          enabled: false\n        - id: default_enabled\n          type: ip\n          url: https://feeds.example.test/default.txt\ndata:\n  cve:\n    source: https://nvd.example.test/feed\n  trivy:\n    enabled: true\n    source: ghcr.io/example/trivy-db:2\n"
+	maintenance := "server:\n  scheduler:\n    timezone: UTC\n    catch_up_window: 2h\n    tasks:\n      backup_hourly:\n        enabled: true\n"
+	if err := os.WriteFile(filepath.Join(areaDirectory, "security.yml"), []byte(security), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(areaDirectory, "maintenance.yml"), []byte(maintenance), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadMergedConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.GeoIP.Enabled || len(cfg.Server.GeoIP.DenyCountries) != 1 || cfg.Server.GeoIP.DenyCountries[0] != "CN" {
+		t.Errorf("GeoIP configuration was not loaded: %+v", cfg.Server.GeoIP)
+	}
+	if len(cfg.Server.Security.Allowlist) != 1 || cfg.Server.Security.Allowlist[0].Description != "monitor" {
+		t.Errorf("security configuration was not loaded: %+v", cfg.Server.Security)
+	}
+	if cfg.Server.Security.Reports.RetentionDays != 180 {
+		t.Errorf("security report retention = %d, want 180", cfg.Server.Security.Reports.RetentionDays)
+	}
+	if len(cfg.Server.Security.Blocklists.ExtraSources) != 3 || !cfg.Server.Security.Blocklists.ExtraSources[2].Enabled {
+		t.Error("blocklist source with omitted enabled field did not default to enabled")
+	}
+	if len(cfg.Server.Security.Blocklists.ExtraSources) < 2 || cfg.Server.Security.Blocklists.ExtraSources[1].Enabled {
+		t.Errorf("explicitly disabled blocklist source was not preserved: %+v", cfg.Server.Security.Blocklists.ExtraSources)
+	}
+	if cfg.Data.CVE.Source != "https://nvd.example.test/feed" || !cfg.Data.Trivy.Enabled {
+		t.Errorf("data source configuration was not loaded: %+v", cfg.Data)
+	}
+	if cfg.Server.Scheduler.Timezone != "UTC" || cfg.Server.Scheduler.CatchUpWindow != "2h" || !cfg.Server.Scheduler.Tasks["backup_hourly"].Enabled {
+		t.Errorf("scheduler configuration was not loaded: %+v", cfg.Server.Scheduler)
+	}
+}
+
+func TestValidateSkipsInvalidSecurityEntries(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Server.Security.Allowlist = []AllowlistEntry{
+		{CIDR: "192.0.2.5", Description: "monitor"},
+		{CIDR: "0.0.0.0/0", Description: "too broad"},
+		{CIDR: "not-an-ip", Description: "invalid"},
+	}
+	cfg.Server.Security.BlockedIPs = []BlockedIPEntry{
+		{CIDR: "198.51.100.8", Reason: "test"},
+		{CIDR: "invalid"},
+	}
+	cfg.Server.Security.Blocklists.ExtraSources = []BlocklistSourceConfig{
+		{ID: "valid_feed", Type: "ip", URL: "https://feeds.example.test/list", Enabled: true},
+		{ID: "firehol_level1", Type: "ip", URL: "https://example.test/list", Enabled: true},
+		{ID: "bad scheme", Type: "domain", URL: "http://example.test/list", Enabled: true},
+	}
+	cfg.Server.GeoIP.DenyCountries = []string{"cn", "USA", "1!", "ZZ"}
+	cfg.Server.Scheduler.CatchUpWindow = "not-a-duration"
+	cfg.Server.Scheduler.Tasks["token_cleanup"] = ScheduledTaskConfig{Enabled: false, Schedule: "@every 15m"}
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate() returned an error for skippable security entries: %v", err)
+	}
+	if len(cfg.Server.Security.Allowlist) != 1 || cfg.Server.Security.Allowlist[0].CIDR != "192.0.2.5/32" {
+		t.Fatalf("validated allowlist = %+v", cfg.Server.Security.Allowlist)
+	}
+	if len(cfg.Server.Security.BlockedIPs) != 1 || cfg.Server.Security.BlockedIPs[0].CIDR != "198.51.100.8/32" {
+		t.Fatalf("validated blocked IPs = %+v", cfg.Server.Security.BlockedIPs)
+	}
+	if len(cfg.Server.Security.Blocklists.ExtraSources) != 1 || cfg.Server.Security.Blocklists.ExtraSources[0].ID != "valid_feed" {
+		t.Fatalf("validated blocklist sources = %+v", cfg.Server.Security.Blocklists.ExtraSources)
+	}
+	if len(cfg.Server.GeoIP.DenyCountries) != 1 || cfg.Server.GeoIP.DenyCountries[0] != "CN" {
+		t.Fatalf("validated country codes = %+v", cfg.Server.GeoIP.DenyCountries)
+	}
+	if cfg.Server.Scheduler.CatchUpWindow != "1h" {
+		t.Fatalf("invalid catch-up window resolved to %q, want 1h", cfg.Server.Scheduler.CatchUpWindow)
+	}
+	if !cfg.Server.Scheduler.Tasks["token_cleanup"].Enabled {
+		t.Fatal("critical token_cleanup task was disabled by configuration")
+	}
+}
+
+func TestValidateAPIVersion(t *testing.T) {
+	for _, version := range []string{"v1", "v2", "v12"} {
+		cfg := DefaultConfig()
+		cfg.Server.APIVersion = version
+		if err := validate(cfg); err != nil {
+			t.Fatalf("validate %q: %v", version, err)
+		}
+		if cfg.Server.APIVersion != version {
+			t.Errorf("API version = %q, want %q", cfg.Server.APIVersion, version)
+		}
+	}
+	for _, version := range []string{"", "1", "V1", "v", "v1-beta", "v1/other"} {
+		cfg := DefaultConfig()
+		cfg.Server.APIVersion = version
+		if err := validate(cfg); err != nil {
+			t.Fatalf("validate invalid version %q: %v", version, err)
+		}
+		if cfg.Server.APIVersion != "v1" {
+			t.Errorf("invalid API version %q resolved to %q, want v1", version, cfg.Server.APIVersion)
+		}
+	}
+}
+
+func TestNormalizeBaseURL(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+		valid bool
+	}{
+		{input: "", want: "", valid: true},
+		{input: "/", want: "", valid: true},
+		{input: "/messages/", want: "/messages", valid: true},
+		{input: "/api/v2", want: "/api/v2", valid: true},
+		{input: "//attacker.invalid", valid: false},
+		{input: "/../outside", valid: false},
+		{input: "/messages?next=/", valid: false},
+		{input: "https://example.test/messages", valid: false},
+	} {
+		got, err := NormalizeBaseURL(test.input)
+		if (err == nil) != test.valid {
+			t.Errorf("NormalizeBaseURL(%q) error = %v, valid = %t", test.input, err, test.valid)
+			continue
+		}
+		if err == nil && got != test.want {
+			t.Errorf("NormalizeBaseURL(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
+func TestLoad_PrivacyConfiguration(t *testing.T) {
+	path := filepath.Join(projectTestDir(t), "server.yml")
+	yamlContent := "server:\n  privacy:\n    data:\n      sold: true\n      sharing:\n        - condition: analytics\n          when: consented\n          data: aggregate usage\n    retention:\n      period: 30 days\n      export_available: true\n    consent:\n      message_if_sold: Custom consent\n      policy:\n        text: Privacy\n        url: /privacy\n    cookies:\n      analytics:\n        description: Usage analytics\n        description_suffix_sold: Shared\n    third_party:\n      services:\n        - name: Analytics\n          purpose: Usage\n          data_sent: Aggregate counts\n          policy_url: https://example.test/privacy\n"
+	if err := os.WriteFile(path, []byte(yamlContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privacy := cfg.Server.Privacy
+	if !privacy.Data.Sold || privacy.Data.Sharing[0].Data != "aggregate usage" || privacy.Retention.Period != "30 days" {
+		t.Fatalf("privacy policy configuration was not loaded: %+v", privacy)
+	}
+	if privacy.GetConsentMessage() != "Custom consent" || privacy.GetAnalyticsDescription() != "Usage analytics Shared" || !privacy.IsCCPAApplicable() {
+		t.Fatalf("sold-data dynamic privacy content is incorrect: %+v", privacy)
+	}
+	if len(privacy.ThirdParty.Services) != 1 || privacy.ThirdParty.Services[0].PolicyURL != "https://example.test/privacy" {
+		t.Fatalf("third-party privacy services were not loaded: %+v", privacy.ThirdParty)
+	}
+}
+
+func TestFirstRunConnectionEnvironmentSeedsSecrets(t *testing.T) {
+	t.Setenv("DATABASE_URL", "libsql://catalog.example.test?authToken=database-secret")
+	t.Setenv("DATABASE_DRIVER", "sqlite")
+	t.Setenv("CACHE_URL", "rediss://cache-user:cache-secret@cache.example.test:6379/2")
+	path := filepath.Join(projectTestDir(t), "server.yml")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Server.Database.Driver != "libsql" || cfg.Server.Database.URL != "libsql://catalog.example.test?authToken=database-secret" {
+		t.Fatalf("database connection = %+v", cfg.Server.Database)
+	}
+	if cfg.Server.Cache.Type != "redis" || cfg.Server.Cache.URL != "rediss://cache-user:cache-secret@cache.example.test:6379/2" {
+		t.Fatalf("cache connection = %+v", cfg.Server.Cache)
+	}
+	serverConfig, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(serverConfig), "database-secret") || strings.Contains(string(serverConfig), "cache-secret") {
+		t.Fatal("connection credentials were written to server.yml")
+	}
+	secrets, err := os.ReadFile(filepath.Join(filepath.Dir(path), "secrets.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(secrets), "database-secret") || !strings.Contains(string(secrets), "cache-secret") {
+		t.Fatal("connection credentials were not saved in secrets.yml")
+	}
+}
+
+func TestConnectionURLsAndEnvironmentReferences(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{"redis://cache.example.test:6379/0", false},
+		{"redis://:secret@cache.example.test:6379/0", true},
+		{"redis://secret@cache.example.test:6379/0", true},
+		{"libsql://db.example.test?authToken=secret", true},
+		{"libsql://db.example.test?authToken=", false},
+	} {
+		if got := connectionURLHasCredentials(test.value); got != test.want {
+			t.Errorf("connectionURLHasCredentials(%q) = %t, want %t", test.value, got, test.want)
+		}
+	}
+	t.Setenv("CONNECTION_TEST_SECRET", "resolved")
+	expanded := map[string]any{"server": map[string]any{"database": map[string]any{"url": "${CONNECTION_TEST_SECRET}", "fallback": "${UNSET_CONNECTION_TEST:-fallback}"}}}
+	expandEnvironmentReferences(expanded)
+	if got, _ := getConfigPath(expanded, []string{"server", "database", "url"}); got != "resolved" {
+		t.Fatalf("expanded database URL = %v, want resolved", got)
+	}
+	if got, _ := getConfigPath(expanded, []string{"server", "database", "fallback"}); got != "fallback" {
+		t.Fatalf("expanded fallback = %v, want fallback", got)
+	}
+	redacted := RedactConnectionURL("rediss://user:secret@cache.example.test:6379/2?token=query-secret")
+	if strings.Contains(redacted, "secret") || strings.Contains(redacted, "query-secret") {
+		t.Fatalf("connection URL was not redacted: %s", redacted)
+	}
+}
+
+func TestSavedConnectionIgnoresEnvironmentAfterFirstRun(t *testing.T) {
+	path := filepath.Join(projectTestDir(t), "server.yml")
+	if err := os.WriteFile(path, []byte("server:\n  database:\n    driver: sqlite\n    url: file:./data.db\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DATABASE_URL", "libsql://ignored.example.test?authToken=ignored")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Server.Database.Driver != "sqlite" || cfg.Server.Database.URL != "file:./data.db" {
+		t.Fatalf("saved database connection was overwritten: %+v", cfg.Server.Database)
+	}
+}
+
+func TestDatabaseCacheSettingsDefaultsAndLoad(t *testing.T) {
+	poolDefaults := DefaultConfig().Server.Database.Pool
+	if poolDefaults.MaxOpen != 5 || poolDefaults.MaxIdle != 2 || poolDefaults.MaxLifetime != "5m" || poolDefaults.MaxIdleTime != "1m" {
+		t.Fatalf("database pool defaults = %+v", poolDefaults)
+	}
+	defaults := DefaultConfig().Server.Database.Cache
+	if defaults.SyncInterval != "30s" || defaults.MaxAge != "1h" || !defaults.OfflineMode || defaults.Enabled {
+		t.Fatalf("database cache defaults = %+v", defaults)
+	}
+	configuration := DefaultConfig()
+	if err := yaml.Unmarshal([]byte("server:\n  database:\n    driver: libsql\n    url: libsql://db.example.test\n    pool:\n      max_open: 12\n      max_idle: 7\n      max_lifetime: 10m\n      max_idle_time: 2m\n    cache:\n      enabled: true\n      path: /tmp/cache.db\n      sync_interval: 45s\n      offline_mode: false\n      max_age: 2h\n"), configuration); err != nil {
+		t.Fatal(err)
+	}
+	if err := validate(configuration); err != nil {
+		t.Fatal(err)
+	}
+	cache := configuration.Server.Database.Cache
+	pool := configuration.Server.Database.Pool
+	if pool.MaxOpen != 12 || pool.MaxIdle != 7 || pool.MaxLifetime != "10m" || pool.MaxIdleTime != "2m" {
+		t.Fatalf("database pool settings = %+v", pool)
+	}
+	if !cache.Enabled || cache.Path != "/tmp/cache.db" || cache.SyncInterval != "45s" || cache.OfflineMode || cache.MaxAge != "2h" {
+		t.Fatalf("database cache settings = %+v", cache)
+	}
+	configuration.Server.Database.Pool.MaxOpen = 4
+	configuration.Server.Database.Pool.MaxIdle = 9
+	configuration.Server.Database.Pool.MaxLifetime = "invalid"
+	configuration.Server.Database.Pool.MaxIdleTime = "0s"
+	if err := validate(configuration); err != nil {
+		t.Fatal(err)
+	}
+	pool = configuration.Server.Database.Pool
+	if pool.MaxOpen != 4 || pool.MaxIdle != 4 || pool.MaxLifetime != "5m" || pool.MaxIdleTime != "1m" {
+		t.Fatalf("invalid database pool settings were not normalized: %+v", pool)
+	}
+}
+
+func TestLoad_BrandingPageContent(t *testing.T) {
+	directory := projectTestDir(t)
+	configPath := filepath.Join(directory, "server.yml")
+	if err := os.WriteFile(configPath, []byte("server: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	brandingDirectory := filepath.Join(directory, "yaml.d")
+	if err := os.Mkdir(brandingDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	branding := "server:\n  branding:\n    content:\n      about:\n        format: md\n        body:\n          default: Default text\n          fr: Texte français\n      terms:\n        format: txt\n        body: Terms text\n"
+	if err := os.WriteFile(filepath.Join(brandingDirectory, "branding.yml"), []byte(branding), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadMergedConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Branding.Content.About.Format != "md" {
+		t.Fatalf("about format = %q, want md", cfg.Server.Branding.Content.About.Format)
+	}
+	localized, ok := cfg.Server.Branding.Content.About.Body.(map[string]any)
+	if !ok || localized["fr"] != "Texte français" || localized["default"] != "Default text" {
+		t.Fatalf("localized about body = %#v", cfg.Server.Branding.Content.About.Body)
+	}
+	if cfg.Server.Branding.Content.Terms.Body != "Terms text" || cfg.Server.Branding.Content.Terms.Format != "txt" {
+		t.Fatalf("terms content = %+v", cfg.Server.Branding.Content.Terms)
+	}
 }
 
 // TestLoad_CreatesDefaultWhenMissing verifies Load writes a default config
 // file when none exists yet, and that it can be read back.
 func TestLoad_CreatesDefaultWhenMissing(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	path := filepath.Join(tmp, "config.yml")
 
 	cfg, err := Load(path)
@@ -65,11 +487,11 @@ func TestLoad_CreatesDefaultWhenMissing(t *testing.T) {
 // TestLoad_ExistingOverridesDefaults verifies a partial YAML file on disk
 // overrides only the fields it sets, with defaults filling the rest.
 func TestLoad_ExistingOverridesDefaults(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	path := filepath.Join(tmp, "config.yml")
 
 	yamlContent := "server:\n  address: \"127.0.0.1\"\n"
-	if err := os.WriteFile(path, []byte(yamlContent), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(yamlContent), 0o644); err != nil {
 		t.Fatalf("failed to seed config file: %v", err)
 	}
 
@@ -91,10 +513,10 @@ func TestLoad_ExistingOverridesDefaults(t *testing.T) {
 
 // TestLoad_InvalidYAML verifies malformed YAML is ignored and defaults remain usable.
 func TestLoad_InvalidYAML(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	path := filepath.Join(tmp, "config.yml")
 
-	if err := os.WriteFile(path, []byte("server: [this is not valid: yaml"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("server: [this is not valid: yaml"), 0o644); err != nil {
 		t.Fatalf("failed to seed config file: %v", err)
 	}
 
@@ -108,7 +530,7 @@ func TestLoad_InvalidYAML(t *testing.T) {
 }
 
 func TestLoad_UnknownSetting(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	path := filepath.Join(tmp, "server.yml")
 	if err := os.WriteFile(path, []byte("server:\n  misspelled: true\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -119,7 +541,7 @@ func TestLoad_UnknownSetting(t *testing.T) {
 }
 
 func TestSaveSMTPDetectionPersistsRelayToNotificationsArea(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "server.yml")
+	path := filepath.Join(projectTestDir(t), "server.yml")
 	if _, err := Load(path); err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +569,7 @@ func TestSaveSMTPDetectionPersistsRelayToNotificationsArea(t *testing.T) {
 }
 
 func TestLoad_InvalidSetting(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	path := filepath.Join(tmp, "server.yml")
 	if err := os.WriteFile(path, []byte("server:\n  port: \"70000\"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -161,14 +583,54 @@ func TestLoad_InvalidSetting(t *testing.T) {
 	}
 }
 
+func TestValidPort(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		valid bool
+	}{
+		{"8080", true},
+		{"80,443", true},
+		{" 8090 , 8443 ", true},
+		{"", false},
+		{"0", false},
+		{"65536", false},
+		{"80,", false},
+		{",443", false},
+		{"80,443,8443", false},
+		{"80,https", false},
+	} {
+		if got := validPort(test.value); got != test.valid {
+			t.Errorf("validPort(%q) = %t, want %t", test.value, got, test.valid)
+		}
+	}
+}
+
+func TestLoad_SSLConfiguration(t *testing.T) {
+	path := filepath.Join(projectTestDir(t), "server.yml")
+	contents := "server:\n  port: \"8080,8443\"\n  ssl:\n    enabled: true\n    min_version: TLS1.3\n    letsencrypt:\n      enabled: true\n      challenge: tls-alpn-01\n"
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Server.Port != "8080,8443" || !cfg.Server.SSL.Enabled || cfg.Server.SSL.MinVersion != "TLS1.3" {
+		t.Fatalf("SSL listener configuration was not loaded: port=%q ssl=%+v", cfg.Server.Port, cfg.Server.SSL)
+	}
+	if !cfg.Server.SSL.LetsEncrypt.Enabled || cfg.Server.SSL.LetsEncrypt.Challenge != "tls-alpn-01" {
+		t.Fatalf("Let's Encrypt configuration was not loaded: %+v", cfg.Server.SSL.LetsEncrypt)
+	}
+}
+
 // TestMigrateYamlToYml verifies a legacy .yaml sibling is renamed to .yml
 // when the .yml target does not already exist, and left alone otherwise.
 func TestMigrateYamlToYml(t *testing.T) {
 	t.Run("renames when yml missing", func(t *testing.T) {
-		tmp := t.TempDir()
+		tmp := projectTestDir(t)
 		ymlPath := filepath.Join(tmp, "config.yml")
 		yamlPath := filepath.Join(tmp, "config.yaml")
-		if err := os.WriteFile(yamlPath, []byte("server:\n  address: \"1.2.3.4\"\n"), 0644); err != nil {
+		if err := os.WriteFile(yamlPath, []byte("server:\n  address: \"1.2.3.4\"\n"), 0o644); err != nil {
 			t.Fatalf("failed to seed .yaml file: %v", err)
 		}
 
@@ -183,13 +645,13 @@ func TestMigrateYamlToYml(t *testing.T) {
 	})
 
 	t.Run("no-op when yml already exists", func(t *testing.T) {
-		tmp := t.TempDir()
+		tmp := projectTestDir(t)
 		ymlPath := filepath.Join(tmp, "config.yml")
 		yamlPath := filepath.Join(tmp, "config.yaml")
-		if err := os.WriteFile(ymlPath, []byte("existing yml\n"), 0644); err != nil {
+		if err := os.WriteFile(ymlPath, []byte("existing yml\n"), 0o644); err != nil {
 			t.Fatalf("failed to seed .yml file: %v", err)
 		}
-		if err := os.WriteFile(yamlPath, []byte("legacy yaml\n"), 0644); err != nil {
+		if err := os.WriteFile(yamlPath, []byte("legacy yaml\n"), 0o644); err != nil {
 			t.Fatalf("failed to seed .yaml file: %v", err)
 		}
 
@@ -205,7 +667,7 @@ func TestMigrateYamlToYml(t *testing.T) {
 	})
 
 	t.Run("no-op for non-.yml path", func(t *testing.T) {
-		tmp := t.TempDir()
+		tmp := projectTestDir(t)
 		path := filepath.Join(tmp, "config.json")
 		// Should simply not panic or do anything for a non-.yml path.
 		migrateYamlToYml(path)
@@ -213,9 +675,9 @@ func TestMigrateYamlToYml(t *testing.T) {
 }
 
 func TestLoadGeneratesPrivateMetricsTokens(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	path := filepath.Join(tmp, "server.yml")
-	if err := os.WriteFile(path, []byte("server:\n  port: \"8080\"\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("server:\n  port: \"8080\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)
@@ -230,7 +692,7 @@ func TestLoadGeneratesPrivateMetricsTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat secrets.yml: %v", err)
 	}
-	if info.Mode().Perm() != 0600 {
+	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("secrets.yml mode = %04o, want 0600", info.Mode().Perm())
 	}
 }
@@ -238,7 +700,7 @@ func TestLoadGeneratesPrivateMetricsTokens(t *testing.T) {
 // TestSaveAndGet verifies the Save/Get round trip through the package-level
 // current config pointer.
 func TestSaveAndGet(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	path := filepath.Join(tmp, "config.yml")
 
 	loaded, err := Load(path)
@@ -379,10 +841,10 @@ func TestGenerateConfigYAML_ValidYAML(t *testing.T) {
 }
 
 func TestLoadMigratesAreaSettings(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	path := filepath.Join(tmp, "server.yml")
 	legacy := "server:\n  port: \"8080\"\n  update:\n    branch: beta\nweb:\n  ui:\n    theme: light\n  robots:\n    allow: [\"/\"]\n"
-	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)
@@ -414,9 +876,9 @@ func TestLoadMigratesAreaSettings(t *testing.T) {
 }
 
 func TestLoadMovesSecretsOutOfAreaFiles(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	path := filepath.Join(tmp, "server.yml")
-	if err := os.WriteFile(path, []byte("server:\n  token: xxxxx\n  mode: production\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("server:\n  token: xxxxx\n  mode: production\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err != nil {
@@ -433,13 +895,13 @@ func TestLoadMovesSecretsOutOfAreaFiles(t *testing.T) {
 			t.Errorf("secret remains in non-secret file %s", file)
 		}
 	}
-	if info, err := os.Stat(secretPath); err != nil || info.Mode().Perm() != 0600 {
+	if info, err := os.Stat(secretPath); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("secrets.yml mode/stat = %v, %v", info, err)
 	}
 }
 
 func TestSaveUpdateWritesMaintenanceArea(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	path := filepath.Join(tmp, "server.yml")
 	if _, err := Load(path); err != nil {
 		t.Fatal(err)

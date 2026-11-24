@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
-func TestHandlerQueryAndMutation(t *testing.T) {
+func TestHandlerQueryAndBuild(t *testing.T) {
 	handler := Handler()
 	query := `{"query":"query { types { type example } conventions { name } }"}`
 	recorder := httptest.NewRecorder()
@@ -27,14 +28,14 @@ func TestHandlerQueryAndMutation(t *testing.T) {
 		t.Fatalf("query result incomplete: %s", recorder.Body.String())
 	}
 
-	mutation := `{"query":"mutation Build($input: BuildMessageInput!) { buildMessage(input: $input) { message } }","variables":{"input":{"type":"feat","scope":"api","description":"add search"}}}`
+	build := `{"query":"query Build($input: BuildMessageInput!) { buildMessage(input: $input) { message } }","variables":{"input":{"type":"feat","scope":"api","description":"add search"}}}`
 	recorder = httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewBufferString(mutation)))
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewBufferString(build)))
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("mutation status = %d", recorder.Code)
+		t.Fatalf("build query status = %d", recorder.Code)
 	}
 	if !bytes.Contains(recorder.Body.Bytes(), []byte("feat(api): add search")) {
-		t.Fatalf("mutation response = %s", recorder.Body.String())
+		t.Fatalf("build query response = %s", recorder.Body.String())
 	}
 }
 
@@ -42,6 +43,7 @@ func TestHandlerRejectsMalformedRequests(t *testing.T) {
 	handler := Handler()
 	for _, request := range []struct{ method, body string }{
 		{http.MethodPost, "{"},
+		{http.MethodGet, ""},
 		{http.MethodPut, ""},
 	} {
 		recorder := httptest.NewRecorder()
@@ -61,6 +63,16 @@ func TestHandlerRejectsMalformedRequests(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewBufferString(`{"query":"query { notAField }"}`)))
 	if recorder.Code != http.StatusOK || !bytes.Contains(recorder.Body.Bytes(), []byte("errors")) {
 		t.Fatalf("GraphQL validation result: status %d, body %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestHandlerAcceptsNoJavaScriptFormSubmission(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader("query=%7B+types+%7B+type+%7D+%7D"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+	Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !bytes.Contains(recorder.Body.Bytes(), []byte(`"types"`)) {
+		t.Fatalf("form query returned %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
 

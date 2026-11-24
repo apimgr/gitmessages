@@ -41,7 +41,7 @@ func registerMetricsRoutes(mux *http.ServeMux, cfg config.MetricsConfig, exporte
 		mux.Handle(prefix+"/loki", loki)
 	}
 	mount("/server/metrics")
-	mount(apiBase + "/server/metrics")
+	mount(APIBasePath() + "/server/metrics")
 	mount("/api/metrics")
 	if cfg.Root.Enabled {
 		mount("/metrics")

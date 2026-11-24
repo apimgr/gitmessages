@@ -32,6 +32,15 @@ type Asset struct {
 }
 
 func Check(ctx context.Context, branch, current string, buildEpoch int64) (Release, bool, error) {
+	return CheckDeferred(ctx, branch, current, buildEpoch, 0, time.Now())
+}
+
+// CheckDeferred applies the scheduled-update age gate to stable and beta releases.
+// Devel releases use the build epoch and never use an age gate.
+func CheckDeferred(ctx context.Context, branch, current string, buildEpoch int64, deferDays int, now time.Time) (Release, bool, error) {
+	if deferDays < 0 {
+		deferDays = 0
+	}
 	client := &http.Client{Timeout: 15 * time.Second}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseAPI, nil)
 	if err != nil {
@@ -61,6 +70,9 @@ func Check(ctx context.Context, branch, current string, buildEpoch int64) (Relea
 	for index := range releases {
 		candidate := &releases[index]
 		if !eligible(candidate, branch) {
+			continue
+		}
+		if branch != "devel" && deferDays > 0 && now.Sub(candidate.PublishedAt) < time.Duration(deferDays)*24*time.Hour {
 			continue
 		}
 		if branch == "devel" {

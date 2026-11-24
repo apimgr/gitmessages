@@ -533,6 +533,7 @@ func validateLinks(values []string, max int, ownHost string) error {
 	}
 	return nil
 }
+
 func allowedHost(host, ownHost string) bool {
 	if parsed, err := url.Parse("https://" + ownHost); err == nil && parsed.Hostname() != "" {
 		ownHost = parsed.Hostname()
@@ -689,6 +690,7 @@ func duplicateKey(input Message) string {
 	sum := sha256.Sum256([]byte(normalizedText(input.Email) + "\x00" + normalizedText(input.Subject) + "\x00" + normalizedText(input.Body)))
 	return hex.EncodeToString(sum[:])
 }
+
 func contactBody(in Message) string {
 	fields := map[string]string{}
 	for key, value := range in.Fields {

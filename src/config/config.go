@@ -7,14 +7,20 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"net/mail"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/apimgr/gitmessages/src/common/i18n"
+	"golang.org/x/text/language"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,16 +28,25 @@ import (
 type Config struct {
 	Server ServerConfig `yaml:"server"`
 	Web    WebConfig    `yaml:"web"`
+	Data   DataConfig   `yaml:"data"`
 }
+
+// DefaultAPIVersion is the canonical API prefix used when no version is configured.
+const DefaultAPIVersion = "v1"
 
 // ServerConfig contains server-related settings
 type ServerConfig struct {
 	Port           string               `yaml:"port"`
+	APIVersion     string               `yaml:"api_version"`
+	SSL            SSLConfig            `yaml:"ssl"`
+	Database       DatabaseConfig       `yaml:"database"`
+	Cache          CacheConfig          `yaml:"cache"`
 	Token          string               `yaml:"token"`
 	FQDN           string               `yaml:"fqdn"`
 	Address        string               `yaml:"address"`
 	Mode           string               `yaml:"mode"`
 	Update         UpdateConfig         `yaml:"update"`
+	CLI            CLIConfig            `yaml:"cli"`
 	CORS           CORSConfig           `yaml:"cors"`
 	Metrics        MetricsConfig        `yaml:"metrics"`
 	Logging        LoggingConfig        `yaml:"logs"`
@@ -39,14 +54,170 @@ type ServerConfig struct {
 	I2P            I2PConfig            `yaml:"i2p"`
 	Contact        ContactConfig        `yaml:"contact"`
 	Notifications  NotificationsConfig  `yaml:"notifications"`
+	I18N           I18NConfig           `yaml:"i18n"`
 	Security       SecurityConfig       `yaml:"security"`
+	GeoIP          GeoIPConfig          `yaml:"geoip"`
+	Scheduler      SchedulerConfig      `yaml:"scheduler"`
+	Backup         BackupConfig         `yaml:"backup"`
+	Restore        RestoreConfig        `yaml:"restore"`
+	Compliance     ComplianceConfig     `yaml:"compliance"`
 	Tokens         TokenConfig          `yaml:"tokens"`
 	Pages          PagesConfig          `yaml:"pages"`
 	BaseURL        string               `yaml:"baseurl"`
 	TrustedProxies TrustedProxiesConfig `yaml:"trusted_proxies"`
 	RateLimit      RateLimitConfig      `yaml:"rate_limit"`
 	Privacy        PrivacyConfig        `yaml:"privacy"`
+	Branding       BrandingConfig       `yaml:"branding"`
+	SEO            SEOConfig            `yaml:"seo"`
+	Healthz        HealthzConfig        `yaml:"healthz"`
 	URLDetection   URLDetectionConfig   `yaml:"url_detection"`
+}
+
+type DatabaseConfig struct {
+	Driver string                   `yaml:"driver"`
+	URL    string                   `yaml:"url"`
+	Token  string                   `yaml:"token"`
+	Pool   DatabasePoolConfig       `yaml:"pool"`
+	Cache  LocalDatabaseCacheConfig `yaml:"cache"`
+}
+
+type DatabasePoolConfig struct {
+	MaxOpen     int    `yaml:"max_open"`
+	MaxIdle     int    `yaml:"max_idle"`
+	MaxLifetime string `yaml:"max_lifetime"`
+	MaxIdleTime string `yaml:"max_idle_time"`
+}
+
+type LocalDatabaseCacheConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	Path         string `yaml:"path"`
+	SyncInterval string `yaml:"sync_interval"`
+	OfflineMode  bool   `yaml:"offline_mode"`
+	MaxAge       string `yaml:"max_age"`
+}
+
+type CacheConfig struct {
+	Type          string `yaml:"type"`
+	URL           string `yaml:"url"`
+	Host          string `yaml:"host"`
+	Port          int    `yaml:"port"`
+	Username      string `yaml:"username"`
+	Password      string `yaml:"password"`
+	DB            int    `yaml:"db"`
+	TLS           bool   `yaml:"tls"`
+	TLSSkipVerify bool   `yaml:"tls_skip_verify"`
+	TLSCA         string `yaml:"tls_ca"`
+	TLSCert       string `yaml:"tls_cert"`
+	TLSKey        string `yaml:"tls_key"`
+	PoolSize      int    `yaml:"pool_size"`
+	MinIdle       int    `yaml:"min_idle"`
+	Timeout       string `yaml:"timeout"`
+	Prefix        string `yaml:"prefix"`
+	TTL           string `yaml:"ttl"`
+}
+
+type SSLConfig struct {
+	Enabled     bool              `yaml:"enabled"`
+	Cert        string            `yaml:"cert"`
+	Key         string            `yaml:"key"`
+	MinVersion  string            `yaml:"min_version"`
+	LetsEncrypt LetsEncryptConfig `yaml:"letsencrypt"`
+}
+
+type LetsEncryptConfig struct {
+	Enabled        bool              `yaml:"enabled"`
+	Email          string            `yaml:"email"`
+	Challenge      string            `yaml:"challenge"`
+	Staging        bool              `yaml:"staging"`
+	DNSProvider    string            `yaml:"dns_provider"`
+	DNSCredentials map[string]string `yaml:"dns_credentials"`
+}
+
+type HealthzConfig struct {
+	Root HealthzRootConfig `yaml:"root"`
+}
+
+type HealthzRootConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+// BrandingConfig contains operator-provided public page content.
+type BrandingConfig struct {
+	Title       string                `yaml:"title"`
+	Tagline     string                `yaml:"tagline"`
+	Description string                `yaml:"description"`
+	Favicon     string                `yaml:"favicon"`
+	Logo        string                `yaml:"logo"`
+	Content     BrandingContentConfig `yaml:"content"`
+}
+
+type SEOConfig struct {
+	Keywords       []string              `yaml:"keywords"`
+	Author         string                `yaml:"author"`
+	OGImage        string                `yaml:"og_image"`
+	TwitterHandle  string                `yaml:"twitter_handle"`
+	TitleSeparator string                `yaml:"title_separator"`
+	MetaTags       map[string]string     `yaml:"meta_tags"`
+	Canonical      string                `yaml:"canonical"`
+	NoIndex        bool                  `yaml:"noindex"`
+	OpenGraph      SEOOpenGraphConfig    `yaml:"opengraph"`
+	Twitter        SEOTwitterConfig      `yaml:"twitter"`
+	Verification   SEOVerificationConfig `yaml:"verification"`
+	Sitemap        SitemapConfig         `yaml:"sitemap"`
+	Feed           FeedConfig            `yaml:"feed"`
+}
+
+type SEOOpenGraphConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Type     string `yaml:"type"`
+	SiteName string `yaml:"site_name"`
+}
+
+type SEOTwitterConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Card    string `yaml:"card"`
+	Creator string `yaml:"creator"`
+}
+
+type SEOVerificationConfig struct {
+	Google    string                `yaml:"google"`
+	Bing      string                `yaml:"bing"`
+	Yandex    string                `yaml:"yandex"`
+	Baidu     string                `yaml:"baidu"`
+	Pinterest string                `yaml:"pinterest"`
+	Facebook  string                `yaml:"facebook"`
+	Custom    []SEOCustomMetaConfig `yaml:"custom"`
+}
+
+type SEOCustomMetaConfig struct {
+	Name     string `yaml:"name"`
+	Property string `yaml:"property"`
+	Content  string `yaml:"content"`
+}
+
+type SitemapConfig struct {
+	MaxURLs       int  `yaml:"max_urls"`
+	IncludeImages bool `yaml:"include_images"`
+}
+
+type FeedConfig struct {
+	MaxItems int    `yaml:"max_items"`
+	Title    string `yaml:"title"`
+}
+
+// BrandingContentConfig contains optional public page fragments.
+type BrandingContentConfig struct {
+	Header  OperatorContent `yaml:"header"`
+	About   OperatorContent `yaml:"about"`
+	Privacy OperatorContent `yaml:"privacy"`
+	Footer  OperatorContent `yaml:"footer"`
+	Terms   OperatorContent `yaml:"terms"`
+}
+
+// OperatorContent stores a format and either a shared body or language map.
+type OperatorContent struct {
+	Format string `yaml:"format"`
+	Body   any    `yaml:"body"`
 }
 
 type URLDetectionConfig struct {
@@ -58,12 +229,106 @@ type URLDetectionConfig struct {
 }
 
 type PrivacyConfig struct {
-	Data PrivacyDataConfig `yaml:"data"`
+	Data       PrivacyDataConfig       `yaml:"data"`
+	Retention  PrivacyRetentionConfig  `yaml:"retention"`
+	Consent    PrivacyConsentConfig    `yaml:"consent"`
+	Cookies    PrivacyCookiesConfig    `yaml:"cookies"`
+	ThirdParty PrivacyThirdPartyConfig `yaml:"third_party"`
 }
 
 type PrivacyDataConfig struct {
-	Sold bool `yaml:"sold"`
+	Sold           bool                   `yaml:"sold"`
+	StoredOnServer bool                   `yaml:"stored_on_server"`
+	Sharing        []PrivacySharingConfig `yaml:"sharing"`
 }
+
+type PrivacySharingConfig struct {
+	Condition string `yaml:"condition"`
+	When      string `yaml:"when"`
+	Data      string `yaml:"data"`
+}
+
+type PrivacyRetentionConfig struct {
+	Period            string `yaml:"period"`
+	ExportAvailable   bool   `yaml:"export_available"`
+	DeletionAvailable bool   `yaml:"deletion_available"`
+}
+
+type PrivacyConsentConfig struct {
+	ShowUntilAcknowledged bool   `yaml:"show_until_acknowledged"`
+	Message               string `yaml:"message"`
+	MessageIfSold         string `yaml:"message_if_sold"`
+	Policy                struct {
+		Text string `yaml:"text"`
+		URL  string `yaml:"url"`
+	} `yaml:"policy"`
+	Buttons struct {
+		Decline string `yaml:"decline"`
+		Accept  string `yaml:"accept"`
+	} `yaml:"buttons"`
+	Position        string `yaml:"position"`
+	ShowPreferences bool   `yaml:"show_preferences"`
+	PreferencesText string `yaml:"preferences_text"`
+}
+
+type PrivacyCookieCategory struct {
+	Enabled     bool   `yaml:"enabled"`
+	Description string `yaml:"description"`
+}
+
+type PrivacyAnalyticsCookie struct {
+	PrivacyCookieCategory    `yaml:",inline"`
+	DescriptionSuffixNotSold string `yaml:"description_suffix_not_sold"`
+	DescriptionSuffixSold    string `yaml:"description_suffix_sold"`
+}
+
+type PrivacyCookiesConfig struct {
+	Essential   PrivacyCookieCategory  `yaml:"essential"`
+	Preferences PrivacyCookieCategory  `yaml:"preferences"`
+	Analytics   PrivacyAnalyticsCookie `yaml:"analytics"`
+}
+
+type PrivacyThirdPartyConfig struct {
+	Services []PrivacyThirdPartyService `yaml:"services"`
+}
+
+type PrivacyThirdPartyService struct {
+	Name      string `yaml:"name"`
+	Purpose   string `yaml:"purpose"`
+	DataSent  string `yaml:"data_sent"`
+	PolicyURL string `yaml:"policy_url"`
+}
+
+func (p PrivacyConfig) GetConsentMessage() string {
+	if p.Data.Sold {
+		return p.Consent.MessageIfSold
+	}
+	return p.Consent.Message
+}
+
+func (p PrivacyConfig) GetAnalyticsDescription() string {
+	base, suffix := p.Cookies.Analytics.Description, p.Cookies.Analytics.DescriptionSuffixNotSold
+	if p.Data.Sold {
+		suffix = p.Cookies.Analytics.DescriptionSuffixSold
+	}
+	return strings.TrimSpace(base + " " + suffix)
+}
+
+func (p PrivacyConfig) GetDataUsageContent() string {
+	if p.Data.Sold {
+		return textDataUsageIfSold
+	}
+	return textDataUsage
+}
+
+func (p PrivacyConfig) IsCCPAApplicable() bool { return p.Data.Sold }
+
+const (
+	textDataCollection  = "The catalog is embedded in the application and is not submitted by visitors. The service processes request metadata for operation and abuse prevention. Contact and security reports contain the information the sender provides."
+	textDataUsage       = "Data is used to provide the service, protect it from abuse, and respond to reports. This service does not sell personal data or use it for targeted advertising."
+	textDataUsageIfSold = "Data is used to provide the service, protect it from abuse, and respond to reports. Personal data may be shared or sold as described in the configured sharing policy."
+	textDataSecurity    = "The service applies access controls and security protections to operational state and report data. Operators should use HTTPS, protect configuration and key material, and keep the server software current."
+)
 
 type TrustedProxiesConfig struct {
 	Additional     []string `yaml:"additional"`
@@ -134,13 +399,28 @@ type ContactAntispamConfig struct {
 }
 
 type NotificationsConfig struct {
-	Email EmailNotificationConfig `yaml:"email"`
+	Email   EmailNotificationConfig   `yaml:"email"`
+	DiskLow DiskLowNotificationConfig `yaml:"disk_low"`
+}
+
+type DiskLowNotificationConfig struct {
+	Enabled          bool   `yaml:"enabled"`
+	ThresholdPercent int    `yaml:"threshold_percent"`
+	CheckInterval    string `yaml:"check_interval"`
+	Repeat           string `yaml:"repeat"`
 }
 
 type EmailNotificationConfig struct {
 	Enabled bool            `yaml:"enabled"`
 	SMTP    SMTPConfig      `yaml:"smtp"`
 	From    EmailFromConfig `yaml:"from"`
+	ReplyTo string          `yaml:"reply_to"`
+	Events  map[string]bool `yaml:"events"`
+}
+
+type I18NConfig struct {
+	DefaultLanguage    string   `yaml:"default_language"`
+	AvailableLanguages []string `yaml:"available_languages"`
 }
 
 type SMTPConfig struct {
@@ -151,13 +431,170 @@ type SMTPConfig struct {
 	TLS      string `yaml:"tls"`
 }
 
+func (s *SMTPConfig) UnmarshalYAML(node *yaml.Node) error {
+	var raw struct {
+		Host     string `yaml:"host"`
+		Port     any    `yaml:"port"`
+		Username string `yaml:"username"`
+		Password string `yaml:"password"`
+		TLS      string `yaml:"tls"`
+	}
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	tlsMode := raw.TLS
+	if tlsMode == "" {
+		tlsMode = "auto"
+	}
+	*s = SMTPConfig{Host: raw.Host, Port: 587, Username: raw.Username, Password: raw.Password, TLS: tlsMode}
+	if raw.Port != nil {
+		port, err := strconv.Atoi(strings.TrimSpace(fmt.Sprint(raw.Port)))
+		if err != nil || port < 1 || port > 65535 {
+			warnInvalid("server.notifications.email.smtp.port")
+		} else {
+			s.Port = port
+		}
+	}
+	return nil
+}
+
 type EmailFromConfig struct {
 	Name  string `yaml:"name"`
 	Email string `yaml:"email"`
 }
 
 type SecurityConfig struct {
-	EncryptionKey string `yaml:"encryption_key"`
+	EncryptionKey string                `yaml:"encryption_key"`
+	Reports       SecurityReportsConfig `yaml:"reports"`
+	Allowlist     []AllowlistEntry      `yaml:"allowlist"`
+	BlockedIPs    []BlockedIPEntry      `yaml:"blocked_ips"`
+	Blocklists    BlocklistsConfig      `yaml:"blocklists"`
+}
+
+type SecurityReportsConfig struct {
+	RetentionDays int `yaml:"retention_days"`
+}
+
+type AllowlistEntry struct {
+	CIDR        string `yaml:"cidr" json:"cidr"`
+	Description string `yaml:"description" json:"description"`
+}
+
+type BlockedIPEntry struct {
+	CIDR   string `yaml:"cidr" json:"cidr"`
+	Reason string `yaml:"reason" json:"reason"`
+}
+
+type BlocklistsConfig struct {
+	Enabled      bool                    `yaml:"enabled"`
+	ExtraSources []BlocklistSourceConfig `yaml:"extra_sources"`
+}
+
+type BlocklistSourceConfig struct {
+	ID         string `yaml:"id"`
+	Type       string `yaml:"type"`
+	URL        string `yaml:"url"`
+	Enabled    bool   `yaml:"enabled"`
+	enabledSet bool
+}
+
+func (source *BlocklistSourceConfig) UnmarshalYAML(node *yaml.Node) error {
+	type plain BlocklistSourceConfig
+	var decoded plain
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*source = BlocklistSourceConfig(decoded)
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index].Value == "enabled" {
+			source.enabledSet = true
+			break
+		}
+	}
+	return nil
+}
+
+type GeoIPConfig struct {
+	Enabled        bool                `yaml:"enabled"`
+	DenyCountries  []string            `yaml:"deny_countries"`
+	AllowCountries []string            `yaml:"allow_countries"`
+	Presets        map[string][]string `yaml:"presets"`
+}
+
+type SchedulerConfig struct {
+	Timezone      string                         `yaml:"timezone"`
+	CatchUpWindow string                         `yaml:"catch_up_window"`
+	Tasks         map[string]ScheduledTaskConfig `yaml:"tasks"`
+}
+
+type ScheduledTaskConfig struct {
+	Enabled     bool                  `yaml:"enabled"`
+	Schedule    string                `yaml:"schedule"`
+	RetryOnFail bool                  `yaml:"retry_on_fail"`
+	RetryDelay  string                `yaml:"retry_delay"`
+	Retention   BackupRetentionConfig `yaml:"retention"`
+}
+
+type BackupConfig struct {
+	Encryption         BackupEncryptionConfig `yaml:"encryption"`
+	EncryptionPassword string                 `yaml:"encryption_password"`
+	Retention          BackupRetentionConfig  `yaml:"retention"`
+	DiskThreshold      int                    `yaml:"disk_threshold"`
+}
+
+type BackupEncryptionConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+type BackupRetentionConfig struct {
+	MaxBackups   int    `yaml:"max_backups"`
+	KeepWeekly   int    `yaml:"keep_weekly"`
+	KeepMonthly  int    `yaml:"keep_monthly"`
+	KeepYearly   int    `yaml:"keep_yearly"`
+	MaxTotalSize string `yaml:"max_total_size"`
+}
+
+type RestoreConfig struct {
+	MaxArchiveSize  string `yaml:"max_archive_size"`
+	MaxExpandedSize string `yaml:"max_expanded_size"`
+	MaxFiles        int    `yaml:"max_files"`
+	MaxFileSize     string `yaml:"max_file_size"`
+	MaxRatio        int    `yaml:"max_ratio"`
+}
+
+type ComplianceConfig struct {
+	GDPR     bool `yaml:"gdpr"`
+	CCPA     bool `yaml:"ccpa"`
+	HIPAA    bool `yaml:"hipaa"`
+	SOC2     bool `yaml:"soc2"`
+	PCIDSS   bool `yaml:"pci_dss"`
+	ISO27001 bool `yaml:"iso27001"`
+	FedRAMP  bool `yaml:"fedramp"`
+	LGPD     bool `yaml:"lgpd"`
+	PIPEDA   bool `yaml:"pipeda"`
+	APPI     bool `yaml:"appi"`
+	PDPA     bool `yaml:"pdpa"`
+}
+
+func (c ComplianceConfig) AnyEnabled() bool {
+	return c.GDPR || c.CCPA || c.HIPAA || c.SOC2 || c.PCIDSS || c.ISO27001 || c.FedRAMP || c.LGPD || c.PIPEDA || c.APPI || c.PDPA
+}
+
+type DataConfig struct {
+	SecurityDir string      `yaml:"security_dir"`
+	CVE         CVEConfig   `yaml:"cve"`
+	Trivy       TrivyConfig `yaml:"trivy"`
+}
+
+type CVEConfig struct {
+	Source      string `yaml:"source"`
+	FilterByCPE bool   `yaml:"filter_by_cpe"`
+	APIKey      string `yaml:"api_key"`
+}
+
+type TrivyConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Source  string `yaml:"source"`
 }
 
 type TokenConfig struct {
@@ -171,6 +608,15 @@ type UpdateConfig struct {
 	AutoInstall   bool   `yaml:"auto_install"`
 	DeferDays     int    `yaml:"defer_days"`
 	CLIMinVersion string `yaml:"cli_min_version"`
+}
+
+type CLIConfig struct {
+	BinaryDownload CLIBinaryDownloadConfig `yaml:"binary_download"`
+}
+
+type CLIBinaryDownloadConfig struct {
+	Dir         string `yaml:"dir"`
+	RequireAuth bool   `yaml:"require_auth"`
 }
 
 type TorConfig struct {
@@ -240,8 +686,33 @@ type MetricsLokiConfig struct {
 
 // LoggingConfig contains logging settings
 type LoggingConfig struct {
-	AccessFormat string `yaml:"access_format"`
-	Level        string `yaml:"level"`
+	AccessFormat string            `yaml:"access_format"`
+	Level        string            `yaml:"level"`
+	Defaults     LogDefaultsConfig `yaml:"defaults"`
+	Access       LogKindConfig     `yaml:"access"`
+	Server       LogKindConfig     `yaml:"server"`
+	Error        LogKindConfig     `yaml:"error"`
+	App          LogKindConfig     `yaml:"app"`
+	Auth         LogKindConfig     `yaml:"auth"`
+	Audit        LogKindConfig     `yaml:"audit"`
+	Security     LogKindConfig     `yaml:"security"`
+	Debug        LogKindConfig     `yaml:"debug"`
+}
+
+type LogDefaultsConfig struct {
+	Custom string `yaml:"custom"`
+	Rotate string `yaml:"rotate"`
+	Keep   string `yaml:"keep"`
+}
+
+type LogKindConfig struct {
+	Enabled  bool            `yaml:"enabled"`
+	Filename string          `yaml:"filename"`
+	Format   string          `yaml:"format"`
+	Rotate   string          `yaml:"rotate"`
+	Keep     string          `yaml:"keep"`
+	Compress bool            `yaml:"compress"`
+	Events   map[string]bool `yaml:"events"`
 }
 
 // WebUIConfig contains web UI settings
@@ -286,11 +757,32 @@ var (
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Port:    initialPort(),
-			FQDN:    "",
-			Address: initialAddress(),
-			Mode:    "production",
-			Tokens:  TokenConfig{MaxLinked: 25, CookieMaxAge: "1y", IdlePurgeDays: 0},
+			Port:       initialPort(),
+			APIVersion: DefaultAPIVersion,
+			SSL:        SSLConfig{MinVersion: "TLS1.2", LetsEncrypt: LetsEncryptConfig{Challenge: "http-01"}},
+			Database:   DatabaseConfig{Driver: "sqlite", Pool: DatabasePoolConfig{MaxOpen: 5, MaxIdle: 2, MaxLifetime: "5m", MaxIdleTime: "1m"}, Cache: LocalDatabaseCacheConfig{SyncInterval: "30s", OfflineMode: true, MaxAge: "1h"}},
+			Cache:      CacheConfig{Type: "memory", Host: "localhost", Port: 6379, TLSSkipVerify: true, PoolSize: 10, MinIdle: 2, Timeout: "5s", Prefix: "gitmessages:", TTL: "1h"},
+			FQDN:       "",
+			Address:    initialAddress(),
+			Mode:       "production",
+			Branding:   BrandingConfig{Title: "Git Messages"},
+			I18N:       I18NConfig{DefaultLanguage: "en", AvailableLanguages: []string{"en", "es", "fr", "de", "it", "ar"}},
+			SEO: SEOConfig{
+				TitleSeparator: " - ",
+				OpenGraph:      SEOOpenGraphConfig{Enabled: true, Type: "website"},
+				Twitter:        SEOTwitterConfig{Enabled: true, Card: "summary_large_image"},
+				Sitemap:        SitemapConfig{MaxURLs: 50000},
+				Feed:           FeedConfig{MaxItems: 50},
+			},
+			Tokens:    TokenConfig{MaxLinked: 25, CookieMaxAge: "1y", IdlePurgeDays: 0},
+			GeoIP:     GeoIPConfig{Enabled: true, DenyCountries: []string{}, AllowCountries: []string{}, Presets: map[string][]string{}},
+			Scheduler: defaultSchedulerConfig(),
+			Backup: BackupConfig{
+				Retention:     BackupRetentionConfig{MaxBackups: 1, MaxTotalSize: "10%"},
+				DiskThreshold: 90,
+			},
+			Restore:  RestoreConfig{MaxArchiveSize: "1G", MaxExpandedSize: "4G", MaxFiles: 10000, MaxFileSize: "512M", MaxRatio: 100},
+			Security: SecurityConfig{Reports: SecurityReportsConfig{RetentionDays: 365}, Blocklists: BlocklistsConfig{Enabled: true, ExtraSources: []BlocklistSourceConfig{}}},
 			RateLimit: RateLimitConfig{
 				Read:         RateLimitBucketConfig{Requests: 120, Window: 60},
 				Write:        RateLimitBucketConfig{Requests: 10, Window: 60},
@@ -298,7 +790,7 @@ func DefaultConfig() *Config {
 				Strict:       RateLimitBucketConfig{Requests: 10, Window: 900},
 				AuthFailures: RateLimitBucketConfig{Requests: 5, Window: 900}, GlobalBurst: 240,
 			},
-			Privacy:      PrivacyConfig{Data: PrivacyDataConfig{Sold: false}},
+			Privacy:      defaultPrivacyConfig(),
 			URLDetection: URLDetectionConfig{Learning: true, MinSamples: 3, SampleWindow: "5m", LogChanges: true, LiveReload: true},
 			Update:       UpdateConfig{Branch: "stable", AutoInstall: false, DeferDays: 0},
 			CORS:         CORSConfig{AllowedOrigins: []string{"*"}},
@@ -315,6 +807,15 @@ func DefaultConfig() *Config {
 			Logging: LoggingConfig{
 				AccessFormat: "apache",
 				Level:        "info",
+				Defaults:     LogDefaultsConfig{Rotate: "weekly,50MB", Keep: "none"},
+				Access:       LogKindConfig{Format: "apache", Rotate: "monthly"},
+				Server:       LogKindConfig{Format: "text"},
+				Error:        LogKindConfig{Format: "text"},
+				App:          LogKindConfig{Format: "logfmt"},
+				Auth:         LogKindConfig{Format: "syslog"},
+				Audit:        LogKindConfig{Enabled: true, Format: "json", Rotate: "daily"},
+				Security:     LogKindConfig{Format: "fail2ban"},
+				Debug:        LogKindConfig{Format: "text"},
 			},
 			Tor: TorConfig{
 				MaxCircuits: 32, StartupTimeout: 60, CircuitTimeout: 60, BootstrapTimeout: 180,
@@ -330,9 +831,18 @@ func DefaultConfig() *Config {
 			Contact: ContactConfig{
 				Security: ContactRecipientConfig{Email: ""},
 			},
-			Notifications: NotificationsConfig{Email: EmailNotificationConfig{
-				SMTP: SMTPConfig{Port: 587, TLS: "auto"},
-			}},
+			Notifications: NotificationsConfig{
+				Email: EmailNotificationConfig{
+					SMTP: SMTPConfig{Port: 587, TLS: "auto"},
+					Events: map[string]bool{
+						"startup": false, "shutdown": false, "backup_complete": false, "backup_failed": true,
+						"ssl_expiring": true, "ssl_renewed": false, "ssl_renewal_failed": true, "security_alert": true,
+						"scheduler_error": true, "update_available": false, "update_installed": true, "update_failed": true,
+						"update_staged": true, "database_error": true,
+					},
+				},
+				DiskLow: DiskLowNotificationConfig{Enabled: true, ThresholdPercent: 85, CheckInterval: "5m", Repeat: "24h"},
+			},
 			Pages: PagesConfig{Contact: ContactPageConfig{
 				Enabled: true, Captcha: "simple", SuccessMessage: "Thank you for your report.",
 				Antispam: ContactAntispamConfig{
@@ -343,6 +853,7 @@ func DefaultConfig() *Config {
 				},
 			}},
 		},
+		Data: DataConfig{CVE: CVEConfig{Source: "https://services.nvd.nist.gov/rest/json/cves/2.0"}, Trivy: TrivyConfig{Enabled: false, Source: "ghcr.io/aquasecurity/trivy-db:2"}},
 		Web: WebConfig{
 			UI: WebUIConfig{Theme: "dark", Accent: "#bd93f9"},
 			Robots: WebRobotsConfig{
@@ -352,6 +863,55 @@ func DefaultConfig() *Config {
 			Security: WebSecurityConfig{Contact: ""},
 		},
 	}
+}
+
+func defaultSchedulerConfig() SchedulerConfig {
+	return SchedulerConfig{
+		Timezone: "America/New_York", CatchUpWindow: "1h",
+		Tasks: map[string]ScheduledTaskConfig{
+			"ssl_renewal":      {Enabled: true, Schedule: "0 3 * * *"},
+			"geoip_update":     {Enabled: true, Schedule: "0 3 * * 0"},
+			"blocklist_update": {Enabled: true, Schedule: "0 4 * * *", RetryOnFail: true, RetryDelay: "1h"},
+			"security_cleanup": {Enabled: true, Schedule: "30 3 * * *"},
+			"cve_update":       {Enabled: true, Schedule: "0 5 * * *", RetryOnFail: true, RetryDelay: "1h"},
+			"update_check":     {Enabled: true, Schedule: "0 6 * * *"},
+			"token_cleanup":    {Enabled: true, Schedule: "@every 15m"},
+			"log_rotation":     {Enabled: true, Schedule: "0 0 * * *"},
+			"backup_daily":     {Enabled: true, Schedule: "0 2 * * *"},
+			"backup_hourly":    {Enabled: false, Schedule: "@hourly"},
+			"disk_check":       {Enabled: true, Schedule: "@every 5m"},
+			"healthcheck_self": {Enabled: true, Schedule: "@every 5m"},
+			"tor_health":       {Enabled: true, Schedule: "@every 10m"},
+			"i2p_health":       {Enabled: true, Schedule: "@every 10m"},
+		},
+	}
+}
+
+func defaultPrivacyConfig() PrivacyConfig {
+	privacy := PrivacyConfig{
+		Data: PrivacyDataConfig{
+			Sold: false, StoredOnServer: true,
+			Sharing: []PrivacySharingConfig{{Condition: "email", When: "A visitor submits a contact or security report and email delivery is configured", Data: "Sender email address and report content"}},
+		},
+		Retention: PrivacyRetentionConfig{Period: "The catalog is embedded in the application and is not visitor-submitted. Browser preferences are stored in cookies. Operational and report data is retained according to the server operator's configuration.", ExportAvailable: false, DeletionAvailable: false},
+		Cookies: PrivacyCookiesConfig{
+			Essential:   PrivacyCookieCategory{Enabled: true, Description: "Required for the site to function, including security tokens and the site build marker."},
+			Preferences: PrivacyCookieCategory{Enabled: true, Description: "Remember browser choices such as theme and language."},
+			Analytics:   PrivacyAnalyticsCookie{PrivacyCookieCategory: PrivacyCookieCategory{Enabled: true, Description: "Help understand how visitors use the site."}, DescriptionSuffixNotSold: "Analytics data is anonymized and never sold.", DescriptionSuffixSold: "Analytics data may be shared with third parties."},
+		},
+		ThirdParty: PrivacyThirdPartyConfig{Services: []PrivacyThirdPartyService{}},
+	}
+	privacy.Consent.ShowUntilAcknowledged = true
+	privacy.Consent.Message = "We use cookies for essential site functionality and, with your consent, for preferences and analytics. Your data is stored on our servers and is never sold."
+	privacy.Consent.MessageIfSold = "We use cookies for essential site functionality and, with your consent, for preferences and analytics. Your data may be shared with or sold to third parties as described in our Privacy Policy."
+	privacy.Consent.Policy.Text = "Privacy Policy"
+	privacy.Consent.Policy.URL = "/server/privacy"
+	privacy.Consent.Buttons.Decline = "Decline"
+	privacy.Consent.Buttons.Accept = "I Agree"
+	privacy.Consent.Position = "bottom"
+	privacy.Consent.ShowPreferences = true
+	privacy.Consent.PreferencesText = "Manage Preferences"
+	return privacy
 }
 
 func initialPort() string {
@@ -381,42 +941,69 @@ func initialAddress() string {
 }
 
 func validPort(port string) bool {
-	if port == "" || len(port) > 5 {
+	if port == "" {
 		return false
 	}
-	for _, char := range port {
-		if char < '0' || char > '9' {
+	parts := strings.Split(port, ",")
+	if len(parts) > 2 {
+		return false
+	}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || len(part) > 5 {
+			return false
+		}
+		for _, char := range part {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil || value < 1 || value > 65535 {
 			return false
 		}
 	}
-	value, err := strconv.Atoi(port)
-	return err == nil && value > 0 && value <= 65535
+	return true
 }
 
 func runningInContainer() bool {
-	for _, marker := range []string{"/.dockerenv", "/run/.containerenv"} {
+	systemdRunning := pathExists("/run/systemd/system")
+	openRCRunning := pathExists("/run/openrc")
+	if isSystemManagerHost(os.Getenv("INVOCATION_ID"), os.Getenv("RC_SVCNAME"), systemdRunning, openRCRunning) {
+		return false
+	}
+	for _, marker := range []string{"/.dockerenv", "/run/.containerenv", "/dev/lxc"} {
 		if _, err := os.Stat(marker); err == nil {
 			return true
 		}
 	}
-	if value := strings.ToLower(strings.TrimSpace(os.Getenv("container"))); value == "docker" || value == "podman" || value == "lxc" || value == "incus" || value == "systemd-nspawn" {
+	if strings.TrimSpace(os.Getenv("container")) != "" || strings.TrimSpace(os.Getenv("KUBERNETES_SERVICE_HOST")) != "" {
 		return true
 	}
 	if data, err := os.ReadFile("/proc/1/comm"); err == nil {
 		name := strings.ToLower(strings.TrimSpace(string(data)))
-		if name == "tini" || name == "dumb-init" || name == "systemd" || name == "init" {
+		if name == "tini" || name == "dumb-init" || name == "s6-svscan" || name == "runsv" || name == "runsvdir" || name == "catatonit" {
 			return true
 		}
 	}
 	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
 		text := strings.ToLower(string(data))
-		for _, marker := range []string{"docker", "containerd", "kubepods", "libpod", "lxc", "incus", "machine.slice"} {
+		for _, marker := range []string{"docker", "containerd", "kubepods", "libpod", "lxc"} {
 			if strings.Contains(text, marker) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func isSystemManagerHost(invocationID, rcServiceName string, systemdRunning, openRCRunning bool) bool {
+	return strings.TrimSpace(invocationID) != "" || strings.TrimSpace(rcServiceName) != "" || systemdRunning || openRCRunning
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // migrateYamlToYml migrates old .yaml files to .yml
@@ -445,6 +1032,8 @@ func Load(path string) (*Config, error) {
 
 	// Migrate old .yaml to .yml if needed
 	migrateYamlToYml(path)
+	_, statErr := os.Stat(path)
+	firstRun := errors.Is(statErr, os.ErrNotExist)
 
 	configPath = path
 	if err := migrateSecretsFromServer(path); err != nil {
@@ -457,6 +1046,9 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("failed to create default config: %w", err)
 		}
 	}
+	if err := seedConnectionEnvironment(path, firstRun); err != nil {
+		return nil, fmt.Errorf("seed connection configuration: %w", err)
+	}
 	if err := ensureGeneratedSecrets(filepath.Join(filepath.Dir(path), "secrets.yml")); err != nil {
 		return nil, fmt.Errorf("failed to initialize server credentials: %w", err)
 	}
@@ -467,10 +1059,84 @@ func Load(path string) (*Config, error) {
 	if err := applySMTPEnvironment(cfg); err != nil {
 		return nil, err
 	}
+	warnConnectionEnvironmentMismatch(cfg)
+	validateSEOSettings(cfg)
 	migrateAreaFiles(path)
 
 	current = cfg
 	return cfg, nil
+}
+
+func validateSEOSettings(configuration *Config) {
+	if configuration == nil {
+		return
+	}
+	seo := &configuration.Server.SEO
+	if len(seo.TitleSeparator) > 8 {
+		seo.TitleSeparator = " - "
+		fmt.Fprintln(os.Stderr, "warning: invalid configuration value for server.seo.title_separator; using the default")
+	}
+	if canonical := strings.TrimSpace(seo.Canonical); canonical != "" {
+		parsed, err := url.Parse(canonical)
+		if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			seo.Canonical = ""
+			fmt.Fprintln(os.Stderr, "warning: invalid configuration value for server.seo.canonical; using the default")
+		}
+	}
+	if seo.Twitter.Card != "summary" && seo.Twitter.Card != "summary_large_image" {
+		seo.Twitter.Card = "summary_large_image"
+		fmt.Fprintln(os.Stderr, "warning: invalid configuration value for server.seo.twitter.card; using the default")
+	}
+	reserved := map[string]struct{}{"description": {}, "keywords": {}, "author": {}, "robots": {}, "viewport": {}}
+	metaTags := make(map[string]string)
+	metaName := regexp.MustCompile(`^[a-z0-9:_.-]+$`)
+	metaKeys := make([]string, 0, len(seo.MetaTags))
+	for key := range seo.MetaTags {
+		metaKeys = append(metaKeys, key)
+	}
+	sort.Strings(metaKeys)
+	for _, key := range metaKeys {
+		if len(metaTags) >= 20 {
+			fmt.Fprintln(os.Stderr, "warning: server.seo.meta_tags has more than 20 entries; ignoring additional entries")
+			break
+		}
+		value := strings.TrimSpace(seo.MetaTags[key])
+		_, isReserved := reserved[key]
+		if !metaName.MatchString(key) || isReserved || value == "" {
+			fmt.Fprintln(os.Stderr, "warning: invalid configuration entry server.seo.meta_tags; skipping")
+			continue
+		}
+		metaTags[key] = value
+	}
+	seo.MetaTags = metaTags
+	verification := &seo.Verification
+	patterns := map[string]*regexp.Regexp{
+		"google": regexp.MustCompile(`^[A-Za-z0-9_-]{1,43}$`), "bing": regexp.MustCompile(`^[A-F0-9]{1,32}$`),
+		"yandex": regexp.MustCompile(`^[a-f0-9]{1,32}$`), "baidu": regexp.MustCompile(`^[A-Za-z0-9]{1,32}$`),
+		"pinterest": regexp.MustCompile(`^[a-f0-9]{1,32}$`), "facebook": regexp.MustCompile(`^[a-z0-9]{1,64}$`),
+	}
+	providers := []struct {
+		key   string
+		value *string
+	}{{"google", &verification.Google}, {"bing", &verification.Bing}, {"yandex", &verification.Yandex}, {"baidu", &verification.Baidu}, {"pinterest", &verification.Pinterest}, {"facebook", &verification.Facebook}}
+	for _, provider := range providers {
+		if value := strings.TrimSpace(*provider.value); value != "" && !patterns[provider.key].MatchString(value) {
+			*provider.value = ""
+			fmt.Fprintf(os.Stderr, "warning: invalid configuration value for server.seo.verification.%s; using the default\n", provider.key)
+		}
+	}
+	customTags := make([]SEOCustomMetaConfig, 0, len(verification.Custom))
+	customName := regexp.MustCompile(`^[A-Za-z0-9_:-]+$`)
+	for _, tag := range verification.Custom {
+		name, property, content := strings.TrimSpace(tag.Name), strings.TrimSpace(tag.Property), strings.TrimSpace(tag.Content)
+		if content == "" || len(content) > 256 || (name == "") == (property == "") || name != "" && !customName.MatchString(name) || property != "" && !customName.MatchString(property) {
+			fmt.Fprintln(os.Stderr, "warning: invalid configuration entry server.seo.verification.custom; skipping")
+			continue
+		}
+		tag.Name, tag.Property, tag.Content = name, property, content
+		customTags = append(customTags, tag)
+	}
+	verification.Custom = customTags
 }
 
 func loadMergedConfig(path string) (*Config, error) {
@@ -486,13 +1152,13 @@ func loadMergedConfig(path string) (*Config, error) {
 		}
 	} else {
 		mergeMaps(merged, base)
-		if err := os.Chmod(path, 0600); err != nil {
+		if err := os.Chmod(path, 0o600); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not secure config file %s: %v\n", path, err)
 		}
 	}
 	directory := filepath.Join(filepath.Dir(path), "yaml.d")
 	if info, err := os.Stat(directory); err == nil && info.IsDir() {
-		if chmodErr := os.Chmod(directory, 0700); chmodErr != nil {
+		if chmodErr := os.Chmod(directory, 0o700); chmodErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not secure config drop-in directory %s: %v\n", directory, chmodErr)
 		}
 		entries, err := os.ReadDir(directory)
@@ -519,7 +1185,7 @@ func loadMergedConfig(path string) (*Config, error) {
 				if statErr != nil || !info.Mode().IsRegular() {
 					continue
 				}
-				if chmodErr := os.Chmod(resolved, 0600); chmodErr != nil {
+				if chmodErr := os.Chmod(resolved, 0o600); chmodErr != nil {
 					fmt.Fprintf(os.Stderr, "warning: ignoring insecure config drop-in %s: %v\n", entry.Name(), chmodErr)
 					continue
 				}
@@ -534,7 +1200,7 @@ func loadMergedConfig(path string) (*Config, error) {
 	}
 	secrets := filepath.Join(filepath.Dir(path), "secrets.yml")
 	if secretMap, err := readConfigMap(secrets); err == nil {
-		if chmodErr := os.Chmod(secrets, 0600); chmodErr != nil {
+		if chmodErr := os.Chmod(secrets, 0o600); chmodErr != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not secure secrets file: %v\n", chmodErr)
 		}
 		mergeMaps(merged, secretMap)
@@ -542,6 +1208,7 @@ func loadMergedConfig(path string) (*Config, error) {
 		fmt.Fprintf(os.Stderr, "warning: ignoring invalid secrets file: %v\n", err)
 	}
 	migrateLegacyConfig(merged)
+	expandEnvironmentReferences(merged)
 	encoded, err := yaml.Marshal(merged)
 	if err != nil {
 		return nil, fmt.Errorf("encode merged configuration: %w", err)
@@ -753,7 +1420,7 @@ func saveConfig(cfg *Config, path string) error {
 
 // generateConfigYAML generates YAML content with comments
 func generateConfigYAML(cfg *Config) string {
-	server := map[string]any{"port": cfg.Server.Port, "address": cfg.Server.Address, "fqdn": cfg.Server.FQDN, "mode": cfg.Server.Mode, "baseurl": cfg.Server.BaseURL, "trusted_proxies": cfg.Server.TrustedProxies, "rate_limit": cfg.Server.RateLimit, "url_detection": cfg.Server.URLDetection}
+	server := map[string]any{"port": cfg.Server.Port, "address": cfg.Server.Address, "fqdn": cfg.Server.FQDN, "mode": cfg.Server.Mode, "ssl": cfg.Server.SSL, "database": cfg.Server.Database, "cache": cfg.Server.Cache, "baseurl": cfg.Server.BaseURL, "trusted_proxies": cfg.Server.TrustedProxies, "rate_limit": cfg.Server.RateLimit, "url_detection": cfg.Server.URLDetection}
 	data, err := yaml.Marshal(map[string]any{"server": server})
 	if err != nil {
 		return "# Git Messages Server Configuration\n"
@@ -763,7 +1430,7 @@ func generateConfigYAML(cfg *Config) string {
 
 func saveArea(configFile, name string, values map[string]any) error {
 	areaDirectory := filepath.Join(filepath.Dir(configFile), "yaml.d")
-	if err := os.MkdirAll(areaDirectory, 0700); err != nil {
+	if err := os.MkdirAll(areaDirectory, 0o700); err != nil {
 		return fmt.Errorf("create configuration area directory: %w", err)
 	}
 	path := filepath.Join(areaDirectory, name)
@@ -783,7 +1450,7 @@ func saveArea(configFile, name string, values map[string]any) error {
 }
 
 func writePrivateAtomic(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".config-*")
@@ -792,7 +1459,7 @@ func writePrivateAtomic(path string, data []byte) error {
 	}
 	temporaryPath := temporary.Name()
 	defer func() { _ = os.Remove(temporaryPath) }()
-	if err := temporary.Chmod(0600); err != nil {
+	if err := temporary.Chmod(0o600); err != nil {
 		_ = temporary.Close()
 		return err
 	}
@@ -829,7 +1496,7 @@ func ensureGeneratedSecrets(path string) error {
 		putConfigPath(secrets, []string{"server", "token"}, token)
 		changed = true
 		generated = append(generated, "server.token")
-		fmt.Fprintf(os.Stderr, "Operator token created: %s\n", token)
+		fmt.Fprintln(os.Stderr, "Operator token generated and stored in secrets configuration.")
 	}
 	encryptionKey, ok := getConfigPath(secrets, []string{"server", "security", "encryption_key"})
 	if !ok || strings.TrimSpace(fmt.Sprint(encryptionKey)) == "" {
@@ -935,7 +1602,20 @@ func migrateSecretsFromServer(configPath string) error {
 		}
 	}
 	secrets := make(map[string]any)
-	secretPaths := [][]string{{"server", "token"}, {"server", "security", "encryption_key"}, {"server", "security", "encryption_key_version"}}
+	secretPaths := [][]string{
+		{"server", "token"},
+		{"server", "security", "encryption_key"},
+		{"server", "security", "encryption_key_version"},
+		{"server", "cache", "password"},
+		{"server", "database", "token"},
+		{"server", "notifications", "email", "smtp", "password"},
+		{"server", "pages", "contact", "captcha_secret_key"},
+		{"server", "ssl", "letsencrypt", "dns_credentials"},
+		{"server", "backup", "encryption_password"},
+		{"server", "metrics", "auth", "tokens"},
+		{"server", "contact", "webhooks"},
+		{"data", "cve", "api_key"},
+	}
 	changed := false
 	for i := range sources {
 		for _, keyPath := range secretPaths {
@@ -943,6 +1623,15 @@ func migrateSecretsFromServer(configPath string) error {
 				putConfigPath(secrets, keyPath, value)
 				sources[i].changed = true
 				changed = true
+			}
+		}
+		for _, keyPath := range connectionURLSecretPaths {
+			if value, ok := getConfigPath(sources[i].values, keyPath); ok && connectionURLHasCredentials(fmt.Sprint(value)) {
+				if value, ok := takeConfigPath(sources[i].values, keyPath); ok {
+					putConfigPath(secrets, keyPath, value)
+					sources[i].changed = true
+					changed = true
+				}
 			}
 		}
 	}
@@ -1057,20 +1746,31 @@ func migrateAreaFiles(configFile string) {
 		if key == "server" || key == "web" {
 			continue
 		}
-		if areas["app.yml"] == nil {
-			areas["app.yml"] = make(map[string]any)
+		area := "app.yml"
+		if key == "data" {
+			area = "security.yml"
 		}
-		areas["app.yml"][key] = value
+		if areas[area] == nil {
+			areas[area] = make(map[string]any)
+		}
+		areas[area][key] = value
 		delete(original, key)
 	}
 	secrets := make(map[string]any)
 	secretPaths := [][]string{
-		{"server", "token"}, {"server", "security", "encryption_key"}, {"server", "security", "encryption_key_version"},
-		{"server", "notifications", "email", "smtp", "password"}, {"server", "cache", "password"},
-		{"server", "database", "token"}, {"server", "database", "url"}, {"server", "cache", "url"},
-		{"server", "pages", "contact", "captcha_secret_key"}, {"server", "ssl", "letsencrypt", "dns_credentials"},
-		{"server", "backup", "encryption_password"}, {"server", "metrics", "auth", "tokens"},
-		{"server", "contact", "webhooks"}, {"server", "auth", "ldap", "providers"}, {"server", "auth", "oidc", "providers"},
+		{"server", "token"},
+		{"server", "security", "encryption_key"},
+		{"server", "security", "encryption_key_version"},
+		{"server", "notifications", "email", "smtp", "password"},
+		{"server", "cache", "password"},
+		{"server", "database", "token"},
+		{"server", "pages", "contact", "captcha_secret_key"},
+		{"server", "ssl", "letsencrypt", "dns_credentials"},
+		{"server", "backup", "encryption_password"},
+		{"server", "metrics", "auth", "tokens"},
+		{"server", "contact", "webhooks"},
+		{"server", "auth", "ldap", "providers"},
+		{"server", "auth", "oidc", "providers"},
 		{"data", "cve", "api_key"},
 	}
 	areaNames := make([]string, 0, len(areas))
@@ -1089,6 +1789,21 @@ func migrateAreaFiles(configFile string) {
 			}
 		}
 	}
+	for _, path := range connectionURLSecretPaths {
+		if value, ok := getConfigPath(original, path); ok && connectionURLHasCredentials(fmt.Sprint(value)) {
+			if value, ok := takeConfigPath(original, path); ok {
+				putConfigPath(secrets, path, value)
+			}
+		}
+		for _, name := range areaNames {
+			values := areas[name]
+			if value, ok := getConfigPath(values, path); ok && connectionURLHasCredentials(fmt.Sprint(value)) {
+				if value, ok := takeConfigPath(values, path); ok {
+					putConfigPath(secrets, path, value)
+				}
+			}
+		}
+	}
 	if len(areas) == 0 {
 		return
 	}
@@ -1097,11 +1812,11 @@ func migrateAreaFiles(configFile string) {
 		_ = writePrivateAtomic(backupPath, data)
 	}
 	areaDirectory := filepath.Join(filepath.Dir(configFile), "yaml.d")
-	if err := os.MkdirAll(areaDirectory, 0700); err != nil {
+	if err := os.MkdirAll(areaDirectory, 0o700); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: configuration migration skipped: %v\n", err)
 		return
 	}
-	if err := os.Chmod(areaDirectory, 0700); err != nil {
+	if err := os.Chmod(areaDirectory, 0o700); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: configuration migration skipped: %v\n", err)
 		return
 	}
@@ -1220,9 +1935,32 @@ const configHeader = "# Settings of this node only (listen, identity, database, 
 
 func validate(cfg *Config) error {
 	defaults := DefaultConfig()
+	if !validAPIVersion(cfg.Server.APIVersion) {
+		warnInvalid("server.api_version")
+		cfg.Server.APIVersion = defaults.Server.APIVersion
+	}
 	if !validPort(cfg.Server.Port) {
 		warnInvalid("server.port")
 		cfg.Server.Port = defaults.Server.Port
+	}
+	if cfg.Server.SSL.MinVersion == "" {
+		cfg.Server.SSL.MinVersion = defaults.Server.SSL.MinVersion
+	}
+	if cfg.Server.SSL.MinVersion != "TLS1.2" && cfg.Server.SSL.MinVersion != "TLS1.3" {
+		warnInvalid("server.ssl.min_version")
+		cfg.Server.SSL.MinVersion = defaults.Server.SSL.MinVersion
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Server.SSL.LetsEncrypt.Challenge)) {
+	case "", "http-01", "tls-alpn-01", "dns-01":
+	default:
+		warnInvalid("server.ssl.letsencrypt.challenge")
+		cfg.Server.SSL.LetsEncrypt.Challenge = defaults.Server.SSL.LetsEncrypt.Challenge
+	}
+	if prefix, err := NormalizeBaseURL(cfg.Server.BaseURL); err != nil {
+		warnInvalid("server.baseurl")
+		cfg.Server.BaseURL = defaults.Server.BaseURL
+	} else {
+		cfg.Server.BaseURL = prefix
 	}
 	address := strings.Trim(strings.TrimSpace(cfg.Server.Address), "[]")
 	if net.ParseIP(address) == nil {
@@ -1258,6 +1996,31 @@ func validate(cfg *Config) error {
 			break
 		}
 	}
+	validateSecurityEntries(&cfg.Server.Security)
+	validateGeoIP(&cfg.Server.GeoIP)
+	validateBlocklistSources(&cfg.Server.Security.Blocklists)
+	catchUpWindow, catchUpErr := time.ParseDuration(cfg.Server.Scheduler.CatchUpWindow)
+	if catchUpErr != nil || catchUpWindow <= 0 {
+		warnInvalid("server.scheduler.catch_up_window")
+		cfg.Server.Scheduler.CatchUpWindow = defaults.Server.Scheduler.CatchUpWindow
+	}
+	if cfg.Server.Scheduler.Tasks == nil {
+		cfg.Server.Scheduler.Tasks = make(map[string]ScheduledTaskConfig)
+	}
+	for _, taskID := range []string{"ssl_renewal", "security_cleanup", "token_cleanup", "log_rotation", "healthcheck_self"} {
+		task, exists := cfg.Server.Scheduler.Tasks[taskID]
+		if !exists {
+			task = defaults.Server.Scheduler.Tasks[taskID]
+		}
+		if !task.Enabled {
+			warnInvalid("server.scheduler.tasks." + taskID + ".enabled")
+			task.Enabled = true
+		}
+		if task.Schedule == "" {
+			task.Schedule = defaults.Server.Scheduler.Tasks[taskID].Schedule
+		}
+		cfg.Server.Scheduler.Tasks[taskID] = task
+	}
 	if cfg.Server.Tor.MaxCircuits < 1 || cfg.Server.Tor.StartupTimeout < 10 || cfg.Server.Tor.StartupTimeout > 300 || cfg.Server.Tor.BootstrapTimeout < 10 || cfg.Server.Tor.BootstrapTimeout > 3600 || cfg.Server.Tor.VirtualPort < 1 || cfg.Server.Tor.VirtualPort > 65535 || cfg.Server.Tor.NumIntroPoints < 3 || cfg.Server.Tor.NumIntroPoints > 10 {
 		warnInvalid("server.tor")
 		cfg.Server.Tor = defaults.Server.Tor
@@ -1267,12 +2030,61 @@ func validate(cfg *Config) error {
 		cfg.Server.I2P = defaults.Server.I2P
 	}
 	if cfg.Server.Notifications.Email.SMTP.Port < 1 || cfg.Server.Notifications.Email.SMTP.Port > 65535 {
-		return errors.New("server.notifications.email.smtp.port must be between 1 and 65535")
+		warnInvalid("server.notifications.email.smtp.port")
+		cfg.Server.Notifications.Email.SMTP.Port = defaults.Server.Notifications.Email.SMTP.Port
+	}
+	if replyTo := strings.TrimSpace(cfg.Server.Notifications.Email.ReplyTo); replyTo != "" {
+		if strings.ContainsAny(replyTo, "\r\n") {
+			warnInvalid("server.notifications.email.reply_to")
+			cfg.Server.Notifications.Email.ReplyTo = ""
+		} else if _, err := mail.ParseAddress(replyTo); err != nil {
+			warnInvalid("server.notifications.email.reply_to")
+			cfg.Server.Notifications.Email.ReplyTo = ""
+		} else {
+			cfg.Server.Notifications.Email.ReplyTo = replyTo
+		}
+	}
+	if !i18n.IsSupported(cfg.Server.I18N.DefaultLanguage) {
+		warnInvalid("server.i18n.default_language")
+		cfg.Server.I18N.DefaultLanguage = defaults.Server.I18N.DefaultLanguage
+	}
+	if len(cfg.Server.I18N.AvailableLanguages) == 0 {
+		cfg.Server.I18N.AvailableLanguages = append([]string(nil), defaults.Server.I18N.AvailableLanguages...)
+	}
+	availableLanguages := make([]string, 0, len(cfg.Server.I18N.AvailableLanguages))
+	seenLanguages := make(map[string]struct{}, len(cfg.Server.I18N.AvailableLanguages))
+	for _, code := range cfg.Server.I18N.AvailableLanguages {
+		code = strings.ToLower(strings.TrimSpace(code))
+		if !i18n.IsSupported(code) {
+			warnInvalid("server.i18n.available_languages")
+			continue
+		}
+		if _, duplicate := seenLanguages[code]; duplicate {
+			continue
+		}
+		seenLanguages[code] = struct{}{}
+		availableLanguages = append(availableLanguages, code)
+	}
+	if len(availableLanguages) == 0 {
+		availableLanguages = append([]string(nil), defaults.Server.I18N.AvailableLanguages...)
+	}
+	cfg.Server.I18N.AvailableLanguages = availableLanguages
+	if _, ok := seenLanguages[cfg.Server.I18N.DefaultLanguage]; !ok {
+		cfg.Server.I18N.DefaultLanguage = "en"
+	}
+	if cfg.Server.Notifications.Email.Events == nil {
+		cfg.Server.Notifications.Email.Events = make(map[string]bool)
+	}
+	for event, enabled := range defaults.Server.Notifications.Email.Events {
+		if _, exists := cfg.Server.Notifications.Email.Events[event]; !exists {
+			cfg.Server.Notifications.Email.Events[event] = enabled
+		}
 	}
 	switch cfg.Server.Notifications.Email.SMTP.TLS {
 	case "", "auto", "starttls", "tls", "none":
 	default:
-		return errors.New("server.notifications.email.smtp.tls must be auto, starttls, tls, or none")
+		warnInvalid("server.notifications.email.smtp.tls")
+		cfg.Server.Notifications.Email.SMTP.TLS = defaults.Server.Notifications.Email.SMTP.TLS
 	}
 	switch cfg.Server.Pages.Contact.Captcha {
 	case "", "simple":
@@ -1288,7 +2100,178 @@ func validate(cfg *Config) error {
 	} else {
 		cfg.Server.Notifications.Email.Enabled = false
 	}
-	return nil
+	return validateConnections(cfg)
+}
+
+func validateSecurityEntries(security *SecurityConfig) {
+	allowlist := make([]AllowlistEntry, 0, len(security.Allowlist))
+	for index, entry := range security.Allowlist {
+		prefix, ok := normalizeIPPrefix(entry.CIDR)
+		if !ok || (prefix.Addr().Is4() && prefix.Bits() < 8) || (prefix.Addr().Is6() && prefix.Bits() < 16) {
+			warnInvalidEntry("server.security.allowlist", index, "cidr")
+			continue
+		}
+		entry.CIDR = prefix.String()
+		allowlist = append(allowlist, entry)
+	}
+	security.Allowlist = allowlist
+	blocked := make([]BlockedIPEntry, 0, len(security.BlockedIPs))
+	for index, entry := range security.BlockedIPs {
+		prefix, ok := normalizeIPPrefix(entry.CIDR)
+		if !ok {
+			warnInvalidEntry("server.security.blocked_ips", index, "cidr")
+			continue
+		}
+		entry.CIDR = prefix.String()
+		blocked = append(blocked, entry)
+	}
+	security.BlockedIPs = blocked
+}
+
+func normalizeIPPrefix(value string) (netip.Prefix, bool) {
+	value = strings.TrimSpace(value)
+	if prefix, err := netip.ParsePrefix(value); err == nil {
+		return prefix.Masked(), true
+	}
+	address, err := netip.ParseAddr(value)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	address = address.Unmap()
+	return netip.PrefixFrom(address, address.BitLen()), true
+}
+
+func validateBlocklistSources(blocklists *BlocklistsConfig) {
+	valid := make([]BlocklistSourceConfig, 0, len(blocklists.ExtraSources))
+	seen := map[string]struct{}{"firehol_level1": {}}
+	for index, source := range blocklists.ExtraSources {
+		if !source.enabledSet {
+			source.Enabled = true
+		}
+		field := "id"
+		_, duplicate := seen[source.ID]
+		ok := validBlocklistID(source.ID) && !duplicate
+		if ok {
+			field = "type"
+			ok = source.Type == "ip" || source.Type == "domain"
+		}
+		if ok {
+			field = "url"
+			parsed, err := url.Parse(strings.TrimSpace(source.URL))
+			ok = err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil
+		}
+		if !ok {
+			warnInvalidEntry("server.security.blocklists.extra_sources", index, field)
+			continue
+		}
+		seen[source.ID] = struct{}{}
+		valid = append(valid, source)
+	}
+	blocklists.ExtraSources = valid
+}
+
+func validBlocklistID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < 'a' || character > 'z' {
+			if character < '0' || character > '9' {
+				if character != '_' {
+					return false
+				}
+			}
+		}
+	}
+	return value != "firehol_level1"
+}
+
+func validateGeoIP(geoIP *GeoIPConfig) {
+	geoIP.DenyCountries = validCountryCodes(geoIP.DenyCountries, "server.geoip.deny_countries")
+	geoIP.AllowCountries = validCountryCodes(geoIP.AllowCountries, "server.geoip.allow_countries")
+	if geoIP.Presets == nil {
+		geoIP.Presets = map[string][]string{}
+	}
+	for name, codes := range geoIP.Presets {
+		validName := name != "" && len(name) <= 64
+		for _, character := range name {
+			switch {
+			case character >= 'a' && character <= 'z':
+			case character >= 'A' && character <= 'Z':
+			case character >= '0' && character <= '9':
+			case character == '_' || character == '-':
+			default:
+				validName = false
+			}
+		}
+		if !validName {
+			warnInvalid("server.geoip.presets")
+			delete(geoIP.Presets, name)
+			continue
+		}
+		geoIP.Presets[name] = validCountryCodes(codes, "server.geoip.presets."+name)
+	}
+}
+
+func validCountryCodes(values []string, key string) []string {
+	valid := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for index, value := range values {
+		code := strings.ToUpper(strings.TrimSpace(value))
+		region, err := language.ParseRegion(code)
+		if len(code) != 2 || err != nil || !region.IsCountry() || region.ISO3() == "ZZZ" {
+			warnInvalidEntry(key, index, "country_code")
+			continue
+		}
+		if _, ok := seen[code]; !ok {
+			valid = append(valid, code)
+			seen[code] = struct{}{}
+		}
+	}
+	return valid
+}
+
+func warnInvalidEntry(key string, index int, field string) {
+	fmt.Fprintf(os.Stderr, "warning: invalid configuration entry %s[%d].%s; skipping\n", key, index, field)
+}
+
+func validAPIVersion(value string) bool {
+	if len(value) < 2 || value[0] != 'v' {
+		return false
+	}
+	for _, digit := range value[1:] {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// NormalizeBaseURL validates and canonicalizes the configured URL path prefix.
+func NormalizeBaseURL(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "/" {
+		return "", nil
+	}
+	if !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") || strings.ContainsAny(value, "?#\\") {
+		return "", fmt.Errorf("base URL must be a same-origin absolute path")
+	}
+	const allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._~!$&'()*+,;=:@%/-"
+	for _, character := range value {
+		if !strings.ContainsRune(allowed, character) {
+			return "", fmt.Errorf("base URL contains an invalid character")
+		}
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.IsAbs() || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("base URL must be a same-origin absolute path")
+	}
+	for _, segment := range strings.Split(value, "/") {
+		if segment == "." || segment == ".." {
+			return "", fmt.Errorf("base URL cannot contain dot segments")
+		}
+	}
+	return strings.TrimRight(value, "/"), nil
 }
 
 func applySMTPEnvironment(cfg *Config) error {
@@ -1301,9 +2284,11 @@ func applySMTPEnvironment(cfg *Config) error {
 	if value, ok := os.LookupEnv("SMTP_PORT"); ok {
 		port, err := strconv.Atoi(value)
 		if err != nil || port < 1 || port > 65535 {
-			return errors.New("SMTP_PORT must be a valid TCP port")
+			warnInvalid("SMTP_PORT")
+			smtp.Port = 587
+		} else {
+			smtp.Port = port
 		}
-		smtp.Port = port
 	}
 	return nil
 }

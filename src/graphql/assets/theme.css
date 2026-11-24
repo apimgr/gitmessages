@@ -1,0 +1,11 @@
+.graphiql-container { min-height: 38rem; color: var(--color-text); background: var(--color-bg); font-family: inherit; }
+.graphiql-container .topBar, .graphiql-container .toolbar { color: var(--color-text); background: var(--color-bg-active); border-color: var(--color-border); }
+.graphiql-container .editorWrap, .graphiql-container .resultWrap, .graphiql-container .docExplorerWrap { color: var(--color-text); background: var(--color-bg-secondary); }
+.graphiql-container .CodeMirror { color: var(--color-text); background: var(--color-bg-secondary); }
+.graphiql-container .CodeMirror-gutters { background: var(--color-bg-active); border-color: var(--color-border); }
+.graphiql-container .result-window { color: var(--color-text); background: var(--color-bg-secondary); }
+.graphiql-container .execute-button { color: var(--color-text); background: var(--color-success); }
+.graphiql-container .toolbar-button { color: var(--color-text); background: var(--color-bg-active); border-color: var(--color-border); }
+.graphiql-container input, .graphiql-container textarea, .graphiql-container select { color: var(--color-text); background: var(--color-bg-active); border-color: var(--color-border); }
+html[data-theme="dark"] .graphiql-container .CodeMirror-cursor { border-inline-start-color: var(--color-text); }
+html[data-theme="light"] .graphiql-container .CodeMirror-cursor { border-inline-start-color: var(--color-text); }

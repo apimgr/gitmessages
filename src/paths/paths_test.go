@@ -67,7 +67,7 @@ func TestGetDefaultDirs_NonRootLinux(t *testing.T) {
 	}
 	withForcedDetection(t, false, false)
 
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("XDG_DATA_HOME", tmp)
 
@@ -144,6 +144,36 @@ func TestGetDirectories(t *testing.T) {
 	}
 }
 
+func TestEnsurePrivateTempParent(t *testing.T) {
+	root := projectTestDir(t)
+	parent := filepath.Join(root, "parent")
+	if err := os.Mkdir(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsurePrivateTempParent(parent); err != nil {
+		t.Fatalf("EnsurePrivateTempParent() error: %v", err)
+	}
+	if err := verifyPrivateMode(parent, 0o700); err != nil {
+		t.Fatalf("temporary parent permissions: %v", err)
+	}
+
+	link := filepath.Join(root, "linked")
+	if err := os.Symlink(parent, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsurePrivateTempParent(link); err == nil {
+		t.Fatal("EnsurePrivateTempParent() accepted a symbolic link")
+	}
+
+	file := filepath.Join(root, "file")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsurePrivateTempParent(file); err == nil {
+		t.Fatal("EnsurePrivateTempParent() accepted a regular file")
+	}
+}
+
 func TestDefaultDirsMacOSAndBSD(t *testing.T) {
 	macRoot := defaultDirs("darwin", ProjectName, false, true, "")
 	if want := filepath.Join("/Library/Application Support", OrgName, ProjectName); macRoot.Config != want {
@@ -168,7 +198,7 @@ func TestDefaultDirsMacOSAndBSD(t *testing.T) {
 // TestEnsureDir verifies a directory is created (and creation is
 // idempotent when called twice on the same path).
 func TestEnsureDir(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	target := filepath.Join(tmp, "nested", "dir")
 
 	if err := EnsureDir(target); err != nil {
@@ -188,10 +218,62 @@ func TestEnsureDir(t *testing.T) {
 	}
 }
 
+func TestEnsureStartupDirectoriesEnforcesPrivateModes(t *testing.T) {
+	root := projectTestDir(t)
+	dirs := Directories{
+		Config:   filepath.Join(root, "config"),
+		Data:     filepath.Join(root, "data"),
+		Database: filepath.Join(root, "data", "db"),
+		Cache:    filepath.Join(root, "cache"),
+		Logs:     filepath.Join(root, "logs"),
+		Backup:   filepath.Join(root, "backup"),
+		PID:      filepath.Join(root, "data", "gitmessages.pid"),
+	}
+	if err := EnsureStartupDirectories(dirs, false); err != nil {
+		t.Fatal(err)
+	}
+	privateDir := filepath.Join(dirs.Config, "yaml.d")
+	privateFile := filepath.Join(privateDir, "branding.yml")
+	if err := os.Chmod(privateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(privateFile, []byte("server: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(privateFile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dirs.Config, "server.yml"), []byte("server: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dirs.Config, "server.yaml"), []byte("server: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dirs.Config, "secrets.yml"), []byte("server: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnforcePrivatePaths(dirs); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{
+		privateDir:                               0o700,
+		privateFile:                              0o600,
+		filepath.Join(dirs.Config, "server.yml"): 0o600,
+		filepath.Join(dirs.Config, "server.yaml"): 0o600,
+		filepath.Join(dirs.Config, "secrets.yml"): 0o600,
+		filepath.Join(dirs.Data, "tor", "site"):   0o700,
+		filepath.Join(dirs.Data, "security"):      0o700,
+	} {
+		if err := verifyPrivateMode(path, want); err != nil {
+			t.Errorf("private permissions for %s: %v", path, err)
+		}
+	}
+}
+
 // TestEnsureDirectories verifies all three configured directories are
 // created on disk.
 func TestEnsureDirectories(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := projectTestDir(t)
 	dirs := Directories{
 		Config: filepath.Join(tmp, "config"),
 		Data:   filepath.Join(tmp, "data"),
@@ -219,6 +301,104 @@ func TestGetBackupDir(t *testing.T) {
 	got := GetBackupDir()
 	if got == "" || filepath.IsAbs(got) == false {
 		t.Errorf("GetBackupDir() = %q, want a non-empty absolute path", got)
+	}
+}
+
+func TestDefaultDatabaseDirectory(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", filepath.Join("/home/test", ".local", "share"))
+	container := defaultDirs("linux", "gitmessages", true, false, "/home/test")
+	if want := filepath.Join("/data", "db", "sqlite"); container.Database != want {
+		t.Errorf("container database directory = %q, want %q", container.Database, want)
+	}
+	root := defaultDirs("linux", "gitmessages", false, true, "/root")
+	if want := filepath.Join("/var/lib", OrgName, "gitmessages", "db"); root.Database != want {
+		t.Errorf("root database directory = %q, want %q", root.Database, want)
+	}
+	user := defaultDirs("linux", "gitmessages", false, false, "/home/test")
+	if want := filepath.Join("/home/test", ".local", "share", OrgName, "gitmessages", "db"); user.Database != want {
+		t.Errorf("user database directory = %q, want %q", user.Database, want)
+	}
+}
+
+func TestSafeDirPath(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "absolute path", input: "/var/lib/app", want: "/var/lib/app"},
+		{name: "relative path", input: "data/./files", want: filepath.Join("data", "files")},
+		{name: "traversal", input: "data/../secrets", wantErr: true},
+		{name: "control character", input: "data\nfiles", wantErr: true},
+		{name: "empty", input: "", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := SafeDirPath(test.input)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("SafeDirPath(%q) error = %v, wantErr %v", test.input, err, test.wantErr)
+			}
+			if err == nil && got != test.want {
+				t.Errorf("SafeDirPath(%q) = %q, want %q", test.input, got, test.want)
+			}
+		})
+	}
+}
+
+func TestCheckPIDFile(t *testing.T) {
+	pidPath := filepath.Join(projectTestDir(t), "server.pid")
+	if running, pid, err := checkPIDFile(pidPath, func(int) bool { return true }, func(int) bool { return true }); err != nil || running || pid != 0 {
+		t.Fatalf("missing PID file = (%v, %d, %v), want (false, 0, nil)", running, pid, err)
+	}
+	if err := os.WriteFile(pidPath, []byte("not-a-pid\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if running, _, err := checkPIDFile(pidPath, func(int) bool { return true }, func(int) bool { return true }); err != nil || running {
+		t.Fatalf("corrupt PID file = (%v, %v), want (false, nil)", running, err)
+	}
+	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
+		t.Fatalf("corrupt PID file still exists: %v", err)
+	}
+
+	if err := os.WriteFile(pidPath, []byte("123\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if running, pid, err := checkPIDFile(pidPath, func(value int) bool { return value == 123 }, func(value int) bool { return value == 123 }); err != nil || !running || pid != 123 {
+		t.Fatalf("owned live PID file = (%v, %d, %v), want (true, 123, nil)", running, pid, err)
+	}
+	if running, _, err := checkPIDFile(pidPath, func(int) bool { return true }, func(int) bool { return false }); err != nil || running {
+		t.Fatalf("reused PID file = (%v, %v), want (false, nil)", running, err)
+	}
+	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
+		t.Fatalf("stale PID file still exists: %v", err)
+	}
+}
+
+func TestWritePIDFileModeAndContainerSkip(t *testing.T) {
+	pidPath := filepath.Join(projectTestDir(t), "nested", "server.pid")
+	savedContainer := isContainer
+	isContainer = func() bool { return false }
+	t.Cleanup(func() { isContainer = savedContainer })
+	if err := WritePIDFileMode(pidPath, 0o600); err != nil {
+		t.Fatalf("WritePIDFileMode() error = %v", err)
+	}
+	info, err := os.Stat(pidPath)
+	if err != nil {
+		t.Fatalf("PID file was not created: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("PID mode = %04o, want 0600", info.Mode().Perm())
+	}
+	if err := RemovePIDFile(pidPath); err != nil {
+		t.Fatalf("RemovePIDFile() error = %v", err)
+	}
+
+	isContainer = func() bool { return true }
+	if err := WritePIDFileMode(pidPath, 0o600); err != nil {
+		t.Fatalf("container WritePIDFileMode() error = %v", err)
+	}
+	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
+		t.Fatalf("container PID file should not exist: %v", err)
 	}
 }
 

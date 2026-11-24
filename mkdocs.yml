@@ -103,6 +103,7 @@ nav:
   - Owner tokens: tokens.md
   - API: api.md
   - Internal metrics: metrics.md
+  - Operations: operations.md
   - CLI: cli.md
   - Security: security.md
   - Contact and security reporting: contact.md
