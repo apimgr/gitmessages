@@ -2,6 +2,10 @@
 
 This guide covers routine maintenance for a running Git Messages server. Configuration lives in `server.yml`, `secrets.yml`, and `yaml.d/`; the service has no administration web panel.
 
+## Startup output
+
+When the server runs in a foreground terminal, it prints a width-aware startup banner with the version, build, mode, and configured public URL. `--color` and `NO_COLOR` control banner styling; log records remain plain text. Containers, daemons, and headless runs use log output without the terminal banner. On first run, the server logs the path where it created `server.yml`.
+
 ## Backups
 
 Create and verify a manual backup with the server binary:
