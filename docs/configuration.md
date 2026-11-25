@@ -32,7 +32,7 @@ Use this layout for a drop-in:
     └── i2p.yml
 ```
 
-Area names are conventions; the loader accepts supported settings in any merged YAML file. Do not put credentials in a drop-in. Unknown keys are ignored by the current loader.
+Area names are conventions; the loader accepts supported settings in any merged YAML file. Do not put credentials in a drop-in. Supported legacy keys are migrated before validation; any remaining unknown key causes configuration loading to fail.
 
 ## Server settings
 
@@ -53,6 +53,10 @@ Area names are conventions; the loader accepts supported settings in any merged 
 | `server.api_version` | API route version prefix matching `v` followed by digits; defaults to `v1`. Changing it requires a server restart. The active version is advertised at `GET /api/autodiscover`. |
 | `server.baseurl` | Optional path prefix for public URLs, such as `/messages`. |
 | `server.mode` | `production`, `development`, or `debug`; `--mode` and `MODE` can override it. |
+| `server.debug.pprof`, `runtime_endpoints` | Control pprof and runtime diagnostic handlers after debug has been explicitly enabled for the process. |
+| `server.debug.log_queries`, `log_cache` | Enable database and cache diagnostic logs when `--debug` or `DEBUG` is active. Query values are never logged. |
+| `server.debug.log_bodies`, `max_body_log_size` | Opt into bounded request/response body previews; defaults to off and `10KB`. Credential-shaped values are redacted. |
+| `server.debug.block_profile_rate`, `mutex_profile_fraction` | Runtime profiling rates used only while debug diagnostics are enabled; zero disables the corresponding profile. |
 | `server.token` | Operator bearer token. Keep it in `secrets.yml`; the server creates one when absent. |
 | `server.trusted_proxies.additional` | List of proxy IP addresses or CIDRs permitted to supply forwarded headers. Private and loopback peers are trusted automatically. |
 | `server.trusted_proxies.client_ip_header` | Configures the client-IP header selection policy. |
@@ -74,7 +78,7 @@ Area names are conventions; the loader accepts supported settings in any merged 
 | `server.update.defer_days` | Automatic update delay from 0–365 days. |
 | `server.update.cli_min_version` | Minimum CLI version advertised to clients. |
 | `server.logs.access_format` | Access log format; defaults to `apache`. |
-| `server.logs.level` | Log level; defaults to `info`. |
+| `server.logs.level` | Log level; empty follows the server mode (`info` in production, `debug` in development or debug mode). |
 
 ## Database and cache connections
 
@@ -243,10 +247,50 @@ Branding and SEO settings belong in `{config_dir}/yaml.d/branding.yml`; the dott
 | `server.seo.twitter.enabled` | `true` | Enables Twitter card tags. |
 | `server.seo.twitter.card` | `summary_large_image` | `summary` or `summary_large_image`; unsupported values use `summary_large_image`. |
 | `server.seo.twitter.creator` | empty | Twitter creator attribution. |
+| `server.branding.content.header`, `footer` | Optional operator HTML fragments. `header` is appended after the built-in header actions; `footer` replaces the branding block above the application footer. Content is sanitized before rendering. |
+| `server.branding.content.about`, `privacy` | Optional Markdown, text, or sanitized HTML additions appended to the built-in pages. |
+| `server.branding.content.terms` | Optional Markdown, text, or sanitized HTML that replaces the built-in terms page. |
+| `server.branding.content.<page>.format` | `md` (default), `txt`, or `html`; `header` and `footer` accept only `html`. |
+| `server.branding.content.<page>.body` | A string used for every language, or a language-to-string map with optional `default`; maximum 256 KiB per body. |
 
 The page title combines the route title and tagline with `title_separator`; when the tagline is empty, the site title is used, and a repeated title is not duplicated. The canonical link and `og:url` use the configured HTTPS base plus the request path, or the resolved request URL when unset. Configured image files must be regular files directly in the private `assets/` directory, use `.svg`, `.png`, `.ico`, `.webp`, or `.jpg`, and stay under 2 MiB. Image data URIs are limited to 256 KiB and PNG, JPEG, WebP, ICO, or SVG. Remote images require HTTPS, a public destination address, and an allowed image content type; downloads are limited to 10 MiB and cached for up to 24 hours under the config cache directory. OpenGraph and Twitter tags are omitted when their respective `enabled` setting is false. The standard site-verification settings are `server.seo.verification.google`, `.bing`, `.yandex`, `.baidu`, `.pinterest`, and `.facebook`; invalid codes are omitted. Google accepts up to 43 letters, digits, `_` or `-`; Bing accepts up to 32 uppercase hexadecimal characters; Yandex and Pinterest accept up to 32 lowercase hexadecimal characters; Baidu accepts up to 32 letters or digits; Facebook accepts up to 64 lowercase letters or digits.
 
 `server.seo.meta_tags` accepts keys matching `[a-z0-9:_.-]+` and non-empty values up to 256 characters. Built-in names `description`, `keywords`, `author`, `robots`, and `viewport` are ignored to prevent duplicate or conflicting tags. For `server.seo.verification.custom`, each item must contain exactly one of `name` or `property` plus non-empty `content` of at most 256 characters; names/properties may contain letters, digits, `_`, `:`, and `-`. Values are HTML-escaped before rendering. The `robots` directive defaults to `index,follow` only for public HTML pages; other routes default to `noindex,nofollow` and receive `X-Robots-Tag: noindex, nofollow`.
+
+## Privacy, consent, and disclosure
+
+Privacy settings fill the deployment-specific sections of `/server/privacy` and configure the consent banner. Built-in privacy text remains part of the page; operator additions use `server.branding.content.privacy`. Retention descriptions and availability flags describe the published policy and do not change operational retention jobs.
+
+| YAML key | Default and behavior |
+|---|---|
+| `server.privacy.data.sold` | `false`; selects the privacy and consent wording for whether data is sold or shared. |
+| `server.privacy.data.stored_on_server` | `true`; states whether visitor data is stored on this server. |
+| `server.privacy.data.sharing[]` | Deployment-specific disclosures, each with `condition`, `when`, and `data` text. |
+| `server.privacy.retention.period` | Retention description shown on the privacy page; may be a string or language map. Empty uses the built-in localized text. |
+| `server.privacy.retention.export_available` | `true`; shows the owner data export right. Operators export an owner's data with `--maintenance data export --owner <prefix>`. |
+| `server.privacy.retention.deletion_available` | `true`; shows the owner data deletion right. Operators delete an owner's data with `--maintenance data delete --owner <prefix>`; privacy requests can also be sent through the configured contact flow. |
+| `server.privacy.consent.show_until_acknowledged` | `true`; keeps the banner visible until the visitor records a consent choice. |
+| `server.privacy.consent.message`, `message_if_sold` | Banner text selected according to `server.privacy.data.sold`. |
+| `server.privacy.consent.policy.{text,url}` | Privacy-policy link shown in the banner. |
+| `server.privacy.consent.buttons.{decline,accept}` | Labels for the consent actions. |
+| `server.privacy.consent.position` | Banner position, `top` or `bottom`. |
+| `server.privacy.consent.show_preferences`, `preferences_text` | Controls the manage-preferences link and its label. |
+| `server.privacy.cookies.{essential,preferences,analytics}.{enabled,description}` | Describes and offers the three cookie categories. Essential cookies are always required; preference and analytics choices are consent-controlled. |
+| `server.privacy.cookies.analytics.description_suffix_{sold,not_sold}` | Additional analytics disclosure selected by the `sold` setting. |
+| `server.privacy.third_party.services[]` | Optional third-party disclosures with `name`, `purpose`, `data_sent`, and `policy_url`; defaults to an empty list. |
+
+## Notifications
+
+`server.notifications.disk_low` controls the scheduler's disk-space alerts for the filesystems containing the data, log, and backup directories.
+
+| YAML key | Default | Behavior |
+|---|---:|---|
+| `server.notifications.disk_low.enabled` | `true` | Enables disk-space checks and notifications. |
+| `server.notifications.disk_low.threshold_percent` | `85` | Used-space percentage that triggers an alert. |
+| `server.notifications.disk_low.check_interval` | `5m` | Scheduler interval for checks. |
+| `server.notifications.disk_low.repeat` | `24h` | Minimum interval between repeated alerts while usage remains above threshold. |
+
+The scheduler deduplicates alerts by filesystem volume and reports recovery after usage drops 5 percentage points below the threshold. The backup skip threshold is separate (`server.backup.disk_threshold`).
 
 ## Metrics
 
@@ -366,6 +410,8 @@ I2P settings are under `server.i2p`:
 The CLI stores `cli.yml` and profile files in the platform user configuration directory under `apimgr/gitmessages`. Select a profile with `--config`. Files are created with owner-only permissions. The server selection order is `--server`, `GITMESSAGES_SERVER_PRIMARY`, then `server.primary`. A valid `--server` argument is saved only when no valid server is already configured.
 
 The CLI config supports `language`, `display.mode` (`auto`, `gui`, or `tui`), `server.primary`, and the discovered `server.api_version`. The CLI queries `/api/autodiscover` on startup and records the server's active API version before using versioned routes. An explicit `--lang` applies to the current invocation; otherwise language selection uses the config and system locale. The default static CLI uses the TUI; optional `gitmessages-cli-gui-{os}-{arch}` builds enable GUI mode on Linux, macOS, and Windows. BSD builds use the terminal interface.
+
+The server's CLI binary distribution settings are `server.cli.binary_download.dir` (defaults to `{data_dir}/cli`) and `server.cli.binary_download.require_auth` (defaults to `false`). Release binaries are provisioned by the operator, image, or package; the server does not build or download them. Downloads are public by default and require a valid Bearer token when `require_auth` is enabled. See [Integrations](integrations.md) for autodiscovery and download behavior.
 
 ## Contact CAPTCHA behavior
 

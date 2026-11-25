@@ -19,6 +19,8 @@ docker run --rm --name "gitmessages-$(od -An -N4 -tx4 /dev/urandom | tr -d '[:sp
 
 OpenAPI supersets for all supported locales are generated from the route definitions in `src/web` into `src/swagger/assets/openapi-*.json`. The `make` build and test targets run `go generate ./src/swagger`; do not edit generated documents by hand.
 
+Run `bash scripts/verify-licenses.sh` inside `casjaysdev/go:latest` to check dependency license metadata and NOTICE files. The script stores its temporary report under the project-scoped OS temp directory and removes it when complete.
+
 ## Binary integration checks
 
 The `make test` target is the Phase 1 commit gate for source-level Go tests. Phase 2 checks are manual and run compiled binaries inside isolated containers. They build from a temporary source copy and clean up their containers and temporary files on exit; E2E preserves redacted failure artifacts in a project-scoped temporary directory.

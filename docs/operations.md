@@ -37,6 +37,14 @@ The scheduler runs inside the server process and stores task state in `server.db
 
 Scheduled work includes SSL renewal, GeoIP and security-feed updates, security-report cleanup, log rotation, disk and health checks, backups, and update checks. Tor and I2P health tasks are registered only when those features are active. Task failures are logged and exposed through the scheduler metrics described in [Internal metrics](metrics.md).
 
+## Debug diagnostics
+
+Enable diagnostics for one process with `gitmessages --debug`, `DEBUG=true`, or `gitmessages --mode debug`. `--debug` has the highest priority, followed by `DEBUG`; `MODE=debug` enables diagnostics by default. `DEBUG=false` or `--debug=false` turns them off. Debug settings under `server.debug` control pprof, runtime handlers, query/cache logging, optional body previews, and profiling rates; the mode flag itself is never saved in configuration.
+
+When enabled, every `/debug/*` endpoint requires the operator token as an `Authorization: Bearer …` header. The handlers return 404 when diagnostics are disabled. Available endpoints include `/debug/pprof/*`, `/debug/vars`, `/debug/config`, `/debug/routes`, `/debug/cache`, `/debug/db`, `/debug/scheduler`, `/debug/memory`, `/debug/goroutines`, and `/debug/error500`. These are root paths and are not part of the versioned API. The command line and expvar `cmdline` value expose only the binary name; configuration credentials and token-shaped log values are redacted.
+
+Request body logging is off by default. If enabled with `server.debug.log_bodies`, previews are bounded by `max_body_log_size` (10 KB by default). Database query logs include operation, table, duration, and error category; query arguments are redacted. Protect access to debug logs and endpoints as operational data.
+
 ## Updates
 
 Check for a newer server release without replacing the running binary:

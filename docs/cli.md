@@ -43,6 +43,8 @@ gitmessages --mode debug --debug
 gitmessages --baseurl /gitmessages
 ```
 
+`--debug` enables diagnostic logging and `/debug/*` for that process. `MODE=debug` enables diagnostics by default, while `DEBUG=false` or `--debug=false` disables them. Debug handlers still require the operator bearer token from `server.token`; they return 404 when diagnostics are disabled. See [Debug diagnostics](operations.md#debug-diagnostics) for the protected endpoints and configuration.
+
 ## Client binary
 
 `gitmessages-cli` connects to the public API. Set a server with `--server`, `GITMESSAGES_SERVER_PRIMARY`, or the CLI config file. `--lang CODE`, `GITMESSAGES_LANG`, the CLI config, and `LANG` select output language in that order; supported languages are English (`en`), Spanish (`es`), French (`fr`), German (`de`), Italian (`it`), Arabic (`ar`), Chinese (`zh`), and Japanese (`ja`). The CLI sends the selected language with API requests. Unsupported values fall back to English. `--json` prints the wrapped JSON result. The `random` command prints only the message, so it can be used in command substitution.
