@@ -160,7 +160,6 @@ The built-in scheduler uses persistent task state in the server database and run
 | `server.scheduler.tasks.<task>.schedule` | Five-field cron expression or supported `@every` interval. |
 | `server.scheduler.tasks.<task>.retry_on_fail` | Retries failed tasks with bounded backoff. |
 | `server.scheduler.tasks.<task>.retry_delay` | Base delay between retries. |
-| `server.scheduler.tasks.backup_daily.retention` | Daily backup retention overrides. |
 
 Built-in task IDs and default schedules follow the AI.md scheduler specification. Tor and I2P health tasks are registered only when their corresponding network mode is active.
 
@@ -209,6 +208,7 @@ All standards are disabled by default and configured independently. If any is en
 | `web.security.policy` | Security policy text/configuration value. |
 | `web.security.report_url` | External security report destination. |
 | `web.security.publish_pgp_key` | Defaults to `true`; publishes a valid configured public PGP key at `/.well-known/pgp-key.asc`, adds its `Encryption:` URL and fingerprint comment to `security.txt`, and exposes its URL in security metadata. `false` disables public publication while retaining the local key. |
+| `web.security.keyservers` | Keyserver host names receiving the public key on generation, rotation, import, or `--maintenance pgp publish`; transient failures retry through the scheduled `keyserver_retry` task. |
 
 `robots.txt` rules must start with `/`; invalid and duplicate rules are ignored. When no valid allow rule remains, `/` is allowed. Deny rules take precedence over allow rules, and the sitemap uses the same rules when selecting pages. Defaults allow `/` and `/api`, and deny `/debug`.
 

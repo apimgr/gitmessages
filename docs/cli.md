@@ -13,7 +13,7 @@ gitmessages --maintenance -h
 gitmessages --update help
 ```
 
-The server also accepts `--service {start|stop|restart|reload|status|--install|--uninstall|--disable}` and `--maintenance {backup|restore|update|mode|setup|token|data|compliance}`. Update commands are `--update [check|yes|branch {stable|beta|devel}]`.
+The server also accepts `--service {start|stop|restart|reload|status|--install|--uninstall|--disable}` and `--maintenance {backup|restore|update|mode|setup|pgp|secret|security|token|data|compliance}`. Update commands are `--update [check|yes|branch {stable|beta|devel}]`.
 
 Email commands validate or send operator email using the configured SMTP relay. `email test --dry-run` previews and validates every embedded or overridden template without sending. `email test` sends the test template to `server.notifications.email.reply_to`; `--to ADDRESS` selects a one-off recipient. A real test send requires a working SMTP relay.
 
@@ -23,6 +23,12 @@ gitmessages email test --to operator@example.com
 ```
 
 Maintenance commands that read or change owner or compliance data require root or the operator token from `server.token`. Token prefixes can be found with `--maintenance token list`.
+
+PGP key management is available only through the maintenance CLI. `pgp generate`, `pgp rotate`, `pgp publish`, `pgp export public [path]`, `pgp export private <path>`, `pgp import <file>`, and `pgp delete` manage the project security keypair; private-key import/export and deletion require the sensitive-operation confirmation flow. Keyserver retries run through the scheduled `keyserver_retry` task.
+
+Secret rotation is limited to `installation_secret` and `encryption_key`. Both commands require the sensitive-operation confirmation flow; the old secret remains available for seven days and the old encryption key remains available for 30 days while dependent data is re-encrypted.
+
+Security-report operations are `security list [--status STATUS]`, `security show TRACKING_ID`, `security export TRACKING_ID [--output FILE|-]`, and `security update TRACKING_ID [--status STATUS] [--comment TEXT] [--disclosure-date YYYY-MM-DD] [--severity LEVEL]`. Export writes encrypted report bytes with mode `0600`; update moves status forward, sets researcher-visible updates, and records disclosure credit when applicable.
 
 ```sh
 gitmessages --maintenance data export --owner own_XXXXXXXX
