@@ -18,4 +18,5 @@ type Operation struct {
 	Parameters  []Parameter
 	Security    []string
 	MountedWhen string
+	Internal    bool
 }

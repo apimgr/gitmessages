@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,6 +37,29 @@ func TestReleaseSelectionHelpers(t *testing.T) {
 	}
 	if compareTags("1.2.4", "1.2.3") <= 0 || compareTags("1.2.3-beta", "1.2.3") >= 0 || compareTags("v1.2.3", "1.2.3") != 0 {
 		t.Fatal("version ordering is incorrect")
+	}
+}
+
+func TestInstallFromURLRequiresHTTPSAndChecksum(t *testing.T) {
+	if err := InstallFromURL(context.Background(), "http://updates.example/binary", strings.Repeat("a", 64), "1.0.0", "1.0.1"); err == nil || !strings.Contains(err.Error(), "HTTPS") {
+		t.Fatalf("HTTP update URL error = %v", err)
+	}
+	if err := InstallFromURL(context.Background(), "https://updates.example/binary", "bad", "1.0.0", "1.0.1"); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("invalid update checksum error = %v", err)
+	}
+}
+
+func TestStripUpdateArgumentsPreservesCommandAndRemovesUpdateControls(t *testing.T) {
+	got := stripUpdateArguments([]string{"gitmessages-cli", "--update", "yes", "--server", "https://example.test", "--update=check", "messages", "list", "--maintenance", "update", "--json"})
+	want := []string{"gitmessages-cli", "--server", "https://example.test", "messages", "list", "--json"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("stripUpdateArguments() = %#v, want %#v", got, want)
+	}
+
+	got = stripUpdateArguments([]string{"gitmessages", "--update", "branch", "beta", "serve"})
+	want = []string{"gitmessages", "serve"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("stripUpdateArguments() branch = %#v, want %#v", got, want)
 	}
 }
 
@@ -78,6 +102,36 @@ func TestDownloadBoundsAndStatus(t *testing.T) {
 	}
 	if _, err := download(context.Background(), "://invalid", 10); err == nil {
 		t.Fatal("download accepted an invalid URL")
+	}
+}
+
+func TestDownloadWithBearerToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer private-token" {
+			http.Error(w, "missing bearer token", http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte("binary"))
+	}))
+	defer server.Close()
+
+	data, err := downloadWithBearerToken(context.Background(), server.URL, 16, "private-token")
+	if err != nil || string(data) != "binary" {
+		t.Fatalf("authenticated download = %q, %v", data, err)
+	}
+}
+
+func TestSameUpdateOrigin(t *testing.T) {
+	left, _ := url.Parse("https://updates.example.test:443/cli")
+	if !sameUpdateOrigin(left, left) {
+		t.Fatal("same HTTPS origin was rejected")
+	}
+	differentHost, _ := url.Parse("https://other.example.test/cli")
+	if sameUpdateOrigin(left, differentHost) {
+		t.Fatal("cross-host HTTPS redirect was accepted")
+	}
+	if sameUpdateOrigin(left, nil) {
+		t.Fatal("nil redirect URL was accepted")
 	}
 }
 

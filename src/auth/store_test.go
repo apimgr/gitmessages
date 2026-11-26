@@ -146,6 +146,15 @@ func TestLinkedTokenManagementRotationRevocationAndRestore(t *testing.T) {
 	if _, err := store.Authenticate(ctx, rotatedLinked); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("revoked linked token remained valid: %v", err)
 	}
+	if prefix, ok := store.RejectedBearerPrefix(ctx, rotatedLinked); !ok || prefix == "" || len(prefix) >= len(rotatedLinked) {
+		t.Fatalf("revoked token prefix = %q, found = %v", prefix, ok)
+	}
+	if prefix, ok := store.RejectedBearerPrefix(ctx, "unknown_token_value_with_a_long_suffix"); !ok || prefix != "unknown_toke" {
+		t.Fatalf("unknown rejected token prefix = %q, found = %v", prefix, ok)
+	}
+	if prefix, ok := store.RejectedBearerPrefix(ctx, "short"); ok || prefix != "" {
+		t.Fatalf("short rejected token leaked into audit prefix: %q, found = %v", prefix, ok)
+	}
 }
 
 func TestExpiredLinkedTokenStaysListedButCannotAuthenticate(t *testing.T) {
@@ -329,6 +338,13 @@ func TestUpdateLinkedRejectsInvalidAndDuplicateChanges(t *testing.T) {
 func TestIdleOwnerPurgeAndStoreAccessors(t *testing.T) {
 	store, _ := testStore(t)
 	ctx := context.Background()
+	var systemOwner string
+	if err := store.db.Read().QueryRowContext(ctx, `SELECT id FROM owners WHERE id='system'`).Scan(&systemOwner); err != nil {
+		t.Fatalf("system owner was not seeded: %v", err)
+	}
+	if _, _, err := store.DeleteOwner(ctx, "system", "cli"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("system owner deletion error = %v", err)
+	}
 	if store.Database() != store.db || store.CookieMaxAge() != time.Hour {
 		t.Fatal("store accessors did not return their configured values")
 	}
@@ -344,6 +360,10 @@ func TestIdleOwnerPurgeAndStoreAccessors(t *testing.T) {
 	}
 	if err := store.db.Write(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `UPDATE owners SET last_seen_at = ? WHERE id = ?`, time.Now().Add(-48*time.Hour).Unix(), identity.OwnerID)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE owners SET last_seen_at = ? WHERE id = 'system'`, time.Now().Add(-48*time.Hour).Unix())
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -351,6 +371,10 @@ func TestIdleOwnerPurgeAndStoreAccessors(t *testing.T) {
 	store.idlePurgeDays = 1
 	if count, err := store.PurgeIdleOwners(ctx); err != nil || count != 1 {
 		t.Fatalf("idle purge = %d, %v; want 1 owner", count, err)
+	}
+	var systemOwners int
+	if err := store.db.Read().QueryRowContext(ctx, `SELECT COUNT(*) FROM owners WHERE id='system'`).Scan(&systemOwners); err != nil || systemOwners != 1 {
+		t.Fatalf("system owner count after purge = %d, %v", systemOwners, err)
 	}
 	store.RunCleanup(stopped)
 	if _, err := store.Authenticate(ctx, primary); !errors.Is(err, ErrInvalidToken) {

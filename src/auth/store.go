@@ -318,7 +318,7 @@ func (s *Store) PurgeIdleOwners(ctx context.Context) (int64, error) {
 	cutoff := time.Now().Add(-time.Duration(s.idlePurgeDays) * 24 * time.Hour).Unix()
 	var count int64
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, `DELETE FROM owners WHERE last_seen_at < ?`, cutoff)
+		result, err := tx.ExecContext(ctx, `DELETE FROM owners WHERE id <> 'system' AND last_seen_at < ?`, cutoff)
 		if err != nil {
 			return err
 		}
@@ -402,6 +402,20 @@ func (s *Store) AuthenticateBearer(ctx context.Context, raw string) (Identity, e
 		return Identity{}, ErrInvalidToken
 	}
 	return s.Authenticate(ctx, raw)
+}
+
+// RejectedBearerPrefix returns a bounded token prefix for an unauthenticated bearer value.
+func (s *Store) RejectedBearerPrefix(ctx context.Context, raw string) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if s == nil || len(raw) <= 12 {
+		return "", false
+	}
+	var prefix string
+	err := s.db.Read().QueryRowContext(ctx, `SELECT token_prefix FROM api_tokens WHERE token_hash = ? AND revoked_at IS NOT NULL`, tokenHash(raw)).Scan(&prefix)
+	if err == nil && prefix != "" {
+		return prefix, true
+	}
+	return tokenPrefix(raw), true
 }
 
 // IssueOwner creates a credential-only owner and its primary token.
@@ -558,6 +572,9 @@ func (s *Store) RevokeByPrefix(ctx context.Context, prefix string) error {
 
 // DeleteOwner deletes an owner and its credentials atomically, then records the deletion source.
 func (s *Store) DeleteOwner(ctx context.Context, ownerID, source string) (int64, int64, error) {
+	if ownerID == "system" {
+		return 0, 0, ErrNotFound
+	}
 	var tokenCount int64
 	var resourceCount int64
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {

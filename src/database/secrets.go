@@ -135,14 +135,14 @@ func (s *Store) StorePreviousEncryptionKey(ctx context.Context, previous, curren
 				return err
 			}
 			deadline, parseErr := time.Parse(time.RFC3339Nano, until)
-			_, unwrapErr := unwrapPreviousEncryptionKey(encoded, current)
-			if unwrapErr == nil && parseErr == nil && now.Before(deadline) {
-				return errors.New("cannot rotate encryption_key while its previous key remains in grace")
+			if parseErr != nil {
+				return fmt.Errorf("invalid encryption_key grace deadline: %w", parseErr)
 			}
-			if unwrapErr != nil {
-				if _, err := tx.ExecContext(ctx, `DELETE FROM app_secrets WHERE name IN ('encryption_key_previous','encryption_key_previous_until')`); err != nil {
-					return err
-				}
+			if _, err := unwrapPreviousEncryptionKey(encoded, current); err != nil {
+				return fmt.Errorf("cannot verify existing encryption_key grace state: %w", err)
+			}
+			if now.Before(deadline) {
+				return errors.New("cannot rotate encryption_key while its previous key remains in grace")
 			}
 		} else if err != sql.ErrNoRows {
 			return err

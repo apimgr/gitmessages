@@ -5,6 +5,7 @@ import "testing"
 func TestBuildIncludesConditionalSupersetAndFiltersMountedRoutes(t *testing.T) {
 	document := Document{
 		Operations: []Operation{
+			{Path: "/debug/pprof", Method: "GET", ID: "internal_debug", Internal: true},
 			{Path: "/metrics", Method: "GET", ID: "root_metrics", MountedWhen: "server.metrics.root.enabled"},
 			{Path: "/api/metrics", Method: "GET", ID: "api_metrics", MountedWhen: "server.metrics.enabled"},
 			{Path: "/api/types", Method: "GET", ID: "types"},
@@ -13,7 +14,10 @@ func TestBuildIncludesConditionalSupersetAndFiltersMountedRoutes(t *testing.T) {
 	superset := Build(document)
 	paths := superset["paths"].(map[string]any)
 	if len(paths) != 3 {
-		t.Fatalf("Build returned %d paths; want the full route superset", len(paths))
+		t.Fatalf("Build returned %d paths; want the public route superset without internal routes", len(paths))
+	}
+	if _, exists := paths["/debug/pprof"]; exists {
+		t.Fatal("internal debug route appeared in OpenAPI")
 	}
 	rootOperation := paths["/metrics"].(map[string]any)["get"].(map[string]any)
 	if rootOperation["x-mounted-when"] != "server.metrics.root.enabled" {

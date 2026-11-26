@@ -120,6 +120,23 @@ func TestPreviousEncryptionKeyUsesConfigVersionAndGrace(t *testing.T) {
 	if retained != 2 {
 		t.Fatalf("stale config removed shared encryption grace state: rows=%d", retained)
 	}
+	staleCurrent := make([]byte, 32)
+	for index := range staleCurrent {
+		staleCurrent[index] = byte(index + 65)
+	}
+	if err := store.StorePreviousEncryptionKey(context.Background(), current, staleCurrent, 30*24*time.Hour, 3); err == nil {
+		t.Fatal("rotation with a stale current key should be rejected")
+	}
+	if err := store.Read().QueryRow(`SELECT COUNT(*) FROM app_secrets WHERE name IN ('encryption_key_previous','encryption_key_previous_until')`).Scan(&retained); err != nil {
+		t.Fatal(err)
+	}
+	if retained != 2 {
+		t.Fatalf("stale rotation removed shared encryption grace state: rows=%d", retained)
+	}
+	recovered, err = store.PreviousEncryptionKey(context.Background(), current, time.Now().UTC(), 2)
+	if err != nil || !equalSecretBytes(recovered, previous) {
+		t.Fatalf("stale rotation damaged recoverable grace key: recovered=%v err=%v", equalSecretBytes(recovered, previous), err)
+	}
 }
 
 func equalSecretBytes(left, right []byte) bool {

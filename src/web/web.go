@@ -11,6 +11,7 @@ import (
 	"html"
 	"html/template"
 	"io"
+	"log"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -32,6 +33,8 @@ import (
 	"github.com/apimgr/gitmessages/src/messages"
 	"github.com/apimgr/gitmessages/src/metrics"
 	"github.com/apimgr/gitmessages/src/mode"
+	"github.com/apimgr/gitmessages/src/overlay"
+	"github.com/apimgr/gitmessages/src/paths"
 	"github.com/apimgr/gitmessages/src/scheduler"
 	swaggerapi "github.com/apimgr/gitmessages/src/swagger"
 	htmlnode "golang.org/x/net/html"
@@ -49,6 +52,8 @@ var (
 	serverVersion         = "dev"
 	serverCommit          = "unknown"
 	serverBuildDate       = ""
+	panicLoggerMu         sync.RWMutex
+	panicLogger           *log.Logger
 	overlayStatusMu       sync.RWMutex
 	overlayStatusProvider func() map[string]any
 	apiBasePathMu         sync.RWMutex
@@ -144,6 +149,7 @@ func Handler(version string, commit ...string) http.Handler {
 	mux.HandleFunc("/static/js/", documentationScript)
 	mux.HandleFunc("/locales/", localeJSON)
 	mux.HandleFunc("/api/autodiscover", apiAutodiscover)
+	mux.HandleFunc("/cli/binaries/", serveCLIBinary)
 	mux.HandleFunc(APIBasePath(), apiRoot)
 	mux.HandleFunc("/api/healthz", apiHealth)
 	mux.HandleFunc(APIBasePath()+".txt", apiTextExtension)
@@ -185,7 +191,14 @@ func Handler(version string, commit ...string) http.Handler {
 	}
 	handler = debugMiddleware(handler)
 	handler = privacySignalMiddleware(handler)
-	return handler
+	return RecoverMiddleware(handler)
+}
+
+// ConfigurePanicLogger directs private panic diagnostics to the configured log file.
+func ConfigurePanicLogger(logger *log.Logger) {
+	panicLoggerMu.Lock()
+	panicLogger = logger
+	panicLoggerMu.Unlock()
 }
 
 // ConfigureDatabaseMetrics connects the active metrics exporter to the shared SQLite store.
@@ -302,7 +315,11 @@ func normalizeURL(next http.Handler) http.Handler {
 			if r.URL.RawQuery != "" {
 				canonical += "?" + r.URL.RawQuery
 			}
-			http.Redirect(w, r, canonical, http.StatusMovedPermanently)
+			status := http.StatusMovedPermanently
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				status = http.StatusPermanentRedirect
+			}
+			http.Redirect(w, r, canonical, status)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -642,6 +659,9 @@ func writeSuccess(w http.ResponseWriter, r *http.Request, data any) {
 }
 
 func writeError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	if status == http.StatusUnauthorized {
+		recordRejectedCLIToken(r)
+	}
 	if wantsText(r) {
 		writeText(w, status, message)
 		return
@@ -901,37 +921,72 @@ func apiAutodiscover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := config.Get()
-	writeSuccess(w, r, map[string]any{
-		"server": map[string]any{
-			"name":        seoBrandingTitle(),
-			"version":     serverVersion,
-			"api_version": strings.TrimPrefix(APIBasePath(), "/api/"),
-			"api_base":    APIBasePath(),
-			"base_url":    BuildURL(r, ""),
-			"fqdn":        cfg.Server.FQDN,
-			"port":        cfg.Server.Port,
-		},
-		"config_schema": map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"server": map[string]any{"type": "object", "properties": map[string]any{
-					"primary":     map[string]any{"type": "string", "format": "uri", "description": "Base URL of this server."},
-					"api_version": map[string]any{"type": "string", "pattern": "^v[0-9]+$", "description": "API version discovered from the server."},
-					"timeout":     map[string]any{"type": "string", "default": "30s"},
-					"retry":       map[string]any{"type": "integer", "minimum": 0, "default": 3},
-					"retry_delay": map[string]any{"type": "string", "default": "1s"},
-				}},
-				"language": map[string]any{"type": "string", "description": "Supported output language."},
-			},
-		},
-		"options": map[string]any{
-			"commands":       []string{"types", "list", "conventions", "templates", "random", "build"},
-			"output_formats": []string{"json", "plain"},
-			"authentication": map[string]any{"required": false, "token": "optional; required only for owner or operator operations"},
-		},
-		"cli_versions":    map[string]any{},
-		"cli_min_version": cfg.Server.Update.CLIMinVersion,
-	})
+	urls := discoveryOrigins(r)
+	data := map[string]any{
+		"name": paths.ProjectName, "version": serverVersion,
+		"api":  map[string]string{"current_version": strings.TrimPrefix(APIBasePath(), "/api/")},
+		"urls": urls, "cli_versions": cliBinaryVersions(), "cli_min_version": cfg.Server.Update.CLIMinVersion,
+	}
+	statuses := overlayStatuses()
+	if cfg.Server.Tor.Expose {
+		if status, ok := statuses["tor"].(overlay.TorStatus); ok && status.Hostname != "" {
+			data["onion"] = status.Hostname
+		}
+	}
+	if cfg.Server.I2P.Expose {
+		if status, ok := statuses["i2p"].(overlay.I2PStatus); ok {
+			address := status.Address
+			if address == "" {
+				address = status.Hostname
+			}
+			if address != "" {
+				data["i2p"] = address
+			}
+		}
+	}
+	writeSuccess(w, r, data)
+}
+
+func discoveryOrigins(r *http.Request) []string {
+	urls := make([]string, 0, 4)
+	seen := make(map[string]struct{})
+	add := func(value string) {
+		parsed, err := url.Parse(strings.TrimSpace(value))
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return
+		}
+		origin := strings.ToLower(parsed.Scheme) + "://" + parsed.Host
+		if _, exists := seen[origin]; exists {
+			return
+		}
+		seen[origin] = struct{}{}
+		urls = append(urls, origin)
+	}
+	if requestURL, err := url.Parse(BuildURL(r, "")); err == nil {
+		add(requestURL.Scheme + "://" + requestURL.Host)
+	}
+	if fqdn := strings.TrimSpace(config.Get().Server.FQDN); fqdn != "" {
+		scheme := "https"
+		if requestURL, err := url.Parse(BuildURL(r, "")); err == nil && requestURL.Scheme != "" {
+			scheme = requestURL.Scheme
+		}
+		add(scheme + "://" + fqdn)
+	}
+	for _, domain := range strings.Split(os.Getenv("DOMAIN"), ",") {
+		domain = strings.TrimSpace(domain)
+		if domain == "" {
+			continue
+		}
+		if !strings.Contains(domain, "://") {
+			scheme := "https"
+			if requestURL, err := url.Parse(BuildURL(r, "")); err == nil && requestURL.Scheme != "" {
+				scheme = requestURL.Scheme
+			}
+			domain = scheme + "://" + domain
+		}
+		add(domain)
+	}
+	return urls
 }
 
 func apiTypes(w http.ResponseWriter, r *http.Request) {
@@ -2335,6 +2390,9 @@ func BuildOpenAPISuperset(r *http.Request) map[string]any {
 		})
 	}
 	for _, definition := range apiOperationDefinitions(r) {
+		if definition.Internal {
+			continue
+		}
 		responses := response(definition.description)
 		if definition.method == http.MethodPost {
 			responses = map[string]any{"200": map[string]any{"description": definition.description}, "400": map[string]any{"description": tr(r, "swagger.build_message.error")}}
@@ -2350,6 +2408,17 @@ func BuildOpenAPISuperset(r *http.Request) map[string]any {
 		})
 	}
 	addOperation("/api/autodiscover", http.MethodGet, "get_api_autodiscover", tr(r, "api.rest"), tr(r, "api.resources"), nil, false, nil, "")
+	cliBinarySecurity := []string(nil)
+	if config.Get().CLI.BinaryDownload.RequireAuth {
+		cliBinarySecurity = []string{"BearerAuth"}
+	}
+	operations = append(operations, swaggerapi.Operation{
+		Path: "/cli/binaries/{binary}", Method: http.MethodGet, ID: "download_cli_binary",
+		Summary: tr(r, "api.rest"), Description: tr(r, "api.rest"),
+		Parameters: []swaggerapi.Parameter{{Name: "binary", Location: "path", Required: true, Schema: map[string]any{"type": "string"}}},
+		Responses:  map[string]any{"200": map[string]any{"description": tr(r, "api.rest"), "content": map[string]any{"application/octet-stream": map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}}}, "404": map[string]any{"description": tr(r, "contact.error.invalid")}},
+		Security:   cliBinarySecurity,
+	})
 	addOperation("/api/healthz", http.MethodGet, "get_api_healthz", tr(r, "health.title"), tr(r, "health.ok"), nil, false, nil, "")
 	addOperation("/api/swagger", http.MethodGet, "get_api_swagger", tr(r, "api.openapi"), tr(r, "api.rest"), nil, false, nil, "")
 	tokenPath := APIBasePath() + "/server/preferences/tokens"

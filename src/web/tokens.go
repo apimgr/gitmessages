@@ -1238,7 +1238,7 @@ func parseTokenExpiry(value string) (*time.Time, error) {
 func tokenJSONError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": code, "message": message})
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": code, "message": message, "details": map[string]any{}, "request_id": w.Header().Get("X-Request-ID")})
 }
 
 func strictTokenAllowed(w http.ResponseWriter, r *http.Request) bool {
@@ -1276,6 +1276,7 @@ func tokenAuthError(w http.ResponseWriter, r *http.Request, err error) {
 	if !tokenAuthFailureAllowed(w, r) {
 		return
 	}
+	recordRejectedCLIToken(r)
 	w.Header().Set("WWW-Authenticate", `Bearer realm="gitmessages", error="invalid_token"`)
 	tokenJSONError(w, http.StatusUnauthorized, "UNAUTHORIZED", "A valid primary token is required")
 }

@@ -124,7 +124,7 @@ func TestContactPagesExposeProviderFallbackAndFreshCaptchaErrors(t *testing.T) {
 		}
 	}
 	readFormFields(formDocument)
-	captchaQuestion = regexp.MustCompile(`[0-9]+\s*[+-]\s*[0-9]+`).FindString(csrfPage.Body.String())
+	captchaQuestion = regexp.MustCompile(`\b[0-9]+\s+[+-]\s+[0-9]+\b`).FindString(csrfPage.Body.String())
 	if formToken == "" || formCaptchaID == "" || captchaQuestion == "" {
 		t.Fatal("HTML form omitted its current submission token or fallback CAPTCHA")
 	}

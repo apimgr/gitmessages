@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -184,6 +185,41 @@ func TestEncryptedIncrementalHeaderExposesBaseWithoutPassword(t *testing.T) {
 	}
 	if header.BaseBackup != "full-2026.tar.gz.enc" || !header.MatchesPassword("correct horse battery staple") {
 		t.Fatalf("encrypted incremental header = %#v", header)
+	}
+}
+
+func TestParseEncryptionHeaderEnforcesResourceAndFilenameBounds(t *testing.T) {
+	header := make([]byte, 55+255)
+	copy(header, envelopeID)
+	binary.BigEndian.PutUint32(header[21:25], 1024*1024)
+	binary.BigEndian.PutUint32(header[25:29], 10)
+	binary.BigEndian.PutUint32(header[29:33], 16)
+	copy(header[45:53], "00112233")
+	binary.BigEndian.PutUint16(header[53:55], 255)
+	for index := 55; index < len(header); index++ {
+		header[index] = 'a'
+	}
+	if _, err := ParseEncryptionHeader(header); err != nil {
+		t.Fatalf("maximum permitted Argon2 settings and base filename were rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func([]byte){
+		"memory ceiling":   func(data []byte) { binary.BigEndian.PutUint32(data[21:25], 1024*1024+1) },
+		"parallel ceiling": func(data []byte) { binary.BigEndian.PutUint32(data[29:33], 17) },
+		"filename length":  func(data []byte) { binary.BigEndian.PutUint16(data[53:55], 256) },
+		"forward slash":    func(data []byte) { data[55] = '/' },
+		"backslash":        func(data []byte) { data[55] = '\\' },
+	} {
+		data := append([]byte(nil), header...)
+		mutate(data)
+		if _, err := ParseEncryptionHeader(data); err == nil {
+			t.Errorf("ParseEncryptionHeader accepted invalid %s", name)
+		}
+	}
+	for _, name := range []string{strings.Repeat("a", 256), "../backup.tar.gz", `folder\backup.tar.gz`} {
+		if _, err := encrypt([]byte("archive"), "correct horse battery staple", name); err == nil {
+			t.Errorf("encrypt accepted invalid base filename %q", name)
+		}
 	}
 }
 

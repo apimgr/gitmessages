@@ -33,6 +33,17 @@ func TestValidServer(t *testing.T) {
 	}
 }
 
+func TestCompareCLIVersions(t *testing.T) {
+	for _, test := range []struct {
+		left, right string
+		want        int
+	}{{"1.2.2", "1.2.3", -1}, {"v2.0.0", "1.9.9", 1}, {"1.2.3", "1.2.3", 0}} {
+		if got := compareCLIVersions(test.left, test.right); got != test.want {
+			t.Errorf("compareCLIVersions(%q, %q) = %d, want %d", test.left, test.right, got, test.want)
+		}
+	}
+}
+
 func TestClientRunAndBuild(t *testing.T) {
 	configHome := clientTestDir(t)
 	t.Setenv("XDG_CONFIG_HOME", configHome)
@@ -80,7 +91,7 @@ func TestClientRunAndBuild(t *testing.T) {
 	if err := run(nil); err == nil {
 		t.Fatal("non-interactive invocation without a server unexpectedly succeeded")
 	}
-	if err := run([]string{"--server", "https://example.test", "unknown"}); err == nil || !strings.Contains(err.Error(), "unknown") {
+	if err := run([]string{"--server", server.URL, "unknown"}); err == nil || !strings.Contains(err.Error(), "unknown") {
 		t.Fatalf("unknown command error = %v", err)
 	}
 }

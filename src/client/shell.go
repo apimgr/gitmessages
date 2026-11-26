@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-var clientCommands = []string{"types", "list", "conventions", "templates", "random", "build", "--help", "--version", "--server", "--lang", "--json", "--debug", "--color", "--shell"}
+var clientCommands = []string{"types", "list", "conventions", "templates", "random", "build", "--help", "--version", "--server", "--token", "--lang", "--json", "--debug", "--color", "--shell", "--update"}
 
 func printClientCompletions(shell, binary string) error {
 	commands := strings.Join(clientCommands, " ")
@@ -26,6 +26,7 @@ func printClientCompletions(shell, binary string) error {
 		for _, command := range clientCommands {
 			fmt.Printf("complete -c %s -f -a '%s'\n", name, command)
 		}
+		fmt.Printf("complete -c %s -f -l update -r -a 'check yes'\n", name)
 	case "sh", "dash", "ksh":
 		fmt.Printf("_%s_complete() {\n  printf '%%s\\n' %s\n}\n", name, clientShellQuote(strings.ReplaceAll(commands, " ", "\n")))
 	case "powershell", "pwsh":

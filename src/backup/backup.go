@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/apimgr/gitmessages/src/paths"
 	"golang.org/x/crypto/argon2"
@@ -67,10 +68,10 @@ type Manifest struct {
 
 // FileEntry is a checksum record for one regular file stored in an archive.
 type FileEntry struct {
-	Path    string    `json:"path"`
-	Size    int64     `json:"size"`
-	SHA256  string    `json:"sha256"`
-	ModTime int64     `json:"mtime"`
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+	SHA256  string `json:"sha256"`
+	ModTime int64  `json:"mtime"`
 }
 
 // Input identifies a source file and its normalized archive path.
@@ -680,7 +681,7 @@ func manifestChecksum(files []FileEntry) string {
 }
 
 func encrypt(plain []byte, password, baseBackup string) ([]byte, error) {
-	if len(baseBackup) > 4096 || (baseBackup != "" && filepath.Base(baseBackup) != baseBackup) {
+	if len(baseBackup) > 255 || !utf8.ValidString(baseBackup) || baseBackup != "" && (filepath.Base(baseBackup) != baseBackup || strings.ContainsAny(baseBackup, `/\\`)) {
 		return nil, errors.New("invalid encrypted backup base filename")
 	}
 	salt := make([]byte, 16)
@@ -769,17 +770,17 @@ func ParseEncryptionHeader(data []byte) (EncryptionHeader, error) {
 	copy(header.Nonce[:], data[33:45])
 	header.KeyID = string(data[45:53])
 	baseLength := int(binary.BigEndian.Uint16(data[53:55]))
-	if header.MemoryKiB < 8*1024 || header.MemoryKiB > 256*1024 || header.Iterations == 0 || header.Iterations > 10 || header.Parallel == 0 || header.Parallel > 8 {
+	if header.MemoryKiB < 8*1024 || header.MemoryKiB > 1024*1024 || header.Iterations == 0 || header.Iterations > 10 || header.Parallel == 0 || header.Parallel > 16 || header.MemoryKiB < 8*header.Parallel {
 		return EncryptionHeader{}, errors.New("invalid encrypted backup Argon2 parameters")
 	}
-	if baseLength > 4096 || len(data) < fixedLength+baseLength {
+	if baseLength > 255 || len(data) < fixedLength+baseLength {
 		return EncryptionHeader{}, errors.New("invalid encrypted backup format")
 	}
 	if _, err := hex.DecodeString(header.KeyID); err != nil || len(header.KeyID) != 8 {
 		return EncryptionHeader{}, errors.New("invalid encrypted backup key identifier")
 	}
 	header.BaseBackup = string(data[fixedLength : fixedLength+baseLength])
-	if header.BaseBackup != "" && (filepath.Base(header.BaseBackup) != header.BaseBackup || header.BaseBackup == "." || header.BaseBackup == "..") {
+	if !utf8.ValidString(header.BaseBackup) || header.BaseBackup != "" && (filepath.Base(header.BaseBackup) != header.BaseBackup || header.BaseBackup == "." || header.BaseBackup == ".." || strings.ContainsAny(header.BaseBackup, `/\\`)) {
 		return EncryptionHeader{}, errors.New("invalid encrypted backup base filename")
 	}
 	header.Encoded = append([]byte(nil), data[:fixedLength+baseLength]...)
@@ -798,7 +799,7 @@ func ReadEncryptionHeader(path string) (EncryptionHeader, error) {
 		return EncryptionHeader{}, errors.New("invalid encrypted backup format")
 	}
 	baseLength := int(binary.BigEndian.Uint16(fixed[53:55]))
-	if baseLength > 4096 {
+	if baseLength > 255 {
 		return EncryptionHeader{}, errors.New("invalid encrypted backup format")
 	}
 	data := append([]byte(nil), fixed...)

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -21,6 +23,7 @@ import (
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/messages"
 	projectpaths "github.com/apimgr/gitmessages/src/paths"
+	"github.com/apimgr/gitmessages/src/update"
 	"gopkg.in/yaml.v3"
 )
 
@@ -48,6 +51,7 @@ var apiVersions sync.Map
 const projectName = projectpaths.ProjectName
 
 var configProfile string
+var apiToken string
 
 type clientConfig struct {
 	Language string `yaml:"language"`
@@ -57,7 +61,13 @@ type clientConfig struct {
 	Server struct {
 		Primary    string `yaml:"primary"`
 		APIVersion string `yaml:"api_version"`
+		Token      string `yaml:"token"`
 	} `yaml:"server"`
+	Update struct {
+		Auto          bool   `yaml:"auto"`
+		CheckInterval string `yaml:"check_interval"`
+		Channel       string `yaml:"channel"`
+	} `yaml:"update"`
 }
 
 type envelope struct {
@@ -65,6 +75,7 @@ type envelope struct {
 	Data    json.RawMessage `json:"data"`
 	Error   string          `json:"error"`
 	Message string          `json:"message"`
+	Details json.RawMessage `json:"details"`
 }
 
 func main() {
@@ -79,6 +90,7 @@ func run(args []string) error {
 	flags := flag.NewFlagSet(binary, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	serverFlag := flags.String("server", "", "Server base URL")
+	tokenFlag := flags.String("token", "", "API bearer token")
 	configFlag := flags.String("config", "", "Configuration profile or file path")
 	languageFlag := flags.String("lang", "", "Language for output")
 	jsonOutput := flags.Bool("json", false, "Print the API response as JSON")
@@ -87,12 +99,16 @@ func run(args []string) error {
 	helpFlag := flags.Bool("help", false, "Print help")
 	flags.BoolVar(helpFlag, "h", false, "Print help")
 	debugFlag := flags.Bool("debug", false, "Print API requests to stderr")
+	updateFlag := flags.String("update", "", "Check for or install a CLI update: check, yes")
 	colorFlag := flags.String("color", "auto", "Color output: auto, yes, no")
 	shellFlag := flags.String("shell", "", "Print shell completions or shell initialization")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("%s: %w", binary, err)
 	}
 	debugEnabled = *debugFlag
+	if *updateFlag != "" && *updateFlag != "check" && *updateFlag != "yes" {
+		return errors.New("invalid --update value: expected check or yes")
+	}
 	if *colorFlag != "auto" && *colorFlag != "yes" && *colorFlag != "no" {
 		return fmt.Errorf("invalid --color value %q: expected auto, yes, or no", *colorFlag)
 	}
@@ -110,6 +126,11 @@ func run(args []string) error {
 		return nil
 	}
 	configProfile = strings.TrimSpace(*configFlag)
+	if previous := os.Getenv("GITMESSAGES_CLI_UPDATE_FROM"); previous != "" {
+		recordCLIAudit("cli.update_completed", map[string]string{"old_version": previous, "new_version": os.Getenv("GITMESSAGES_CLI_UPDATE_TO"), "os_arch": runtime.GOOS + "-" + runtime.GOARCH})
+		_ = os.Unsetenv("GITMESSAGES_CLI_UPDATE_FROM")
+		_ = os.Unsetenv("GITMESSAGES_CLI_UPDATE_TO")
+	}
 	if err := ensureClientDirectories(); err != nil {
 		return err
 	}
@@ -119,6 +140,16 @@ func run(args []string) error {
 		return err
 	}
 	lang := selectLanguage(*languageFlag, config.Language)
+	apiToken = strings.TrimSpace(config.Server.Token)
+	if *tokenFlag != "" {
+		apiToken = strings.TrimSpace(*tokenFlag)
+		if config.Server.Token == "" {
+			config.Server.Token = apiToken
+			if err := saveConfig(config); err != nil {
+				return err
+			}
+		}
+	}
 	if *helpFlag {
 		printUsage(binary, lang)
 		return nil
@@ -147,6 +178,24 @@ func run(args []string) error {
 		}
 		return fmt.Errorf("%s", i18n.T(lang, "cli.server_required"))
 	}
+	discovery, err := readAutodiscover(server, lang)
+	if err != nil {
+		return err
+	}
+	apiVersion := discovery.API.CurrentVersion
+	if !validAPIVersion(apiVersion) {
+		apiVersion = discovery.Server.APIVersion
+	}
+	if !validAPIVersion(apiVersion) {
+		return errors.New("server returned invalid API version")
+	}
+	apiVersions.Store(server, apiVersion)
+	if err := checkCLIUpdate(server, lang, config, discovery, *updateFlag); err != nil {
+		return err
+	}
+	if *updateFlag == "check" && flags.NArg() == 0 || *updateFlag == "yes" && flags.NArg() == 0 {
+		return nil
+	}
 	paths := map[string]string{
 		"types": "/api/{api_version}/types", "list": "/api/{api_version}/types", "conventions": "/api/{api_version}/conventions",
 		"templates": "/api/{api_version}/templates", "random": "/api/{api_version}/messages/random",
@@ -158,10 +207,6 @@ func run(args []string) error {
 				return fmt.Errorf("%s %q; use %s --help", i18n.T(lang, "cli.unknown_command"), command, binary)
 			}
 		}
-	}
-	apiVersion, err := discoverAPIVersion(server, lang)
-	if err != nil {
-		return err
 	}
 	if config.Server.Primary == server && config.Server.APIVersion != apiVersion {
 		config.Server.APIVersion = apiVersion
@@ -267,24 +312,181 @@ func discoverAPIVersion(server, lang string) (string, error) {
 	if value, ok := apiVersions.Load(server); ok {
 		return value.(string), nil
 	}
-	data, err := requestRaw(server, http.MethodGet, "/api/autodiscover", nil, lang)
+	discovery, err := readAutodiscover(server, lang)
 	if err != nil {
-		return "", fmt.Errorf("discover API version: %w", err)
+		return "", err
 	}
-	var result struct {
-		Server struct {
-			APIVersion string `json:"api_version"`
-		} `json:"server"`
+	version := discovery.API.CurrentVersion
+	if version == "" {
+		version = discovery.Server.APIVersion
 	}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return "", fmt.Errorf("decode API discovery response: %w", err)
-	}
-	version := result.Server.APIVersion
 	if !validAPIVersion(version) {
-		return "", fmt.Errorf("server returned invalid API version %q", version)
+		return "", errors.New("server returned invalid API version")
 	}
 	apiVersions.Store(server, version)
 	return version, nil
+}
+
+type cliDiscovery struct {
+	API struct {
+		CurrentVersion string `json:"current_version"`
+	} `json:"api"`
+	Server struct {
+		APIVersion string `json:"api_version"`
+	} `json:"server"`
+	CLIVersions map[string]struct {
+		Version string `json:"version"`
+		SHA256  string `json:"sha256"`
+	} `json:"cli_versions"`
+	CLIMinVersion string `json:"cli_min_version"`
+}
+
+func readAutodiscover(server, lang string) (*cliDiscovery, error) {
+	data, err := requestRaw(server, http.MethodGet, "/api/autodiscover", nil, lang)
+	if err != nil {
+		return nil, fmt.Errorf("discover API version: %w", err)
+	}
+	var result cliDiscovery
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("decode API discovery response: %w", err)
+	}
+	return &result, nil
+}
+
+func checkCLIUpdate(server, lang string, config *clientConfig, discovery *cliDiscovery, requested string) error {
+	if config.Update.CheckInterval == "" {
+		config.Update.CheckInterval = "per_invocation"
+	}
+	if config.Update.CheckInterval != "per_invocation" {
+		return errors.New("invalid client update.check_interval: expected per_invocation")
+	}
+	if config.Update.Channel == "" {
+		config.Update.Channel = "stable"
+	}
+	if config.Update.Channel != "stable" {
+		return errors.New("invalid client update.channel: expected stable")
+	}
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	asset, available := discovery.CLIVersions[platform]
+	if !available || asset.Version == "" {
+		if requested == "check" || requested == "yes" {
+			fmt.Fprintln(os.Stdout, "No CLI update is available.")
+		}
+		if discovery.CLIMinVersion != "" && compareCLIVersions(Version, discovery.CLIMinVersion) < 0 {
+			return minimumCLIVersionError(discovery.CLIMinVersion)
+		}
+		return nil
+	}
+	if discovery.CLIMinVersion != "" && compareCLIVersions(asset.Version, discovery.CLIMinVersion) < 0 {
+		return minimumCLIVersionError(discovery.CLIMinVersion)
+	}
+	comparison := compareCLIVersions(Version, asset.Version)
+	if comparison >= 0 {
+		if requested == "check" || requested == "yes" {
+			fmt.Fprintln(os.Stdout, "No CLI update is available.")
+		}
+		return nil
+	}
+	if requested == "check" {
+		fmt.Fprintf(os.Stdout, "CLI update available: %s → %s\n", Version, asset.Version)
+		if discovery.CLIMinVersion != "" && compareCLIVersions(Version, discovery.CLIMinVersion) < 0 {
+			return minimumCLIVersionError(discovery.CLIMinVersion)
+		}
+		return nil
+	}
+	install := requested == "yes" || (!isInteractive() && config.Update.Auto)
+	if !install && isInteractive() {
+		fmt.Fprintf(os.Stderr, "CLI update available: %s → %s. Install now? [y/N] ", Version, asset.Version)
+		answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		install = strings.EqualFold(strings.TrimSpace(answer), "y") || strings.EqualFold(strings.TrimSpace(answer), "yes")
+	}
+	if !install {
+		if discovery.CLIMinVersion != "" && compareCLIVersions(Version, discovery.CLIMinVersion) < 0 {
+			return minimumCLIVersionError(discovery.CLIMinVersion)
+		}
+		return nil
+	}
+	if !strings.HasPrefix(strings.ToLower(server), "https://") {
+		return errors.New("CLI updates require a server URL using HTTPS")
+	}
+	assetName := projectpaths.ProjectName + "-cli-" + platform
+	if runtime.GOOS == "windows" {
+		assetName += ".exe"
+	}
+	if len(asset.SHA256) != 64 {
+		return errors.New("server returned an invalid CLI update checksum")
+	}
+	url := strings.TrimRight(server, "/") + "/cli/binaries/" + assetName
+	var installErr error
+	if apiToken == "" {
+		installErr = update.InstallFromURL(context.Background(), url, asset.SHA256, Version, asset.Version)
+	} else {
+		installErr = update.InstallFromURLWithBearerToken(context.Background(), url, asset.SHA256, Version, asset.Version, apiToken)
+	}
+	if installErr != nil {
+		if strings.Contains(installErr.Error(), "SHA-256") {
+			recordCLIAudit("cli.update_checksum_invalid", map[string]string{"old_version": Version, "new_version": asset.Version, "os_arch": platform})
+		}
+		return installErr
+	}
+	return nil
+}
+
+func minimumCLIVersionError(minimum string) error {
+	recordCLIAudit("cli.update_forced", map[string]string{"current_version": Version, "minimum_version": minimum})
+	return fmt.Errorf("this CLI is too old; the server requires %s — run '%s-cli --update yes' to upgrade", minimum, projectpaths.ProjectName)
+}
+
+func compareCLIVersions(left, right string) int {
+	type parsedVersion struct {
+		core       []int
+		prerelease string
+	}
+	parse := func(value string) (parsedVersion, bool) {
+		value = strings.TrimPrefix(strings.TrimSpace(value), "v")
+		value = strings.SplitN(value, "+", 2)[0]
+		parts := strings.SplitN(value, "-", 2)
+		prerelease := ""
+		if len(parts) == 2 {
+			prerelease = parts[1]
+		}
+		fields := strings.Split(parts[0], ".")
+		if len(fields) != 3 {
+			return parsedVersion{}, false
+		}
+		result := make([]int, 3)
+		for index, field := range fields {
+			parsed, err := strconv.Atoi(field)
+			if err != nil || parsed < 0 {
+				return parsedVersion{}, false
+			}
+			result[index] = parsed
+		}
+		return parsedVersion{core: result, prerelease: prerelease}, true
+	}
+	a, okA := parse(left)
+	b, okB := parse(right)
+	if !okA || !okB {
+		return strings.Compare(left, right)
+	}
+	for index := range a.core {
+		if a.core[index] < b.core[index] {
+			return -1
+		}
+		if a.core[index] > b.core[index] {
+			return 1
+		}
+	}
+	if a.prerelease == "" && b.prerelease != "" {
+		return 1
+	}
+	if a.prerelease != "" && b.prerelease == "" {
+		return -1
+	}
+	if a.prerelease != b.prerelease {
+		return strings.Compare(a.prerelease, b.prerelease)
+	}
+	return 0
 }
 
 func validAPIVersion(value string) bool {
@@ -308,6 +510,9 @@ func requestRaw(server, method, path string, payload []byte, lang string) ([]byt
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Accept-Language", lang)
 	request.Header.Set("User-Agent", projectName+"-cli/"+Version)
+	if apiToken != "" {
+		request.Header.Set("Authorization", "Bearer "+apiToken)
+	}
 	if payload != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
@@ -528,7 +733,7 @@ func printUsage(binary, lang string) {
 	fmt.Printf(`%s %s
 
 %s:
-%s [--server URL] [--config PROFILE|PATH] [--lang CODE] [--json] <command>
+%s [--server URL] [--token TOKEN] [--config PROFILE|PATH] [--lang CODE] [--json] [--update check|yes] <command>
 
 %s:
   types         %s

@@ -25,6 +25,9 @@ type Document struct {
 func Build(document Document) map[string]any {
 	paths := make(map[string]any, len(document.Operations)+len(document.AdditionalPaths))
 	for _, definition := range document.Operations {
+		if definition.Internal {
+			continue
+		}
 		operation := map[string]any{
 			"operationId": definition.ID,
 			"summary":     definition.Summary,

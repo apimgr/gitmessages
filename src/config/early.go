@@ -9,8 +9,8 @@ import (
 )
 
 // EarlyServerSettings reads only the server settings needed before privilege drop.
-func EarlyServerSettings(path string) (port, address string, daemonize bool) {
-	return earlyValues(readEarlySettings(path, []string{"port", "address", "daemonize"}))
+func EarlyServerSettings(path string) (port, address string, daemonize, pidfile bool) {
+	return earlyValues(readEarlySettings(path, []string{"port", "address", "daemonize", "pidfile"}))
 }
 
 // EarlyBaseURL reads the merged base URL without creating or fully loading configuration.
@@ -78,10 +78,11 @@ func mergeEarlyFile(destination map[string]any, path string, keys []string) {
 	mergeMaps(destination, map[string]any{"server": filtered})
 }
 
-func earlyValues(values map[string]any) (port, address string, daemonize bool) {
+func earlyValues(values map[string]any) (port, address string, daemonize, pidfile bool) {
+	pidfile = true
 	server, ok := values["server"].(map[string]any)
 	if !ok {
-		return "", "", false
+		return "", "", false, true
 	}
 	if value, ok := server["port"]; ok && value != nil {
 		port = strings.TrimSpace(fmt.Sprint(value))
@@ -92,5 +93,8 @@ func earlyValues(values map[string]any) (port, address string, daemonize bool) {
 	if value, ok := server["daemonize"].(bool); ok {
 		daemonize = value
 	}
-	return port, address, daemonize
+	if value, ok := server["pidfile"].(bool); ok {
+		pidfile = value
+	}
+	return port, address, daemonize, pidfile
 }

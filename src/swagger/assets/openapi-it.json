@@ -1280,6 +1280,39 @@
         "summary": "Elenca i tipi di commit"
       }
     },
+    "/cli/binaries/{binary}": {
+      "get": {
+        "description": "API REST",
+        "operationId": "download_cli_binary",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binary",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "API REST"
+          },
+          "404": {
+            "description": "Richiesta non valida"
+          }
+        },
+        "summary": "API REST"
+      }
+    },
     "/mcp": {
       "post": {
         "description": "Accedi al catalogo pubblico e al generatore senza stato tramite Streamable HTTP.",

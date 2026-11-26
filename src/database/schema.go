@@ -40,6 +40,7 @@ var schemaStatements = []string{
 		created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
 		last_seen_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 	)`,
+	`INSERT INTO owners(id) VALUES ('system') ON CONFLICT(id) DO NOTHING`,
 	`CREATE TABLE IF NOT EXISTS api_tokens (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		owner_id TEXT NOT NULL REFERENCES owners(id) ON DELETE CASCADE,

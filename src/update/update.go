@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/apimgr/gitmessages/src/paths"
 )
 
 var releaseAPI = "https://api.github.com/repos/apimgr/gitmessages/releases?per_page=100"
@@ -143,6 +145,34 @@ func isStableTag(tag string) bool {
 
 func normalizeTag(tag string) string { return strings.TrimPrefix(tag, "v") }
 
+func stripUpdateArguments(arguments []string) []string {
+	if len(arguments) == 0 {
+		return nil
+	}
+	result := []string{arguments[0]}
+	for index := 1; index < len(arguments); index++ {
+		argument := arguments[index]
+		if argument == "--update" {
+			if index+1 < len(arguments) && (arguments[index+1] == "yes" || arguments[index+1] == "check" || arguments[index+1] == "branch") {
+				index++
+				if arguments[index] == "branch" && index+1 < len(arguments) {
+					index++
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(argument, "--update=") {
+			continue
+		}
+		if argument == "--maintenance" && index+1 < len(arguments) && arguments[index+1] == "update" {
+			index++
+			continue
+		}
+		result = append(result, argument)
+	}
+	return result
+}
+
 func compareTags(left, right string) int {
 	left = normalizeTag(left)
 	right = normalizeTag(right)
@@ -237,6 +267,99 @@ func Install(ctx context.Context, release Release) error {
 	}
 	if err := replaceAndRestart(executable, temporaryPath); err != nil {
 		return fmt.Errorf("replace executable: %w", err)
+	}
+	return nil
+}
+
+// InstallFromURL installs a checksum-pinned binary distributed by the configured server.
+func InstallFromURL(ctx context.Context, binaryURL, expectedSHA256, currentVersion, nextVersion string) error {
+	return installFromURL(ctx, binaryURL, expectedSHA256, currentVersion, nextVersion, "")
+}
+
+// InstallFromURLWithBearerToken installs a checksum-pinned binary using a bearer token for a private same-origin endpoint.
+func InstallFromURLWithBearerToken(ctx context.Context, binaryURL, expectedSHA256, currentVersion, nextVersion, bearerToken string) error {
+	return installFromURL(ctx, binaryURL, expectedSHA256, currentVersion, nextVersion, bearerToken)
+}
+
+func installFromURL(ctx context.Context, binaryURL, expectedSHA256, currentVersion, nextVersion, bearerToken string) error {
+	if !httpsURL(binaryURL) {
+		return errors.New("CLI update downloads require HTTPS")
+	}
+	if len(expectedSHA256) != sha256.Size*2 {
+		return errors.New("CLI update has an invalid SHA-256 checksum")
+	}
+	if _, err := hex.DecodeString(expectedSHA256); err != nil {
+		return errors.New("CLI update has an invalid SHA-256 checksum")
+	}
+	binary, err := downloadWithBearerToken(ctx, binaryURL, 1<<30, bearerToken)
+	if err != nil {
+		return fmt.Errorf("download CLI update: %w", err)
+	}
+	tempParent := filepath.Join(os.TempDir(), paths.OrgName)
+	if err := os.MkdirAll(tempParent, 0o755); err != nil {
+		return fmt.Errorf("prepare CLI update temp directory: %w", err)
+	}
+	tempDir, err := os.MkdirTemp(tempParent, paths.ProjectName+"-")
+	if err != nil {
+		return fmt.Errorf("create CLI update temp directory: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+	updatePath := filepath.Join(tempDir, "cli.update.tmp")
+	if err := os.WriteFile(updatePath, binary, 0o600); err != nil {
+		return fmt.Errorf("write CLI update temp file: %w", err)
+	}
+	verifiedBinary, err := os.ReadFile(updatePath)
+	if err != nil {
+		return fmt.Errorf("read CLI update temp file: %w", err)
+	}
+	actual := sha256.Sum256(verifiedBinary)
+	if !strings.EqualFold(hex.EncodeToString(actual[:]), expectedSHA256) {
+		return errors.New("CLI update SHA-256 verification failed")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate CLI binary: %w", err)
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		return fmt.Errorf("resolve CLI binary: %w", err)
+	}
+	info, err := os.Stat(executable)
+	if err != nil {
+		return fmt.Errorf("inspect CLI binary: %w", err)
+	}
+	parent := filepath.Dir(executable)
+	temporary, err := os.CreateTemp(parent, ".gitmessages-cli-update-*")
+	if err != nil {
+		if os.IsPermission(err) {
+			return fmt.Errorf("you do not have permission to update %s; ask your admin or move the binary to a writable path", executable)
+		}
+		return fmt.Errorf("create staged CLI update: %w", err)
+	}
+	stagePath := temporary.Name()
+	defer func() { _ = os.Remove(stagePath) }()
+	if err := temporary.Chmod(info.Mode().Perm()); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("secure staged CLI update: %w", err)
+	}
+	if _, err := temporary.Write(verifiedBinary); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write staged CLI update: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("sync staged CLI update: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close staged CLI update: %w", err)
+	}
+	if err := os.RemoveAll(tempDir); err != nil {
+		return fmt.Errorf("clean CLI update temp directory: %w", err)
+	}
+	_ = os.Setenv("GITMESSAGES_CLI_UPDATE_FROM", currentVersion)
+	_ = os.Setenv("GITMESSAGES_CLI_UPDATE_TO", nextVersion)
+	if err := replaceAndRestart(executable, stagePath); err != nil {
+		return fmt.Errorf("replace and restart CLI: %w", err)
 	}
 	return nil
 }
@@ -511,15 +634,25 @@ func failAndClearStaged(directory string, err error) error {
 }
 
 func download(ctx context.Context, address string, maxSize int64) ([]byte, error) {
+	return downloadWithBearerToken(ctx, address, maxSize, "")
+}
+
+func downloadWithBearerToken(ctx context.Context, address string, maxSize int64, bearerToken string) ([]byte, error) {
 	client := &http.Client{Timeout: 2 * time.Minute, CheckRedirect: func(request *http.Request, via []*http.Request) error {
 		if request.URL.Scheme != "https" {
 			return fmt.Errorf("refusing non-HTTPS redirect")
+		}
+		if bearerToken != "" && (len(via) == 0 || !sameUpdateOrigin(via[0].URL, request.URL)) {
+			return fmt.Errorf("refusing cross-origin redirect for authenticated CLI update")
 		}
 		return nil
 	}}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
 		return nil, err
+	}
+	if bearerToken != "" {
+		request.Header.Set("Authorization", "Bearer "+bearerToken)
 	}
 	response, err := client.Do(request)
 	if err != nil {
@@ -537,6 +670,10 @@ func download(ctx context.Context, address string, maxSize int64) ([]byte, error
 		return nil, fmt.Errorf("download exceeds %d bytes", maxSize)
 	}
 	return data, nil
+}
+
+func sameUpdateOrigin(left, right *url.URL) bool {
+	return left != nil && right != nil && left.User == nil && right.User == nil && strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
 }
 
 func checksumFor(contents, filename string) (string, bool) {

@@ -313,44 +313,6 @@ footer {
   outline-offset: 3px;
 }
 
-.contact-honeypot {
-  position: absolute;
-  inset-inline-start: -10000px;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-}
-
-.contact-review {
-  position: fixed;
-  z-index: 21;
-  inset: 50% auto auto 50%;
-  transform: translate(-50%, -50%);
-  width: min(92vw, 42rem);
-  max-height: 90vh;
-  overflow: auto;
-  padding: 1.5rem;
-  border: 1px solid var(--border);
-  border-radius: .75rem;
-  background: var(--surface);
-  box-shadow: 0 1rem 4rem #0008;
-}
-
-.contact-review::before {
-  position: fixed;
-  z-index: -1;
-  inset: -100vh -100vw;
-  background: #0009;
-  content: "";
-  pointer-events: none;
-}
-
-.contact-review-email {
-  overflow-wrap: anywhere;
-  font-size: 1.25rem;
-  font-weight: 700;
-}
-
 .container {
   width: min(90%, 72rem);
   margin-inline: auto;

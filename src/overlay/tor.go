@@ -358,11 +358,12 @@ func (manager *TorManager) watchProcess(command *exec.Cmd) {
 	err := command.Wait()
 	manager.processDone <- err
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
 	if manager.command != command {
+		manager.mu.Unlock()
 		return
 	}
 	manager.command = nil
+	wasActive := manager.status.Status == "healthy" || manager.status.Status == "starting"
 	manager.status.Running = false
 	manager.status.CircuitEstablished = false
 	manager.status.Status = "disabled"
@@ -371,6 +372,16 @@ func (manager *TorManager) watchProcess(command *exec.Cmd) {
 		if err != nil {
 			manager.status.Error = "Tor process exited"
 		}
+	}
+	shouldRestart := wasActive && manager.ctx.Err() == nil
+	manager.mu.Unlock()
+	if shouldRestart {
+		go func() {
+			log.Printf("WARN Tor process exited after becoming healthy; monitor restarting Tor")
+			if restartErr := manager.Restart(); restartErr != nil {
+				log.Printf("WARN Tor monitor restart failed: %v", restartErr)
+			}
+		}()
 	}
 }
 

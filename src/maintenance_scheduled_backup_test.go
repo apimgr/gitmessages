@@ -84,6 +84,54 @@ func TestScheduledBackupCreatesCumulativeDailyIncremental(t *testing.T) {
 	}
 }
 
+func TestNewestBackupFileSelectionUsesFullDateAndIncrementalModificationTime(t *testing.T) {
+	backupDir := filepath.Join(maintenanceTestDir(t), "backups")
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	baseTime := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
+	fullOlder := filepath.Join(backupDir, paths.ProjectName+"_backup_2025-01-01.tar.gz.enc")
+	fullNewest := filepath.Join(backupDir, paths.ProjectName+"_backup_2025-01-02.tar.gz.enc")
+	for _, path := range []string{fullOlder, fullNewest} {
+		if err := os.WriteFile(path, []byte("archive"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(fullOlder, baseTime.Add(2*time.Hour), baseTime.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(fullNewest, baseTime, baseTime); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := newestBackupFile(backupDir)
+	if err != nil || selected != fullNewest {
+		t.Fatalf("newest full selection = %q, %v; want %q by filename date", selected, err, fullNewest)
+	}
+	if err := os.Remove(fullOlder); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(fullNewest); err != nil {
+		t.Fatal(err)
+	}
+	daily := filepath.Join(backupDir, paths.ProjectName+"-daily.tar.gz.enc")
+	hourly := filepath.Join(backupDir, paths.ProjectName+"-hourly.tar.gz.enc")
+	for _, path := range []string{daily, hourly} {
+		if err := os.WriteFile(path, []byte("archive"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chtimes(daily, baseTime, baseTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(hourly, baseTime.Add(time.Hour), baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	selected, err = newestBackupFile(backupDir)
+	if err != nil || selected != hourly {
+		t.Fatalf("newest incremental selection = %q, %v; want %q by modification time", selected, err, hourly)
+	}
+}
+
 func TestBackupSizeParsingAndHardRetentionLimit(t *testing.T) {
 	for input, expected := range map[string]int64{"1": 1, "2K": 2048, "3M": 3 << 20, "4G": 4 << 30, "1T": 1 << 40, "50MB": 50 << 20, "1GB": 1 << 30, "2TB": 2 << 40} {
 		got, err := parseBackupSize(input)

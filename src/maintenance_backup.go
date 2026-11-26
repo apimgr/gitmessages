@@ -253,25 +253,53 @@ func newestBackupFile(backupDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read backup directory: %w", err)
 	}
-	var newestPath string
-	var newestTime time.Time
+	var newestFullPath, newestIncrementalPath string
+	var newestFullDate, newestFullModTime, newestIncrementalModTime time.Time
 	for _, entry := range entries {
-		if entry.IsDir() || (!strings.HasSuffix(entry.Name(), ".tar.gz") && !strings.HasSuffix(entry.Name(), ".tar.gz.enc")) {
+		name := entry.Name()
+		if entry.IsDir() || !isBackupArchive(name) || !strings.HasPrefix(name, paths.ProjectName+"_") && !strings.HasPrefix(name, paths.ProjectName+"-") {
 			continue
 		}
 		info, err := entry.Info()
 		if err != nil {
 			return "", err
 		}
-		if newestPath == "" || info.ModTime().After(newestTime) {
-			newestPath = filepath.Join(backupDir, entry.Name())
-			newestTime = info.ModTime()
+		path := filepath.Join(backupDir, name)
+		if backupDate, ok := fullBackupDate(name); ok {
+			if newestFullPath == "" || backupDate.After(newestFullDate) || backupDate.Equal(newestFullDate) && info.ModTime().After(newestFullModTime) {
+				newestFullPath, newestFullDate, newestFullModTime = path, backupDate, info.ModTime()
+			}
+			continue
+		}
+		if strings.HasSuffix(name, "-daily.tar.gz") || strings.HasSuffix(name, "-daily.tar.gz.enc") || strings.HasSuffix(name, "-hourly.tar.gz") || strings.HasSuffix(name, "-hourly.tar.gz.enc") {
+			if newestIncrementalPath == "" || info.ModTime().After(newestIncrementalModTime) {
+				newestIncrementalPath, newestIncrementalModTime = path, info.ModTime()
+			}
 		}
 	}
-	if newestPath == "" {
-		return "", errors.New("no backup archive was found")
+	if newestFullPath != "" {
+		return newestFullPath, nil
 	}
-	return newestPath, nil
+	if newestIncrementalPath != "" {
+		return newestIncrementalPath, nil
+	}
+	return "", errors.New("no backup archive was found")
+}
+
+func fullBackupDate(name string) (time.Time, bool) {
+	prefix := paths.ProjectName + "_backup_"
+	if !strings.HasPrefix(name, prefix) {
+		return time.Time{}, false
+	}
+	dateEnd := len(prefix) + len("2006-01-02")
+	if len(name) < dateEnd {
+		return time.Time{}, false
+	}
+	date, err := time.Parse("2006-01-02", name[len(prefix):dateEnd])
+	if err != nil || len(name) > dateEnd && name[dateEnd] != '_' && name[dateEnd] != '.' {
+		return time.Time{}, false
+	}
+	return date.UTC(), true
 }
 
 func recordBackupEvent(ctx context.Context, store *database.Store, action, filename string, size int64, encrypted, success bool, details string) error {

@@ -470,7 +470,7 @@ func loadOrCreateI2PKey(connection net.Conn, reader *bufio.Reader, path string, 
 	if _, err := i2pDestination(key); err != nil {
 		return "", fmt.Errorf("SAM returned an invalid I2P destination key")
 	}
-	if err := atomicPrivateFile(path, []byte(key+"\n")); err != nil {
+	if err := atomicPrivateFile(path, []byte(key)); err != nil {
 		return "", fmt.Errorf("persist I2P destination key: %w", err)
 	}
 	return key, nil

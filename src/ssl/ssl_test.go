@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/acme/autocert"
 )
 
 // generateSelfSignedPEM builds a throwaway self-signed certificate/key pair
@@ -44,6 +46,21 @@ func generateSelfSignedPEM(t *testing.T) (certPEM, keyPEM []byte) {
 	certPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM = pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 	return certPEM, keyPEM
+}
+
+func TestReloadLetsEncryptConfigInvalidatesACMEManager(t *testing.T) {
+	manager := NewManager(Config{Enabled: true, MinVersion: "TLS1.2", LetsEncrypt: LetsEncryptConfig{Enabled: true, Email: "old@example.test", DNSCredentials: map[string]string{"TOKEN": "old"}}})
+	manager.certManager = &autocert.Manager{}
+	manager.certDomains = []string{"old.example.test"}
+	credentials := map[string]string{"TOKEN": "new"}
+	manager.ReloadLetsEncrypt(LetsEncryptConfig{Enabled: true, Email: "new@example.test", Challenge: "dns-01", DNSCredentials: credentials})
+	credentials["TOKEN"] = "mutated"
+	if manager.config.MinVersion != "TLS1.2" || manager.config.LetsEncrypt.Email != "new@example.test" || manager.config.LetsEncrypt.DNSCredentials["TOKEN"] != "new" {
+		t.Fatalf("reload changed TLS listener settings or retained a caller-owned credential map: %+v", manager.config)
+	}
+	if manager.certManager != nil || len(manager.certDomains) != 0 {
+		t.Fatal("reload retained an ACME manager created with old settings")
+	}
 }
 
 func TestGetTLSConfig_ExplicitCertificateAndMinimumVersion(t *testing.T) {

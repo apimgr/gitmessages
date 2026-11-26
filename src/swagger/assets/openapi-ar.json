@@ -1280,6 +1280,39 @@
         "summary": "يسرد أنواع commit"
       }
     },
+    "/cli/binaries/{binary}": {
+      "get": {
+        "description": "واجهة REST البرمجية",
+        "operationId": "download_cli_binary",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binary",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "واجهة REST البرمجية"
+          },
+          "404": {
+            "description": "طلب غير صالح"
+          }
+        },
+        "summary": "واجهة REST البرمجية"
+      }
+    },
     "/mcp": {
       "post": {
         "description": "اتصل بالكتالوج العام ومنشئ الرسائل عديم الحالة عبر Streamable HTTP.",

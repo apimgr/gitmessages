@@ -23,6 +23,7 @@ import (
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
+	"github.com/apimgr/gitmessages/src/overlay"
 	"github.com/apimgr/gitmessages/src/paths"
 	"github.com/apimgr/gitmessages/src/securitydata"
 )
@@ -50,6 +51,33 @@ func TestConfigureOutputFallsBackToEnglish(t *testing.T) {
 func TestConfigureOutputRejectsUnknownColor(t *testing.T) {
 	if err := configureOutput("invalid", "en"); err == nil {
 		t.Fatal("unsupported color mode was accepted")
+	}
+}
+
+func TestRestartRequiredSettingsAndPreservation(t *testing.T) {
+	current := config.DefaultConfig().Server
+	incoming := current
+	incoming.SSL.LetsEncrypt.Email = "admin@example.test"
+	if changed := restartRequiredSettings(current, incoming); len(changed) != 0 {
+		t.Fatalf("Let's Encrypt-only change requires restart: %v", changed)
+	}
+	incoming.Port = "6443"
+	incoming.Address = "127.0.0.1"
+	incoming.SSL.Enabled = true
+	incoming.SSL.Cert = "/new/cert.pem"
+	incoming.SSL.Key = "/new/key.pem"
+	incoming.SSL.MinVersion = "TLS1.3"
+	incoming.Daemonize = true
+	incoming.PIDFile = false
+	incoming.Database.Driver = "libsql"
+	want := []string{"server.port", "server.address", "server.ssl.enabled", "server.ssl.cert", "server.ssl.key", "server.ssl.min_version", "server.daemonize", "server.pidfile", "server.database"}
+	changed := restartRequiredSettings(current, incoming)
+	if strings.Join(changed, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("restartRequiredSettings() = %v, want %v", changed, want)
+	}
+	preserveRestartRequiredSettings(current, &incoming)
+	if len(restartRequiredSettings(current, incoming)) != 0 || incoming.SSL.LetsEncrypt.Email != "admin@example.test" {
+		t.Fatalf("restart-required settings were not preserved while ACME settings remained reloadable: %+v", incoming)
 	}
 }
 
@@ -205,7 +233,7 @@ func TestNewApplicationSchedulerRegistersConfiguredTasks(t *testing.T) {
 	configuration := config.DefaultConfig()
 	configuration.Server.GeoIP.Enabled = false
 	configuration.Server.Security.Blocklists.Enabled = false
-	scheduled, err := newApplicationScheduler(store, nil, nil, configuration, paths.Directories{Backup: backupDir, Logs: logsDir}, log.New(io.Discard, "", 0), nil, nil, nil)
+	scheduled, err := newApplicationScheduler(store, nil, nil, configuration, paths.Directories{Backup: backupDir, Logs: logsDir}, log.New(io.Discard, "", 0), nil, nil, nil, func() (*overlay.TorManager, *overlay.I2PManager) { return nil, nil }, func() []string { return nil })
 	if err != nil {
 		t.Fatalf("newApplicationScheduler() error: %v", err)
 	}
@@ -350,6 +378,38 @@ func TestResolveDirectoryOverridePrecedenceAndValidation(t *testing.T) {
 	}
 	if _, err := resolveDirectoryOverride("data", "../outside", "", fallback); err == nil {
 		t.Fatal("directory traversal was accepted")
+	}
+}
+
+func TestResolvePIDFileOverridePrecedence(t *testing.T) {
+	fallback := filepath.Join(maintenanceTestDir(t), "default.pid")
+	environment := filepath.Join(maintenanceTestDir(t), "environment.pid")
+	flagValue := filepath.Join(maintenanceTestDir(t), "flag.pid")
+	for _, test := range []struct {
+		name      string
+		flagValue string
+		envValue  string
+		fallback  string
+		want      string
+	}{
+		{name: "flag overrides environment", flagValue: flagValue, envValue: environment, fallback: fallback, want: flagValue},
+		{name: "environment overrides fallback", envValue: environment, fallback: fallback, want: environment},
+		{name: "fallback", fallback: fallback, want: fallback},
+	} {
+		got, err := resolvePIDFileOverride(test.flagValue, test.envValue, test.fallback)
+		if err != nil {
+			t.Fatalf("%s: resolvePIDFileOverride() error = %v", test.name, err)
+		}
+		want, err := filepath.Abs(test.want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("%s: resolvePIDFileOverride() = %q, want %q", test.name, got, want)
+		}
+	}
+	if _, err := resolvePIDFileOverride("../outside.pid", "", fallback); err == nil {
+		t.Fatal("PID file path traversal was accepted")
 	}
 }
 
@@ -1143,7 +1203,7 @@ func TestApplicationSchedulerRegistersAndRunsLocalBuiltIns(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := securitydata.New(filepath.Join(directories.Data, "security"))
-	scheduled, err := newApplicationScheduler(store, manager, authStore, configuration, directories, log.New(io.Discard, "", 0), nil, nil, nil)
+	scheduled, err := newApplicationScheduler(store, manager, authStore, configuration, directories, log.New(io.Discard, "", 0), nil, nil, nil, func() (*overlay.TorManager, *overlay.I2PManager) { return nil, nil }, func() []string { return nil })
 	if err != nil {
 		t.Fatalf("newApplicationScheduler() error: %v", err)
 	}
@@ -1170,5 +1230,39 @@ func TestApplicationSchedulerRegistersAndRunsLocalBuiltIns(t *testing.T) {
 	}
 	if audited != 1 {
 		t.Fatalf("scheduler success audit entries = %d, want 1", audited)
+	}
+}
+
+func TestOverlayManagersTrackReplacements(t *testing.T) {
+	managers := &overlayManagers{}
+	if tor, i2p := managers.current(); tor != nil || i2p != nil {
+		t.Fatal("empty overlay manager state returned a manager")
+	}
+	torManager := &overlay.TorManager{}
+	i2pManager := &overlay.I2PManager{}
+	managers.replaceTor(torManager)
+	managers.replaceI2P(i2pManager)
+	if tor, i2p := managers.current(); tor != torManager || i2p != i2pManager {
+		t.Fatal("overlay manager replacement did not retain the new state")
+	}
+}
+
+func TestConfiguredTLSHostsPrefersConfiguredFQDN(t *testing.T) {
+	t.Setenv("DOMAIN", "fallback.example.test,ignored.example.test")
+	if got := configuredTLSHosts(nil); got != nil {
+		t.Fatalf("configuredTLSHosts(nil) = %v, want nil", got)
+	}
+	configuration := config.DefaultConfig()
+	if got := configuredTLSHosts(configuration); len(got) != 1 || got[0] != "fallback.example.test" {
+		t.Fatalf("configuredTLSHosts() env fallback = %v", got)
+	}
+	configuration.Server.FQDN = " configured.example.test "
+	if got := configuredTLSHosts(configuration); len(got) != 1 || got[0] != "configured.example.test" {
+		t.Fatalf("configuredTLSHosts() configured host = %v", got)
+	}
+	configuration.Server.FQDN = ""
+	t.Setenv("DOMAIN", ",ignored.example.test")
+	if got := configuredTLSHosts(configuration); got != nil {
+		t.Fatalf("configuredTLSHosts() accepted an empty first DOMAIN: %v", got)
 	}
 }

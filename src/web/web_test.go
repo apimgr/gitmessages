@@ -19,6 +19,7 @@ import (
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
+	"github.com/apimgr/gitmessages/src/paths"
 	swaggerapi "github.com/apimgr/gitmessages/src/swagger"
 	"golang.org/x/net/html"
 )
@@ -177,12 +178,12 @@ func TestAutodiscoverAndConfiguredAPIVersion(t *testing.T) {
 	}
 	var response struct {
 		Data struct {
-			Server struct {
-				APIVersion string `json:"api_version"`
-				APIBase    string `json:"api_base"`
-			} `json:"server"`
-			ConfigSchema  map[string]any `json:"config_schema"`
-			Options       map[string]any `json:"options"`
+			API struct {
+				CurrentVersion string `json:"current_version"`
+			} `json:"api"`
+			Name          string         `json:"name"`
+			Version       string         `json:"version"`
+			URLs          []string       `json:"urls"`
 			CLIVersions   map[string]any `json:"cli_versions"`
 			CLIMinVersion string         `json:"cli_min_version"`
 		} `json:"data"`
@@ -190,11 +191,11 @@ func TestAutodiscoverAndConfiguredAPIVersion(t *testing.T) {
 	if err := json.Unmarshal(discovery.Body.Bytes(), &response); err != nil {
 		t.Fatalf("decode autodiscover response: %v", err)
 	}
-	if response.Data.Server.APIVersion != "v2" || response.Data.Server.APIBase != "/api/v2" {
-		t.Fatalf("discovered API = %q (%q), want v2 (/api/v2)", response.Data.Server.APIVersion, response.Data.Server.APIBase)
+	if response.Data.API.CurrentVersion != "v2" || response.Data.Name != paths.ProjectName || response.Data.Version != "test-version" || len(response.Data.URLs) == 0 {
+		t.Fatalf("autodiscover metadata is incomplete: %#v", response.Data)
 	}
-	if len(response.Data.ConfigSchema) == 0 || len(response.Data.Options) == 0 || response.Data.CLIVersions == nil {
-		t.Fatalf("autodiscover omitted CLI schema/options/version metadata: %#v", response.Data)
+	if response.Data.CLIVersions == nil || response.Data.CLIMinVersion != config.Get().Server.Update.CLIMinVersion {
+		t.Fatalf("autodiscover omitted CLI version metadata: %#v", response.Data)
 	}
 
 	versioned := httptest.NewRecorder()
@@ -228,7 +229,7 @@ func TestConfiguredBrandingIsUsedAcrossPublicSurfaces(t *testing.T) {
 	for _, test := range []struct {
 		path string
 		want string
-	}{{"/", "Curated commit guidance"}, {"/manifest.json", `"name":"Example Messages"`}, {"/api/v1", "Example Messages API"}, {"/api/autodiscover", "Example Messages"}, {"/api/v1/server/swagger", "Example Messages API"}} {
+	}{{"/", "Curated commit guidance"}, {"/manifest.json", `"name":"Example Messages"`}, {"/api/v1", "Example Messages API"}, {"/api/autodiscover", "gitmessages"}, {"/api/v1/server/swagger", "Example Messages API"}} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, webTestRequest(http.MethodGet, test.path, nil))
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), test.want) {
@@ -1499,6 +1500,11 @@ func TestURLNormalizationAndServerPageMethods(t *testing.T) {
 	handler.ServeHTTP(trailing, webTestRequest(http.MethodGet, "/server/security/?lang=fr", nil))
 	if trailing.Code != http.StatusMovedPermanently || trailing.Header().Get("Location") != "/server/security?lang=fr" {
 		t.Fatalf("trailing slash response = %d %q", trailing.Code, trailing.Header().Get("Location"))
+	}
+	postTrailing := httptest.NewRecorder()
+	handler.ServeHTTP(postTrailing, webTestRequest(http.MethodPost, "/server/security/?lang=fr", strings.NewReader("report=private")))
+	if postTrailing.Code != http.StatusPermanentRedirect || postTrailing.Header().Get("Location") != "/server/security?lang=fr" {
+		t.Fatalf("POST trailing slash response = %d %q", postTrailing.Code, postTrailing.Header().Get("Location"))
 	}
 	filePath := httptest.NewRecorder()
 	handler.ServeHTTP(filePath, webTestRequest(http.MethodGet, "/assets/site.css/", nil))

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -530,6 +531,16 @@ func TestLoad_CreatesDefaultWhenMissing(t *testing.T) {
 	if cfg.Web.UI.Theme != "dark" {
 		t.Errorf("created config Theme = %q, want dark", cfg.Web.UI.Theme)
 	}
+	if !cfg.Server.PIDFile || cfg.Server.Daemonize {
+		t.Errorf("startup defaults: pidfile=%t daemonize=%t, want true/false", cfg.Server.PIDFile, cfg.Server.Daemonize)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(contents), "  daemonize: false\n") || !strings.Contains(string(contents), "  pidfile: true\n") {
+		t.Fatalf("generated server config omits startup settings:\n%s", contents)
+	}
 }
 
 // TestLoad_ExistingOverridesDefaults verifies a partial YAML file on disk
@@ -923,6 +934,33 @@ func TestLoadMigratesAreaSettings(t *testing.T) {
 	}
 }
 
+func TestLoadMigratesCLIDistributionToMaintenanceArea(t *testing.T) {
+	tmp := projectTestDir(t)
+	path := filepath.Join(tmp, "server.yml")
+	legacy := "server:\n  cli:\n    binary_download:\n      dir: /srv/gitmessages/cli\n      require_auth: true\n"
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CLI.BinaryDownload.Dir != "/srv/gitmessages/cli" || !cfg.CLI.BinaryDownload.RequireAuth {
+		t.Fatalf("migrated CLI distribution config = %#v", cfg.CLI.BinaryDownload)
+	}
+	area, err := os.ReadFile(filepath.Join(tmp, "yaml.d", "maintenance.yml"))
+	if err != nil || !strings.Contains(string(area), "binary_download:") || !strings.Contains(string(area), "require_auth: true") {
+		t.Fatalf("maintenance area did not receive CLI config: %s, %v", area, err)
+	}
+	server, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(server), "cli:") {
+		t.Fatalf("server.yml retained CLI distribution config: %s", server)
+	}
+}
+
 func TestLoadMovesSecretsOutOfAreaFiles(t *testing.T) {
 	tmp := projectTestDir(t)
 	path := filepath.Join(tmp, "server.yml")
@@ -945,6 +983,56 @@ func TestLoadMovesSecretsOutOfAreaFiles(t *testing.T) {
 	}
 	if info, err := os.Stat(secretPath); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("secrets.yml mode/stat = %v, %v", info, err)
+	}
+}
+
+func TestLoadEncryptsMigratedDNSCredentials(t *testing.T) {
+	tmp := projectTestDir(t)
+	path := filepath.Join(tmp, "server.yml")
+	if err := os.WriteFile(path, []byte("server:\n  ssl:\n    letsencrypt:\n      dns_credentials:\n        CF_DNS_API_TOKEN: private-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Server.SSL.LetsEncrypt.DNSCredentials["CF_DNS_API_TOKEN"]; got != "private-token" {
+		t.Fatalf("in-memory DNS credential = %q, want plaintext value", got)
+	}
+	secretPath := filepath.Join(tmp, "secrets.yml")
+	secretData, err := os.ReadFile(secretPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(secretData), "enc:v1:") || strings.Contains(string(secretData), "private-token") {
+		t.Fatalf("DNS credential was not encrypted at rest: %s", secretData)
+	}
+	if info, err := os.Stat(secretPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("secrets.yml mode/stat = %v, %v", info, err)
+	}
+	rotatedKey := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	if err := SaveEncryptionKey(rotatedKey); err != nil {
+		t.Fatalf("rotate encryption key: %v", err)
+	}
+	rotatedData, err := os.ReadFile(secretPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rotatedData), "private-token") || string(rotatedData) == string(secretData) {
+		t.Fatal("DNS credential ciphertext was not re-encrypted during key rotation")
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Server.SSL.LetsEncrypt.DNSCredentials["CF_DNS_API_TOKEN"]; got != "private-token" {
+		t.Fatalf("DNS credential after key rotation = %q", got)
+	}
+	for _, source := range []string{path, filepath.Join(tmp, "yaml.d", "app.yml")} {
+		data, readErr := os.ReadFile(source)
+		if readErr == nil && strings.Contains(string(data), "private-token") {
+			t.Errorf("plaintext DNS credential remains in %s", source)
+		}
 	}
 }
 

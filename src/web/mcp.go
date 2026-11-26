@@ -53,6 +53,7 @@ type apiOperation struct {
 	description string
 	handler     http.HandlerFunc
 	inputSchema map[string]any
+	Internal    bool
 }
 
 // SetServerFQDN sets the public hostname used by MCP's origin check.
@@ -350,6 +351,9 @@ func mcpTools(r *http.Request) []map[string]any {
 	definitions := apiOperationDefinitions(r)
 	tools := make([]map[string]any, 0, len(definitions))
 	for _, definition := range definitions {
+		if definition.Internal {
+			continue
+		}
 		annotations := map[string]bool{"readOnlyHint": definition.method == http.MethodGet}
 		if definition.method == http.MethodDelete {
 			annotations["destructiveHint"] = true
@@ -373,7 +377,7 @@ func callMCPTool(r *http.Request, params map[string]any) (any, int, *mcpError) {
 	arguments, _ := params["arguments"].(map[string]any)
 	var definition *apiOperation
 	for _, candidate := range apiOperationDefinitions(r) {
-		if candidate.name == name {
+		if !candidate.Internal && candidate.name == name {
 			definition = &candidate
 			break
 		}

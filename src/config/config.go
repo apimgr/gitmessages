@@ -2,6 +2,8 @@ package config
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	cryptorand "crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -30,6 +32,7 @@ type Config struct {
 	Server ServerConfig `yaml:"server"`
 	Web    WebConfig    `yaml:"web"`
 	Data   DataConfig   `yaml:"data"`
+	CLI    CLIConfig    `yaml:"cli"`
 }
 
 // DefaultAPIVersion is the canonical API prefix used when no version is configured.
@@ -38,6 +41,8 @@ const DefaultAPIVersion = "v1"
 // ServerConfig contains server-related settings
 type ServerConfig struct {
 	Port           string               `yaml:"port"`
+	Daemonize      bool                 `yaml:"daemonize"`
+	PIDFile        bool                 `yaml:"pidfile"`
 	APIVersion     string               `yaml:"api_version"`
 	SSL            SSLConfig            `yaml:"ssl"`
 	Database       DatabaseConfig       `yaml:"database"`
@@ -48,7 +53,6 @@ type ServerConfig struct {
 	Mode           string               `yaml:"mode"`
 	Debug          DebugConfig          `yaml:"debug"`
 	Update         UpdateConfig         `yaml:"update"`
-	CLI            CLIConfig            `yaml:"cli"`
 	CORS           CORSConfig           `yaml:"cors"`
 	CSRF           CSRFConfig           `yaml:"csrf"`
 	Metrics        MetricsConfig        `yaml:"metrics"`
@@ -733,6 +737,7 @@ type CLIBinaryDownloadConfig struct {
 
 type TorConfig struct {
 	OnionAddress              string `yaml:"onion_address"`
+	Expose                    bool   `yaml:"expose"`
 	Binary                    string `yaml:"binary"`
 	UseNetwork                bool   `yaml:"use_network"`
 	MaxCircuits               int    `yaml:"max_circuits"`
@@ -752,6 +757,7 @@ type TorConfig struct {
 type I2PConfig struct {
 	Enabled          bool   `yaml:"enabled"`
 	B32Address       string `yaml:"b32_address"`
+	Expose           bool   `yaml:"expose"`
 	Binary           string `yaml:"binary"`
 	SAMAddress       string `yaml:"sam_address"`
 	VirtualPort      int    `yaml:"virtual_port"`
@@ -883,8 +889,10 @@ var (
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
 	return &Config{
+		CLI: CLIConfig{BinaryDownload: CLIBinaryDownloadConfig{Dir: "{data_dir}/cli"}},
 		Server: ServerConfig{
 			Port:       initialPort(),
+			PIDFile:    true,
 			APIVersion: DefaultAPIVersion,
 			SSL:        SSLConfig{MinVersion: "TLS1.2", LetsEncrypt: LetsEncryptConfig{Challenge: "http-01"}},
 			Database:   DatabaseConfig{Driver: "sqlite", Pool: DatabasePoolConfig{MaxOpen: 5, MaxIdle: 2, MaxLifetime: "5m", MaxIdleTime: "1m"}, Cache: LocalDatabaseCacheConfig{SyncInterval: "30s", OfflineMode: true, MaxAge: "1h"}},
@@ -1192,6 +1200,9 @@ func Load(path string) (*Config, error) {
 	if err := ensureGeneratedSecrets(filepath.Join(filepath.Dir(path), "secrets.yml")); err != nil {
 		return nil, fmt.Errorf("failed to initialize server credentials: %w", err)
 	}
+	if err := encryptDNSCredentials(filepath.Join(filepath.Dir(path), "secrets.yml")); err != nil {
+		return nil, fmt.Errorf("failed to secure DNS credentials: %w", err)
+	}
 	cfg, err := loadMergedConfig(path)
 	if err != nil {
 		return nil, err
@@ -1362,6 +1373,9 @@ func loadMergedConfig(path string) (*Config, error) {
 	if err := validate(cfg); err != nil {
 		return nil, err
 	}
+	if err := decryptDNSCredentials(cfg); err != nil {
+		return nil, fmt.Errorf("decrypt DNS credentials: %w", err)
+	}
 	return cfg, nil
 }
 
@@ -1381,6 +1395,16 @@ func migrateLegacyConfig(root map[string]any) {
 		root["web"] = web
 	}
 	server := nestedMap(root, "server")
+	if legacyCLI, ok := server["cli"]; ok {
+		if legacyCLIMap, ok := legacyCLI.(map[string]any); ok {
+			cli := nestedMap(root, "cli")
+			mergeMaps(cli, legacyCLIMap)
+			root["cli"] = cli
+		} else {
+			root["cli"] = legacyCLI
+		}
+		delete(server, "cli")
+	}
 	if oldLogs, ok := server["logging"]; ok {
 		if _, exists := server["logs"]; !exists {
 			server["logs"] = oldLogs
@@ -1532,6 +1556,17 @@ func SaveEncryptionKey(value string) error {
 	if secrets == nil {
 		secrets = make(map[string]any)
 	}
+	oldKey, err := decodeConfigEncryptionKey(current.Server.Security.EncryptionKey)
+	if err != nil {
+		return fmt.Errorf("decode current encryption key: %w", err)
+	}
+	newKey, err := decodeConfigEncryptionKey(value)
+	if err != nil {
+		return fmt.Errorf("decode replacement encryption key: %w", err)
+	}
+	if err := reencryptDNSCredentialsMap(secrets, oldKey, newKey); err != nil {
+		return fmt.Errorf("re-encrypt DNS credentials: %w", err)
+	}
 	version := current.Server.Security.EncryptionKeyVersion + 1
 	putConfigPath(secrets, []string{"server", "security", "encryption_key"}, value)
 	putConfigPath(secrets, []string{"server", "security", "encryption_key_version"}, version)
@@ -1544,6 +1579,38 @@ func SaveEncryptionKey(value string) error {
 	}
 	current.Server.Security.EncryptionKey = value
 	current.Server.Security.EncryptionKeyVersion = version
+	return nil
+}
+
+func reencryptDNSCredentialsMap(secrets map[string]any, oldKey, newKey []byte) error {
+	value, ok := getConfigPath(secrets, []string{"server", "ssl", "letsencrypt", "dns_credentials"})
+	if !ok {
+		return nil
+	}
+	credentials, ok := value.(map[string]any)
+	if !ok {
+		return errors.New("server.ssl.letsencrypt.dns_credentials must be a flat mapping")
+	}
+	for name, value := range credentials {
+		credential, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("DNS credential %s must be a string", name)
+		}
+		plain := credential
+		if strings.HasPrefix(credential, "enc:v1:") {
+			var err error
+			plain, err = openDNSCredential(oldKey, strings.TrimPrefix(credential, "enc:v1:"))
+			if err != nil {
+				return fmt.Errorf("decrypt DNS credential %s", name)
+			}
+		}
+		sealed, err := sealDNSCredential(newKey, plain)
+		if err != nil {
+			return fmt.Errorf("encrypt DNS credential %s: %w", name, err)
+		}
+		credentials[name] = sealed
+	}
+	putConfigPath(secrets, []string{"server", "ssl", "letsencrypt", "dns_credentials"}, credentials)
 	return nil
 }
 
@@ -1602,7 +1669,7 @@ func saveConfig(cfg *Config, path string) error {
 
 // generateConfigYAML generates YAML content with comments
 func generateConfigYAML(cfg *Config) string {
-	server := map[string]any{"port": cfg.Server.Port, "address": cfg.Server.Address, "fqdn": cfg.Server.FQDN, "mode": cfg.Server.Mode, "ssl": cfg.Server.SSL, "database": cfg.Server.Database, "cache": cfg.Server.Cache, "baseurl": cfg.Server.BaseURL, "trusted_proxies": cfg.Server.TrustedProxies, "rate_limit": cfg.Server.RateLimit, "url_detection": cfg.Server.URLDetection}
+	server := map[string]any{"port": cfg.Server.Port, "address": cfg.Server.Address, "fqdn": cfg.Server.FQDN, "mode": cfg.Server.Mode, "daemonize": cfg.Server.Daemonize, "pidfile": cfg.Server.PIDFile, "ssl": cfg.Server.SSL, "database": cfg.Server.Database, "cache": cfg.Server.Cache, "baseurl": cfg.Server.BaseURL, "trusted_proxies": cfg.Server.TrustedProxies, "rate_limit": cfg.Server.RateLimit, "url_detection": cfg.Server.URLDetection}
 	data, err := yaml.Marshal(map[string]any{"server": server})
 	if err != nil {
 		return "# Git Messages Server Configuration\n"
@@ -1723,6 +1790,156 @@ func ensureGeneratedSecrets(path string) error {
 	return nil
 }
 
+func encryptDNSCredentials(path string) error {
+	secrets, err := readConfigMap(path)
+	if err != nil {
+		return fmt.Errorf("read secrets file: %w", err)
+	}
+	changed, err := encryptDNSCredentialMap(secrets)
+	if err != nil || !changed {
+		return err
+	}
+	encoded, err := yaml.Marshal(secrets)
+	if err != nil {
+		return fmt.Errorf("encode secrets file: %w", err)
+	}
+	return writePrivateAtomic(path, encoded)
+}
+
+func encryptDNSCredentialMap(secrets map[string]any) (bool, error) {
+	credentialsValue, ok := getConfigPath(secrets, []string{"server", "ssl", "letsencrypt", "dns_credentials"})
+	if !ok {
+		return false, nil
+	}
+	credentials, ok := credentialsValue.(map[string]any)
+	if !ok {
+		return false, errors.New("server.ssl.letsencrypt.dns_credentials must be a flat mapping")
+	}
+	keyValue, ok := getConfigPath(secrets, []string{"server", "security", "encryption_key"})
+	if !ok {
+		hasPlaintext := false
+		hasEncrypted := false
+		for _, value := range credentials {
+			text, isString := value.(string)
+			if isString && text != "" && !strings.HasPrefix(text, "enc:v1:") {
+				hasPlaintext = true
+				break
+			}
+			if isString && strings.HasPrefix(text, "enc:v1:") {
+				hasEncrypted = true
+			}
+		}
+		if !hasPlaintext {
+			if !hasEncrypted {
+				return false, nil
+			}
+			return false, errors.New("server.security.encryption_key is required for encrypted DNS credentials")
+		}
+		key := make([]byte, 32)
+		if _, err := cryptorand.Read(key); err != nil {
+			return false, fmt.Errorf("generate encryption key: %w", err)
+		}
+		keyValue = base64.RawURLEncoding.EncodeToString(key)
+		putConfigPath(secrets, []string{"server", "security", "encryption_key"}, keyValue)
+		putConfigPath(secrets, []string{"server", "security", "encryption_key_version"}, 1)
+		generatedSecretMu.Lock()
+		generatedSecretNames = append(generatedSecretNames, "server.security.encryption_key")
+		generatedSecretMu.Unlock()
+	}
+	key, err := decodeConfigEncryptionKey(fmt.Sprint(keyValue))
+	if err != nil {
+		return false, err
+	}
+	changed := false
+	for name, value := range credentials {
+		plain, ok := value.(string)
+		if !ok || strings.HasPrefix(plain, "enc:v1:") {
+			continue
+		}
+		sealed, err := sealDNSCredential(key, plain)
+		if err != nil {
+			return false, fmt.Errorf("encrypt DNS credential %s: %w", name, err)
+		}
+		credentials[name] = sealed
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	putConfigPath(secrets, []string{"server", "ssl", "letsencrypt", "dns_credentials"}, credentials)
+	return true, nil
+}
+
+func decryptDNSCredentials(configuration *Config) error {
+	if configuration == nil {
+		return nil
+	}
+	var key []byte
+	for name, value := range configuration.Server.SSL.LetsEncrypt.DNSCredentials {
+		if !strings.HasPrefix(value, "enc:v1:") {
+			continue
+		}
+		if key == nil {
+			var err error
+			key, err = decodeConfigEncryptionKey(configuration.Server.Security.EncryptionKey)
+			if err != nil {
+				return err
+			}
+		}
+		plain, err := openDNSCredential(key, strings.TrimPrefix(value, "enc:v1:"))
+		if err != nil {
+			return fmt.Errorf("invalid encrypted DNS credential %s", name)
+		}
+		configuration.Server.SSL.LetsEncrypt.DNSCredentials[name] = plain
+	}
+	return nil
+}
+
+func decodeConfigEncryptionKey(value string) ([]byte, error) {
+	key, err := base64.RawURLEncoding.DecodeString(strings.TrimSpace(value))
+	if err != nil {
+		key, err = base64.StdEncoding.DecodeString(strings.TrimSpace(value))
+	}
+	if err != nil || len(key) != 32 {
+		return nil, errors.New("server.security.encryption_key must contain 32 encoded bytes")
+	}
+	return key, nil
+}
+
+func sealDNSCredential(key []byte, value string) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := cryptorand.Read(nonce); err != nil {
+		return "", err
+	}
+	sealed := gcm.Seal(nonce, nonce, []byte(value), nil)
+	return "enc:v1:" + base64.RawURLEncoding.EncodeToString(sealed), nil
+}
+
+func openDNSCredential(key []byte, value string) (string, error) {
+	sealed, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil || len(sealed) < gcm.NonceSize() {
+		return "", errors.New("invalid DNS credential ciphertext")
+	}
+	plain, err := gcm.Open(nil, sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():], nil)
+	return string(plain), err
+}
+
 // ConsumeGeneratedSecrets returns names created since the previous call; secret values are never returned.
 func ConsumeGeneratedSecrets() []string {
 	generatedSecretMu.Lock()
@@ -1829,6 +2046,9 @@ func migrateSecretsFromServer(configPath string) error {
 		existing = make(map[string]any)
 	}
 	mergeMapsPreferExisting(existing, secrets)
+	if _, err := encryptDNSCredentialMap(existing); err != nil {
+		return fmt.Errorf("encrypt migrated DNS credentials: %w", err)
+	}
 	encodedSecrets, err := yaml.Marshal(existing)
 	if err != nil {
 		return err
@@ -1893,6 +2113,13 @@ func migrateAreaFiles(configFile string) {
 		"metrics": "metrics.yml", "tor": "tor.yml", "i2p": "i2p.yml", "logs": "logs.yml", "notifications": "notifications.yml",
 		"privacy": "privacy.yml", "compliance": "privacy.yml", "tracking": "privacy.yml", "security": "security.yml", "rate_limit": "security.yml", "geoip": "security.yml", "limits": "security.yml", "tokens": "security.yml",
 		"pages": "pages.yml", "contact": "contact.yml", "cors": "web.yml", "csrf": "web.yml", "compression": "web.yml", "healthz": "web.yml", "i18n": "web.yml", "url_detection": "web.yml",
+	}
+	if cli, ok := original["cli"]; ok {
+		if areas["maintenance.yml"] == nil {
+			areas["maintenance.yml"] = make(map[string]any)
+		}
+		areas["maintenance.yml"]["cli"] = cli
+		delete(original, "cli")
 	}
 	nodeKeys := map[string]bool{"port": true, "address": true, "fqdn": true, "mode": true, "api_version": true, "baseurl": true, "pidfile": true, "daemonize": true, "debug": true, "database": true, "cache": true, "ssl": true, "trusted_proxies": true, "cluster": true}
 	for key, value := range server {

@@ -16,15 +16,15 @@ func TestEarlyServerSettingsUsesOrderedDropIns(t *testing.T) {
 	}
 	for name, content := range map[string]string{
 		"10-port.yml":   "server:\n  port: \"8080,443\"\n",
-		"20-daemon.yml": "server:\n  daemonize: true\n  token: ignored-too\n",
+		"20-daemon.yml": "server:\n  daemonize: true\n  pidfile: false\n  token: ignored-too\n",
 	} {
 		if err := os.WriteFile(filepath.Join(directory, "yaml.d", name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	port, address, daemonize := EarlyServerSettings(filepath.Join(directory, "server.yml"))
-	if port != "8080,443" || address != "127.0.0.1" || !daemonize {
-		t.Fatalf("EarlyServerSettings() = (%q, %q, %v)", port, address, daemonize)
+	port, address, daemonize, pidfile := EarlyServerSettings(filepath.Join(directory, "server.yml"))
+	if port != "8080,443" || address != "127.0.0.1" || !daemonize || pidfile {
+		t.Fatalf("EarlyServerSettings() = (%q, %q, %v, %v)", port, address, daemonize, pidfile)
 	}
 }
 
@@ -39,9 +39,9 @@ func TestEarlyServerSettingsSkipsMalformedFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "yaml.d", "10-invalid.yml"), []byte("server: [\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	port, address, daemonize := EarlyServerSettings(filepath.Join(directory, "server.yml"))
-	if port != "80" || address != "" || daemonize {
-		t.Fatalf("EarlyServerSettings() = (%q, %q, %v)", port, address, daemonize)
+	port, address, daemonize, pidfile := EarlyServerSettings(filepath.Join(directory, "server.yml"))
+	if port != "80" || address != "" || daemonize || !pidfile {
+		t.Fatalf("EarlyServerSettings() = (%q, %q, %v, %v)", port, address, daemonize, pidfile)
 	}
 }
 

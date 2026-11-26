@@ -1280,6 +1280,39 @@
         "summary": "列出提交类型"
       }
     },
+    "/cli/binaries/{binary}": {
+      "get": {
+        "description": "REST API",
+        "operationId": "download_cli_binary",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binary",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "REST API"
+          },
+          "404": {
+            "description": "请求无效"
+          }
+        },
+        "summary": "REST API"
+      }
+    },
     "/mcp": {
       "post": {
         "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。",

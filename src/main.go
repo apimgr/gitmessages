@@ -21,10 +21,12 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -109,9 +111,95 @@ func resolveDirectoryOverride(name, flagValue, environmentValue, fallback string
 	return absolute, nil
 }
 
+func resolvePIDFileOverride(flagValue, environmentValue, fallback string) (string, error) {
+	return resolveDirectoryOverride("PID file", flagValue, environmentValue, fallback)
+}
+
+func restartRequiredSettings(current, incoming config.ServerConfig) []string {
+	var changed []string
+	if current.Port != incoming.Port {
+		changed = append(changed, "server.port")
+	}
+	if current.Address != incoming.Address {
+		changed = append(changed, "server.address")
+	}
+	if current.SSL.Enabled != incoming.SSL.Enabled {
+		changed = append(changed, "server.ssl.enabled")
+	}
+	if current.SSL.Cert != incoming.SSL.Cert {
+		changed = append(changed, "server.ssl.cert")
+	}
+	if current.SSL.Key != incoming.SSL.Key {
+		changed = append(changed, "server.ssl.key")
+	}
+	if current.SSL.MinVersion != incoming.SSL.MinVersion {
+		changed = append(changed, "server.ssl.min_version")
+	}
+	if current.Daemonize != incoming.Daemonize {
+		changed = append(changed, "server.daemonize")
+	}
+	if current.PIDFile != incoming.PIDFile {
+		changed = append(changed, "server.pidfile")
+	}
+	if !reflect.DeepEqual(current.Database, incoming.Database) {
+		changed = append(changed, "server.database")
+	}
+	return changed
+}
+
+func preserveRestartRequiredSettings(current config.ServerConfig, incoming *config.ServerConfig) {
+	incoming.Port = current.Port
+	incoming.Address = current.Address
+	incoming.Daemonize = current.Daemonize
+	incoming.PIDFile = current.PIDFile
+	incoming.Database = current.Database
+	incoming.SSL.Enabled = current.SSL.Enabled
+	incoming.SSL.Cert = current.SSL.Cert
+	incoming.SSL.Key = current.SSL.Key
+	incoming.SSL.MinVersion = current.SSL.MinVersion
+}
+
+func configuredTLSHosts(configuration *config.Config) []string {
+	if configuration == nil {
+		return nil
+	}
+	fqdn := strings.TrimSpace(configuration.Server.FQDN)
+	if fqdn == "" {
+		fqdn = strings.TrimSpace(strings.Split(os.Getenv("DOMAIN"), ",")[0])
+	}
+	if fqdn == "" {
+		return nil
+	}
+	return []string{fqdn}
+}
+
 type serverListener struct {
 	port int
 	tls  bool
+}
+
+type overlayManagers struct {
+	mu  sync.RWMutex
+	tor *overlay.TorManager
+	i2p *overlay.I2PManager
+}
+
+func (managers *overlayManagers) current() (*overlay.TorManager, *overlay.I2PManager) {
+	managers.mu.RLock()
+	defer managers.mu.RUnlock()
+	return managers.tor, managers.i2p
+}
+
+func (managers *overlayManagers) replaceTor(manager *overlay.TorManager) {
+	managers.mu.Lock()
+	managers.tor = manager
+	managers.mu.Unlock()
+}
+
+func (managers *overlayManagers) replaceI2P(manager *overlay.I2PManager) {
+	managers.mu.Lock()
+	managers.i2p = manager
+	managers.mu.Unlock()
 }
 
 func parseServerListeners(value string, sslEnabled bool) ([]serverListener, error) {
@@ -269,17 +357,12 @@ func main() {
 		}
 		*override.target = resolved
 	}
-	if *pidFileFlag != "" {
-		pidFile, err := paths.SafeDirPath(*pidFileFlag)
-		if err == nil {
-			pidFile, err = filepath.Abs(pidFile)
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "invalid --pid path: %v\n", err)
-			os.Exit(2)
-		}
-		dirs.PID = pidFile
+	pidFile, err := resolvePIDFileOverride(*pidFileFlag, os.Getenv("PID_FILE"), dirs.PID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "invalid PID file path: %v\n", err)
+		os.Exit(2)
 	}
+	dirs.PID = pidFile
 	configDir := dirs.Config
 
 	if *showStatus {
@@ -288,7 +371,7 @@ func main() {
 			checkPort = strings.TrimSpace(os.Getenv("PORT"))
 		}
 		if checkPort == "" {
-			checkPort, _, _ = config.EarlyServerSettings(filepath.Join(configDir, "server.yml"))
+			checkPort, _, _, _ = config.EarlyServerSettings(filepath.Join(configDir, "server.yml"))
 		}
 		if checkPort == "" {
 			checkPort = "64000"
@@ -412,7 +495,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("prepare startup directories: %v", err)
 	}
-	earlyPort, earlyAddress, earlyDaemonize := config.EarlyServerSettings(configPath)
+	earlyPort, earlyAddress, earlyDaemonize, earlyPIDFile := config.EarlyServerSettings(configPath)
+	if !earlyPIDFile || paths.IsRunningInContainer() {
+		dirs.PID = ""
+	}
 	selectedEarlyPort := earlyPort
 	if envPort := strings.TrimSpace(os.Getenv("PORT")); envPort != "" {
 		selectedEarlyPort = envPort
@@ -472,7 +558,7 @@ func main() {
 	if startupIdentity.system {
 		pidMode = 0o644
 	}
-	if !paths.IsRunningInContainer() {
+	if earlyPIDFile && !paths.IsRunningInContainer() {
 		if err := paths.WritePIDFileMode(dirs.PID, pidMode); err != nil {
 			log.Fatalf("check and write PID file: %v", err)
 		}
@@ -640,8 +726,12 @@ func main() {
 	defer cancelSecurity()
 	go initializeSecurityData(securityContext, securityManager, cfg, securityLogger)
 	if generated := config.ConsumeGeneratedSecrets(); len(generated) > 0 {
+		operatorTokenRegenerated := false
 		if err := sharedDB.Write(context.Background(), func(tx *sql.Tx) error {
 			for _, name := range generated {
+				if name == "server.token" {
+					operatorTokenRegenerated = true
+				}
 				if _, err := tx.Exec(`INSERT INTO audit_log(level, category, action, details) VALUES ('info','config','config.secret_generated',?)`, fmt.Sprintf(`{"key":%q}`, name)); err != nil {
 					return err
 				}
@@ -649,6 +739,11 @@ func main() {
 			return nil
 		}); err != nil {
 			log.Printf("could not record generated-secret audit entries: %v", err)
+		}
+		if operatorTokenRegenerated {
+			if err := sharedDB.RotateAppSecret(context.Background(), "csrf_token_secret"); err != nil {
+				log.Fatalf("rotate CSRF secret after operator token regeneration: %v", err)
+			}
 		}
 	}
 	authStore, err := auth.NewStore(sharedDB, cfg.Server.Token, cfg.Server.Security.EncryptionKey, cfg.Server.Tokens.MaxLinked, cfg.Server.Tokens.IdlePurgeDays, configuredTokenCookieAge(cfg.Server.Tokens.CookieMaxAge))
@@ -667,7 +762,7 @@ func main() {
 		pendingUpdateFailure = ""
 	}
 	mux := http.NewServeMux()
-	setupRoutes(mux)
+	setupRoutes(mux, securityLogger)
 	web.ConfigureAuthMetrics(authStore)
 	web.ConfigureOwnerTokenMetrics(authStore)
 	web.ConfigureDatabaseMetrics(sharedDB)
@@ -678,17 +773,17 @@ func main() {
 
 	var tlsManager *ssl.Manager
 	var tlsConfig *tls.Config
+	var tlsDomainsMu sync.RWMutex
+	var tlsDomains []string
 	for _, listener := range listeners {
 		if !listener.tls {
 			continue
 		}
-		fqdn := strings.TrimSpace(cfg.Server.FQDN)
-		if fqdn == "" {
-			fqdn = strings.TrimSpace(strings.Split(os.Getenv("DOMAIN"), ",")[0])
-		}
-		if fqdn == "" {
+		domains := configuredTLSHosts(cfg)
+		if len(domains) == 0 {
 			log.Fatalf("TLS requires server.fqdn or DOMAIN to be configured")
 		}
+		tlsDomains = append([]string(nil), domains...)
 		le := cfg.Server.SSL.LetsEncrypt
 		tlsManager = ssl.NewManager(ssl.Config{
 			Enabled: true, CertPath: filepath.Join(configDir, "ssl"),
@@ -701,9 +796,23 @@ func main() {
 				log.Fatalf("validate DNS-01 provider: %v", err)
 			}
 		}
-		tlsConfig, err = tlsManager.GetTLSConfig([]string{fqdn})
+		tlsConfig, err = tlsManager.GetTLSConfig(domains)
 		if err != nil {
 			log.Fatalf("configure TLS: %v", err)
+		}
+		tlsConfig.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			tlsDomainsMu.RLock()
+			currentDomains := append([]string(nil), tlsDomains...)
+			tlsDomainsMu.RUnlock()
+			if len(currentDomains) == 0 {
+				return nil, errors.New("TLS requires server.fqdn or DOMAIN to be configured")
+			}
+			updated, err := tlsManager.GetTLSConfig(currentDomains)
+			if err != nil || updated == nil {
+				return updated, err
+			}
+			updated.GetConfigForClient = nil
+			return updated, nil
 		}
 		break
 	}
@@ -724,7 +833,12 @@ func main() {
 	}
 	i2pManager := overlay.NewI2PManager(configDir, dirs.Data, dirs.Logs, cfg.Server.I2P, mux)
 	i2pManager.Start()
-	backgroundScheduler, err := newApplicationScheduler(sharedDB, securityManager, authStore, cfg, dirs, securityLogger, tlsManager, torManager, i2pManager)
+	activeOverlays := &overlayManagers{tor: torManager, i2p: i2pManager}
+	backgroundScheduler, err := newApplicationScheduler(sharedDB, securityManager, authStore, cfg, dirs, securityLogger, tlsManager, torManager, i2pManager, activeOverlays.current, func() []string {
+		tlsDomainsMu.RLock()
+		defer tlsDomainsMu.RUnlock()
+		return append([]string(nil), tlsDomains...)
+	})
 	if err != nil {
 		log.Fatalf("initialize scheduler: %v", err)
 	}
@@ -732,7 +846,8 @@ func main() {
 	backgroundScheduler.Start()
 	defer backgroundScheduler.Stop()
 	web.SetOverlayStatus(func() map[string]any {
-		return map[string]any{"tor": torManager.Status(), "i2p": i2pManager.Status()}
+		currentTor, currentI2P := activeOverlays.current()
+		return map[string]any{"tor": currentTor.Status(), "i2p": currentI2P.Status()}
 	})
 	reloadConfiguration := func() {
 		loaded, err := config.Load(configPath)
@@ -752,27 +867,49 @@ func main() {
 			}
 			loaded.Server.BaseURL = baseURL
 		}
+		restartRequired := restartRequiredSettings(cfg.Server, loaded.Server)
+		if len(restartRequired) > 0 {
+			log.Printf("WARN config.restart_required settings=%s apply_at_next_start=true", strings.Join(restartRequired, ","))
+		}
+		preserveRestartRequiredSettings(cfg.Server, &loaded.Server)
+		if tlsManager != nil {
+			le := loaded.Server.SSL.LetsEncrypt
+			if err := tlsManager.ReloadLetsEncrypt(ssl.LetsEncryptConfig{Enabled: le.Enabled, Email: le.Email, Challenge: le.Challenge, Staging: le.Staging, DNSProvider: le.DNSProvider, DNSCredentials: le.DNSCredentials}, configuredTLSHosts(loaded)); err != nil {
+				log.Printf("WARN TLS configuration reload failed: %v", err)
+			}
+		}
+		torConfigChanged := cfg == nil || cfg.Server.Tor != loaded.Server.Tor
+		i2pConfigChanged := cfg == nil || cfg.Server.I2P != loaded.Server.I2P
 		if err := authStore.ReloadEncryptionKey(context.Background(), loaded.Server.Security.EncryptionKey, loaded.Server.Security.EncryptionKeyVersion); err != nil {
 			log.Printf("Encryption key reload failed: %v", err)
 			return
 		}
 		configureSMTP(loaded)
 		cfg = loaded
+		tlsDomainsMu.Lock()
+		tlsDomains = configuredTLSHosts(cfg)
+		tlsDomainsMu.Unlock()
 		web.SetCORSOrigins(cfg.Server.CORS.AllowedOrigins)
 		web.SetServerFQDN(cfg.Server.FQDN)
 		web.SetDefaultTheme(cfg.Web.UI.Theme)
-		if err := torManager.Close(); err != nil {
-			log.Printf("Failed to stop Tor during reload: %v", err)
+		if torConfigChanged {
+			if err := torManager.Close(); err != nil {
+				log.Printf("Failed to stop Tor during reload: %v", err)
+			}
+			torManager = overlay.NewTorManager(configDir, dirs.Data, dirs.Logs, cfg.Server.Tor, mux)
+			activeOverlays.replaceTor(torManager)
+			if err := torManager.Start(); err != nil {
+				log.Printf("Tor hidden service unavailable after reload: %v", err)
+			}
 		}
-		if err := i2pManager.Close(); err != nil {
-			log.Printf("Failed to stop I2P during reload: %v", err)
+		if i2pConfigChanged {
+			if err := i2pManager.Close(); err != nil {
+				log.Printf("Failed to stop I2P during reload: %v", err)
+			}
+			i2pManager = overlay.NewI2PManager(configDir, dirs.Data, dirs.Logs, cfg.Server.I2P, mux)
+			activeOverlays.replaceI2P(i2pManager)
+			i2pManager.Start()
 		}
-		torManager = overlay.NewTorManager(configDir, dirs.Data, dirs.Logs, cfg.Server.Tor, mux)
-		i2pManager = overlay.NewI2PManager(configDir, dirs.Data, dirs.Logs, cfg.Server.I2P, mux)
-		if err := torManager.Start(); err != nil {
-			log.Printf("Tor hidden service unavailable after reload: %v", err)
-		}
-		i2pManager.Start()
 		log.Println("Configuration reloaded")
 	}
 
@@ -820,10 +957,12 @@ func main() {
 			stopWatcher()
 			backgroundScheduler.Stop()
 			cancelSecurity()
-			if err := i2pManager.Close(); err != nil {
+			_, currentI2P := activeOverlays.current()
+			currentTor, _ := activeOverlays.current()
+			if err := currentI2P.Close(); err != nil {
 				log.Printf("I2P shutdown failed: %v", err)
 			}
-			if err := torManager.Close(); err != nil {
+			if err := currentTor.Close(); err != nil {
 				log.Printf("Tor shutdown failed: %v", err)
 			}
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -843,10 +982,12 @@ func main() {
 			default:
 				log.Printf("Received signal %v, shutting down...", sig)
 				stopWatcher()
-				if err := i2pManager.Close(); err != nil {
+				_, currentI2P := activeOverlays.current()
+				currentTor, _ := activeOverlays.current()
+				if err := currentI2P.Close(); err != nil {
 					log.Printf("I2P shutdown failed: %v", err)
 				}
-				if err := torManager.Close(); err != nil {
+				if err := currentTor.Close(); err != nil {
 					log.Printf("Tor shutdown failed: %v", err)
 				}
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -873,6 +1014,8 @@ func newApplicationScheduler(
 	tlsManager *ssl.Manager,
 	torManager *overlay.TorManager,
 	i2pManager *overlay.I2PManager,
+	currentOverlays func() (*overlay.TorManager, *overlay.I2PManager),
+	tlsDomains func() []string,
 ) (*schedulerpkg.Scheduler, error) {
 	schedulerConfig := configuration.Server.Scheduler
 	catchUpWindow, err := time.ParseDuration(schedulerConfig.CatchUpWindow)
@@ -1113,27 +1256,37 @@ func newApplicationScheduler(
 		}),
 	}
 	callbacks["ssl_renewal"] = func() error { return nil }
-	if tlsManager != nil && configuration.Server.SSL.LetsEncrypt.Enabled {
-		domain := strings.TrimSpace(configuration.Server.FQDN)
-		callbacks["ssl_renewal"] = func() error { return tlsManager.RenewCertificate([]string{domain}) }
+	if tlsManager != nil {
+		callbacks["ssl_renewal"] = func() error { return tlsManager.RenewCertificate(tlsDomains()) }
 	}
-	if torManager != nil && torManager.Status().Enabled {
+	if torManager != nil {
 		callbacks["tor_health"] = func() error {
-			status := torManager.Status()
-			if !status.Running || !status.CircuitEstablished {
-				if err := torManager.Restart(); err != nil {
-					return fmt.Errorf("tor is unhealthy (%s) and restart failed: %w", status.Status, err)
-				}
+			currentTor, _ := currentOverlays()
+			if currentTor == nil {
 				return nil
+			}
+			status := currentTor.Status()
+			if !status.Enabled {
+				return nil
+			}
+			if !status.Running || !status.CircuitEstablished {
+				return fmt.Errorf("tor is unhealthy (%s)", status.Status)
 			}
 			return nil
 		}
 	}
-	if i2pManager != nil && i2pManager.Status().Enabled {
+	if i2pManager != nil {
 		callbacks["i2p_health"] = func() error {
-			status := i2pManager.Status()
+			_, currentI2P := currentOverlays()
+			if currentI2P == nil {
+				return nil
+			}
+			status := currentI2P.Status()
+			if !status.Enabled {
+				return nil
+			}
 			if !status.Running {
-				if err := i2pManager.Restart(); err != nil {
+				if err := currentI2P.Restart(); err != nil {
 					return fmt.Errorf("I2P is unhealthy (%s) and restart failed: %w", status.Status, err)
 				}
 			}
@@ -1378,10 +1531,15 @@ func trustedBlocklistPrefixes(configuration *config.Config) []netip.Prefix {
 	return prefixes
 }
 
-func setupRoutes(mux *http.ServeMux) {
+func setupRoutes(mux *http.ServeMux, panicLoggers ...*log.Logger) {
 	cfg := config.Get().Server.RateLimit
 	web.ConfigureTokenRateLimits(cfg.Strict.Requests, time.Duration(cfg.Strict.Window)*time.Second, cfg.AuthFailures.Requests, time.Duration(cfg.AuthFailures.Window)*time.Second)
-	mux.Handle("/", web.TokenCookieMiddleware(web.Handler(Version, CommitID, buildDate())))
+	var panicLogger *log.Logger
+	if len(panicLoggers) > 0 {
+		panicLogger = panicLoggers[0]
+	}
+	web.ConfigurePanicLogger(panicLogger)
+	mux.Handle("/", web.RecoverMiddleware(web.TokenCookieMiddleware(web.Handler(Version, CommitID, buildDate()))))
 }
 
 func commandHelp(args []string, commands ...string) (string, bool) {
@@ -1468,6 +1626,7 @@ Email Commands:
 Environment Variables:
   PORT         Server port
   LISTEN       Server listen address
+  PID_FILE     PID file path
   CONFIG_DIR   Configuration directory
   DATA_DIR     Data directory
   CACHE_DIR    Cache directory

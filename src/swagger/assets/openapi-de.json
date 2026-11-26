@@ -1280,6 +1280,39 @@
         "summary": "Commit-Typen auflisten"
       }
     },
+    "/cli/binaries/{binary}": {
+      "get": {
+        "description": "REST-API",
+        "operationId": "download_cli_binary",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "binary",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "REST-API"
+          },
+          "404": {
+            "description": "Ungültige Anfrage"
+          }
+        },
+        "summary": "REST-API"
+      }
+    },
     "/mcp": {
       "post": {
         "description": "Greifen Sie per Streamable HTTP auf den öffentlichen Katalog und den zustandslosen Nachrichten-Generator zu.",

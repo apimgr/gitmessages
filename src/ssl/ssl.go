@@ -55,6 +55,7 @@ type LetsEncryptConfig struct {
 type Manager struct {
 	config      Config
 	certManager *autocert.Manager
+	certDomains []string
 	mu          sync.RWMutex
 }
 
@@ -79,6 +80,32 @@ func NewManager(cfg Config) *Manager {
 	return &Manager{
 		config: cfg,
 	}
+}
+
+// ReloadLetsEncrypt updates ACME settings without changing TLS listener settings.
+func (m *Manager) ReloadLetsEncrypt(configuration LetsEncryptConfig, domains ...[]string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	configuration.DNSCredentials = cloneCredentials(configuration.DNSCredentials)
+	m.config.LetsEncrypt = configuration
+	m.certManager = nil
+	m.certDomains = nil
+	if !configuration.Enabled || !m.config.Enabled || ParseChallenge(configuration.Challenge) != "http-01" || m.config.Cert != "" || m.config.Key != "" || len(domains) == 0 || len(domains[0]) == 0 {
+		return nil
+	}
+	_, err := m.getLetsEncryptTLSConfig(domains[0])
+	return err
+}
+
+func cloneCredentials(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(source))
+	for name, value := range source {
+		cloned[name] = value
+	}
+	return cloned
 }
 
 // GetTLSConfig returns TLS configuration for the server
@@ -156,20 +183,22 @@ func (m *Manager) loadTLSCertificate(certPath, keyPath string, domains []string)
 
 // getLetsEncryptTLSConfig configures autocert for Let's Encrypt
 func (m *Manager) getLetsEncryptTLSConfig(domains []string) (*tls.Config, error) {
-	cacheDir := filepath.Join(m.config.CertPath, "autocert")
-	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
-		return nil, fmt.Errorf("failed to create cert cache dir: %w", err)
-	}
-
-	m.certManager = &autocert.Manager{
-		Prompt:      autocert.AcceptTOS,
-		HostPolicy:  autocert.HostWhitelist(domains...),
-		Cache:       autocert.DirCache(cacheDir),
-		Email:       m.config.LetsEncrypt.Email,
-		RenewBefore: 7 * 24 * time.Hour,
-	}
-	if m.config.LetsEncrypt.Staging {
-		m.certManager.Client = &xcryptoacme.Client{DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory"}
+	if m.certManager == nil || !sameDomains(m.certDomains, domains) {
+		cacheDir := filepath.Join(m.config.CertPath, "autocert")
+		if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+			return nil, fmt.Errorf("failed to create cert cache dir: %w", err)
+		}
+		m.certManager = &autocert.Manager{
+			Prompt:      autocert.AcceptTOS,
+			HostPolicy:  autocert.HostWhitelist(domains...),
+			Cache:       autocert.DirCache(cacheDir),
+			Email:       m.config.LetsEncrypt.Email,
+			RenewBefore: 7 * 24 * time.Hour,
+		}
+		if m.config.LetsEncrypt.Staging {
+			m.certManager.Client = &xcryptoacme.Client{DirectoryURL: "https://acme-staging-v02.api.letsencrypt.org/directory"}
+		}
+		m.certDomains = append(m.certDomains[:0], domains...)
 	}
 
 	tlsConfig := m.certManager.TLSConfig().Clone()
@@ -189,12 +218,30 @@ func (m *Manager) getLetsEncryptTLSConfig(domains []string) (*tls.Config, error)
 	return tlsConfig, nil
 }
 
+func sameDomains(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
 // GetHTTPHandler returns HTTP handler for ACME challenges
 func (m *Manager) GetHTTPHandler(fallback http.Handler) http.Handler {
-	if m.certManager != nil && ParseChallenge(m.config.LetsEncrypt.Challenge) == "http-01" {
-		return m.certManager.HTTPHandler(fallback)
-	}
-	return fallback
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.mu.RLock()
+		manager, challengeType := m.certManager, m.config.LetsEncrypt.Challenge
+		m.mu.RUnlock()
+		if manager != nil && ParseChallenge(challengeType) == "http-01" {
+			manager.HTTPHandler(fallback).ServeHTTP(w, r)
+			return
+		}
+		fallback.ServeHTTP(w, r)
+	})
 }
 
 // ValidateDNSProvider constructs the configured provider without creating DNS records.
@@ -216,7 +263,14 @@ func (m *Manager) RenewCertificate(domains []string) error {
 	if len(domains) == 0 {
 		return fmt.Errorf("certificate renewal requires at least one configured host")
 	}
-	if ParseChallenge(m.config.LetsEncrypt.Challenge) == "dns-01" {
+	m.mu.RLock()
+	letsencryptEnabled := m.config.LetsEncrypt.Enabled
+	challengeType := m.config.LetsEncrypt.Challenge
+	m.mu.RUnlock()
+	if !letsencryptEnabled {
+		return nil
+	}
+	if ParseChallenge(challengeType) == "dns-01" {
 		return m.RenewDNSCertificate(domains)
 	}
 	if _, err := m.GetTLSConfig(domains); err != nil {
