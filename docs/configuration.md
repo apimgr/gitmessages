@@ -39,6 +39,8 @@ Area names are conventions; the loader accepts supported settings in any merged 
 | YAML key | Accepted values and behavior |
 |---|---|
 | `server.port` | A TCP port from 1–65535, or a comma-separated `HTTP,HTTPS` pair such as `80,443`. Defaults to `PORT`, port 80 in a detected container, or an available port in 64000–64999 on a host. `--port` overrides the environment and file. |
+| `server.daemonize` | Daemonizes a manual host launch; defaults to `false` and is ignored for service-manager launches and containers. Read at startup; changes take effect after restart. |
+| `server.pidfile` | Creates and checks the server PID file; defaults to `true` outside containers and is always skipped in containers. Read at startup; changes take effect after restart. |
 | `server.ssl.enabled` | Enables TLS for a single configured port. In dual-port mode, the second port is HTTPS. Port 443 is HTTPS-only by default. |
 | `server.ssl.cert`, `server.ssl.key` | Optional paths to an explicit certificate and private key; both must be provided together. Otherwise, the server searches the documented system and config SSL directories. |
 | `server.ssl.min_version` | Minimum TLS version: `TLS1.2` (default) or `TLS1.3`. |
@@ -79,6 +81,8 @@ Area names are conventions; the loader accepts supported settings in any merged 
 | `server.update.cli_min_version` | Minimum CLI version advertised to clients. |
 | `server.logs.access_format` | Access log format; defaults to `apache`. |
 | `server.logs.level` | Log level; empty follows the server mode (`info` in production, `debug` in development or debug mode). |
+
+Configuration changes reload automatically. Listener address, port, TLS listener settings (`server.ssl.enabled`, `cert`, `key`, and `min_version`), database settings, `daemonize`, and `pidfile` are logged as restart-required and remain at their running values until restart. `server.ssl.letsencrypt.*` changes apply live and are used for the next certificate issuance or renewal.
 
 ## Database and cache connections
 
