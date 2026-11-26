@@ -9,7 +9,7 @@ RUN go mod download
 COPY . .
 RUN mkdir -p /out && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -buildvcs=false -trimpath -ldflags "-s -w -X main.Version=${VERSION} -X main.CommitID=${COMMIT_ID}" -o /out/gitmessages ./src
 
-FROM alpine:3.22
+FROM alpine:latest
 
 ARG VERSION=devel
 ARG COMMIT_ID=N/A

@@ -24,7 +24,6 @@ env:
 jobs:
   build-standard:
     runs-on: ubuntu-26.04
-    if: gitea.event_name != 'schedule'
     permissions:
       contents: read
       packages: write
@@ -141,6 +140,7 @@ jobs:
 
   build-devel:
     runs-on: ubuntu-26.04
+    needs: [build-standard]
     if: (gitea.event_name == 'schedule' || gitea.event_name == 'workflow_dispatch' || gitea.event_name == 'push') && (gitea.ref == 'refs/heads/main' || gitea.ref == 'refs/heads/master')
     permissions:
       contents: read
