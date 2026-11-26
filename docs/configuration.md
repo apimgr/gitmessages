@@ -130,7 +130,7 @@ Security and GeoIP settings are stored in the security configuration area. The p
 | YAML key | Behavior |
 |---|---|
 | `server.security.allowlist` | Trusted client IP addresses and CIDRs that bypass blocklist, rate-limit, and GeoIP checks; authentication and authorization still apply. |
-| `server.security.blocked_ips` | Explicit IP addresses and CIDRs rejected before rate limiting. |
+| `server.security.blocked_ips` | Explicit IP addresses and CIDRs rejected before rate limiting, with an optional description (`(no description)` when omitted). |
 | `server.security.reports.retention_days` | Days to retain closed security reports; defaults to `365`. Open reports are never purged. |
 | `server.security.blocklists.enabled` | Enables the built-in FireHOL list and configured extra sources. |
 | `server.security.blocklists.extra_sources[]` | Extra HTTPS IP or domain sources with an ID, type, URL, and optional `enabled` flag. |
@@ -275,7 +275,6 @@ Privacy settings fill the deployment-specific sections of `/server/privacy` and 
 | `server.privacy.consent.message`, `message_if_sold` | Banner text selected according to `server.privacy.data.sold`. |
 | `server.privacy.consent.policy.{text,url,version}` | Privacy-policy link and version used for consent records; default version is `1`. |
 | `server.privacy.consent.buttons.{decline,accept}` | Labels for the consent actions. |
-| `server.privacy.consent.position` | Banner position, `top` or `bottom`. |
 | `server.privacy.consent.show_preferences`, `preferences_text` | Controls the manage-preferences link and its label. |
 | `server.privacy.cookies.{essential,preferences,analytics}.{enabled,description}` | Describes and offers the three cookie categories. Essential cookies are always required; preference and analytics choices are consent-controlled. |
 | `server.privacy.cookies.analytics.description_suffix_{sold,not_sold}` | Additional analytics disclosure selected by the `sold` setting. |
