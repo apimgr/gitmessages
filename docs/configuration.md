@@ -51,7 +51,7 @@ Area names are conventions; the loader accepts supported settings in any merged 
 | `server.ssl.letsencrypt.dns_provider` | Lego DNS provider name used for DNS-01 challenges. |
 | `server.ssl.letsencrypt.dns_credentials` | Flat map of provider environment variable names to values; keep credentials in `secrets.yml`. |
 | `server.address` | IP address to bind. Defaults to `LISTEN`, then `[::]`. `--address` has the highest priority. |
-| `server.fqdn` | Configured public host name; used by URL and MCP origin handling. |
+| `server.fqdn` | Records the host name detected at first run for operator reference; it never selects public URLs. Set `DOMAIN` to select the public host name. |
 | `server.api_version` | API route version prefix matching `v` followed by digits; defaults to `v1`. Changing it requires a server restart. The active version is advertised at `GET /api/autodiscover`. |
 | `server.baseurl` | Optional path prefix for public URLs, such as `/messages`. |
 | `server.mode` | `production`, `development`, or `debug`; `--mode` and `MODE` can override it. |
@@ -166,6 +166,8 @@ The built-in scheduler uses persistent task state in the server database and run
 | `server.scheduler.tasks.<task>.retry_delay` | Base delay between retries. |
 
 Built-in task IDs and default schedules follow the AI.md scheduler specification. Tor and I2P health tasks are registered only when their corresponding network mode is active.
+
+`database_check` runs every minute and checks database connectivity and writability plus the configuration directory's write access. `health_stats_flush` runs every 30 seconds and persists the cached request counters; both are required tasks.
 
 ## CLI release distribution
 
@@ -306,10 +308,21 @@ Privacy settings fill the deployment-specific sections of `/server/privacy` and 
 |---|---:|---|
 | `server.notifications.disk_low.enabled` | `true` | Enables disk-space checks and notifications. |
 | `server.notifications.disk_low.threshold_percent` | `85` | Used-space percentage that triggers an alert. |
-| `server.notifications.disk_low.check_interval` | `5m` | Scheduler interval for checks. |
 | `server.notifications.disk_low.repeat` | `24h` | Minimum interval between repeated alerts while usage remains above threshold. |
 
-The scheduler deduplicates alerts by filesystem volume and reports recovery after usage drops 5 percentage points below the threshold. The backup skip threshold is separate (`server.backup.disk_threshold`).
+The check cadence is controlled only by `server.scheduler.tasks.disk_check.schedule` (default `@every 5m`). The scheduler deduplicates alerts by filesystem volume and reports recovery after usage drops 5 percentage points below the threshold. The backup skip threshold is separate (`server.backup.disk_threshold`).
+
+## Maintenance mode
+
+The server enters read-only maintenance mode after a critical database or file-system failure. Health endpoints return `503` with the failure reason and self-healing state; write requests also return `503`, while reads remain available. Recovery retries run in the background.
+
+| YAML key | Default | Behavior |
+|---|---:|---|
+| `server.maintenance.self_healing.retry_interval` | `30s` | Delay between recovery attempts. |
+| `server.maintenance.self_healing.max_attempts` | `0` | Failed attempts before recovery stops; `0` retries indefinitely. |
+| `server.maintenance.cleanup.disk_threshold` | `90` | Used-space percentage that triggers disk-pressure cleanup. |
+| `server.maintenance.cleanup.log_retention_days` | `7` | Log age limit applied during maintenance cleanup. |
+| `server.maintenance.notify.on_enter`, `on_exit` | `true` | Sends configured operator notifications when maintenance starts or recovery succeeds. |
 
 ## Metrics
 

@@ -2,6 +2,8 @@
 
 The source is organized under `src/`. Curated catalog data lives in `src/messages/data/` and is embedded into the binaries. The `src/web/` package serves the SSR site, REST API, OpenAPI/PWA routes, and the pinned browser assets under `src/web/static/vendor/` and startup scripts under `src/web/static/js/`. `src/swagger/` builds OpenAPI output and supplies its theme; `src/graphql/` contains the GraphQL handler, schema, resolvers, and GraphiQL theme. `src/client/` contains the companion CLI.
 
+The catalog is authored for this project or explicitly released for inclusion in its releases. Catalog changes are reviewed and shipped with the application; the service does not ingest messages from external content providers.
+
 Use Docker-backed Make targets; do not install or invoke Go directly on the host:
 
 ```sh
