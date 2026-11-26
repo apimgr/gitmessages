@@ -53,7 +53,7 @@ gitmessages --baseurl /gitmessages
 
 ## Client binary
 
-`gitmessages-cli` connects to the public API. Set a server with `--server`, `GITMESSAGES_SERVER_PRIMARY`, or the CLI config file. Output language precedence is `--lang`, CLI config `language`, `LC_ALL`, `LANG`, then English (`en`); `language: auto` uses the environment. Supported languages are English (`en`), Spanish (`es`), French (`fr`), German (`de`), Italian (`it`), Arabic (`ar`), Chinese (`zh`), and Japanese (`ja`). The CLI sends the selected language with API requests. Unsupported values fall back to English. `--json` prints the wrapped JSON result. The `random` command prints only the message, so it can be used in command substitution.
+`gitmessages-cli` connects to the public API. Set a server with `--server`, `GITMESSAGES_SERVER_PRIMARY`, or the CLI config file. `--token` supplies a Bearer token and saves it to `cli.yml` only when no token is already configured. The CLI config directory and `cli.yml` use owner-only permissions. Output language precedence is `--lang`, CLI config `language`, `LC_ALL`, `LANG`, then English (`en`); `language: auto` uses the environment. Supported languages are English (`en`), Spanish (`es`), French (`fr`), German (`de`), Italian (`it`), Arabic (`ar`), Chinese (`zh`), and Japanese (`ja`). The CLI sends the selected language with API requests. Unsupported values fall back to English. `--json` prints the wrapped JSON result. The `random` command prints only the message, so it can be used in command substitution.
 
 ```sh
 GITMESSAGES_SERVER=http://127.0.0.1:8080
@@ -62,11 +62,17 @@ gitmessages-cli --server "$GITMESSAGES_SERVER" conventions
 gitmessages-cli --server "$GITMESSAGES_SERVER" templates
 git commit -m "$(gitmessages-cli --server "$GITMESSAGES_SERVER" random)"
 gitmessages-cli --server "$GITMESSAGES_SERVER" build --type fix --scope parser --description 'handle empty input'
+gitmessages-cli --server "$GITMESSAGES_SERVER" --update check
+gitmessages-cli --server "$GITMESSAGES_SERVER" --update yes
 ```
 
 No official server URL is built into the release. Supply `--server`, set `GITMESSAGES_SERVER_PRIMARY`, or configure `server.primary` in `cli.yml` before running a command.
 
 Build options are `--type`, `--scope`, `--description`, `--body`, `--breaking`, and `--convention`. Supported conventions are `conventional-commits` and `angular`. `--help` and `--version` exit immediately.
+
+The CLI checks for a compatible update on every invocation. `--update check` reports an available version without installing it; `--update yes` installs it immediately. In an interactive terminal, an available update prompts before installation. Non-interactive runs install silently only when `update.auto: true` is set in `cli.yml`. Set `update.check_interval: per_invocation` and `update.channel: stable`; these are the supported values. Updates require HTTPS, a matching server-provided SHA-256, and a writable install directory. The CLI atomically replaces and re-executes itself with the original command. If the server sets `cli_min_version`, an older CLI must update before making API requests.
+
+Operators can provision release assets in `{data_dir}/cli/`: `{project_name}-cli-{os}-{arch}[.exe]`, `version.txt`, and `sha256.txt`. The server advertises only binaries whose SHA-256 matches the checksum file. Downloads are public by default; `cli.binary_download.require_auth: true` requires a Bearer token. See [API autodiscovery](api.md#autodiscovery) for server-side configuration and the download endpoint.
 
 The default CLI is built without GUI dependencies and opens the TUI when display detection identifies an interactive terminal. Optional `gitmessages-cli-gui-{os}-{arch}` builds include the native GUI for Linux, macOS, and Windows; those binaries require the system loader used by the build toolchain and are separate from the static CLI. Set `display.mode` to `auto`, `gui`, or `tui` in `cli.yml` to override automatic selection. Without GUI support, `auto` selects the TUI when a terminal is available; explicitly selecting `gui` reports that GUI support is unavailable. `TERM=dumb` disables TUI selection and ANSI output. The TUI reflows when the terminal is resized and supports `↑`/`↓` or `j`/`k` navigation, `/` to filter actions, `?` for help, Enter to open an action, and `q` or Ctrl+C to exit. Page Up and Page Down scroll long results on small screens.
 

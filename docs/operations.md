@@ -23,7 +23,7 @@ Remote libSQL backup and restore are currently unavailable. The CLI stops with a
 
 For remote libSQL, `server.database.cache.enabled` maintains a local SQLite read cache at `server.database.cache.path`. The cache is refreshed on startup, after successful remote writes, and at `sync_interval`. When `offline_mode` is enabled, an unavailable remote can use only a cache refreshed within `max_age`; this mode is read-only. The cache contains a replica of database records and should be protected like the remote database. It is a performance/offline cache, not a backup.
 
-Archives use `.tar.gz`; when `server.backup.encryption_password` is set, they use `.tar.gz.enc` and AES-256-GCM encryption. Compliance mode requires that password before backups can run. Store the password separately from the archive. `backup test [file]` verifies an archive without restoring it; when the file is omitted, it checks the newest available backup.
+Archives use `.tar.gz`; when `server.backup.encryption_password` is set, they use `.tar.gz.enc` and AES-256-GCM encryption. Compliance mode requires that password before backups can run. Store the password separately from the archive. `backup test [file]` verifies an archive without restoring it; when the file is omitted, the server selects the full backup with the latest UTC date in its filename, breaking date ties by file modification time. If no full backup exists, it selects the newer daily or hourly incremental by modification time. The encrypted manifest is not read to select an archive; an incremental is verified together with its base.
 
 Restore an archive from the server host:
 
@@ -42,6 +42,8 @@ The scheduler runs inside the server process and stores task state in `server.db
 Scheduled work includes SSL renewal, GeoIP and security-feed updates, security-report cleanup, log rotation, disk and health checks, backups, and update checks. Tor and I2P health tasks are registered only when those features are active. Task failures are logged and exposed through the scheduler metrics described in [Internal metrics](metrics.md).
 
 ## Debug diagnostics
+
+Unexpected handler panics produce a generic 500 response. The stack trace is written to the private application log, never returned to the browser or API client. If the themed error page cannot render, a minimal static fallback is returned.
 
 Enable diagnostics for one process with `gitmessages --debug`, `DEBUG=true`, or `gitmessages --mode debug`. `--debug` has the highest priority, followed by `DEBUG`; `MODE=debug` enables diagnostics by default. `DEBUG=false` or `--debug=false` turns them off. Debug settings under `server.debug` control pprof, runtime handlers, query/cache logging, optional body previews, and profiling rates; the mode flag itself is never saved in configuration.
 

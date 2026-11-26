@@ -102,7 +102,7 @@ curl -q -LSsf "$SERVER_URL/api/$API_VERSION/messages" \
 
 
 
-The active API version is available from `GET /api/autodiscover` (default `v1`). OpenAPI JSON is served at `/api/{api_version}/server/swagger` (also `/api/swagger`). GraphQL accepts POST requests at `/api/{api_version}/server/graphql` and `/api/graphql`. MCP Streamable HTTP accepts JSON-RPC POST requests at `/api/{api_version}/server/mcp` (also `/api/mcp` and `/mcp`) and requires an owner or operator Bearer token. See the [API reference](docs/api.md).
+The active API version and available CLI updates are published by `GET /api/autodiscover`. Operators can provision CLI release assets in `{data_dir}/cli/`; the server verifies each SHA-256 before advertising it, and the CLI can check and install updates over HTTPS. OpenAPI JSON is served at `/api/{api_version}/server/swagger` (also `/api/swagger`). GraphQL accepts POST requests at `/api/{api_version}/server/graphql` and `/api/graphql`. MCP Streamable HTTP accepts JSON-RPC POST requests at `/api/{api_version}/server/mcp` (also `/api/mcp` and `/mcp`) and requires an owner or operator Bearer token. See the [API reference](docs/api.md) and [CLI reference](docs/cli.md).
 
 ## Other
 

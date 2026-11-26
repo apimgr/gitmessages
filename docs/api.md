@@ -4,7 +4,8 @@ The canonical API prefix is `/api/{api_version}`; its default is `/api/v1`, and 
 
 | Method | Route | Purpose |
 |---|---|---|
-| GET | `/api/autodiscover` | Discover server URL/version, supported CLI configuration schema and options, and minimum CLI version before calling versioned routes |
+| GET | `/api/autodiscover` | Discover public server origins, API version, exposed overlay addresses, available CLI updates, and minimum CLI version |
+| GET | `/cli/binaries/{project_name}-cli-{os}-{arch}[.exe]` | Download an operator-provisioned CLI release binary; public by default, or Bearer-authenticated when configured |
 | GET | `/api/{api_version}` | List API resources and server page endpoints |
 | GET | `/api/{api_version}/types` | List commit types and emoji mappings |
 | GET | `/api/{api_version}/conventions` | List Conventional Commits and Angular conventions |
@@ -44,7 +45,9 @@ The canonical API prefix is `/api/{api_version}`; its default is `/api/v1`, and 
 
 ## Autodiscovery
 
-`GET /api/autodiscover` is intentionally unversioned so a client can learn the canonical API prefix before making versioned requests. Its success envelope contains `server` details (`name`, `version`, `api_version`, `api_base`, public `base_url`, configured `fqdn`, and listen `port`), a JSON Schema for the CLI's supported connection settings, and `options` describing the CLI commands, output formats, and authentication expectations. It also returns `cli_versions` (currently empty when no CLI release metadata is configured) and `cli_min_version` from `server.update.cli_min_version`. The response contains no credentials.
+`GET /api/autodiscover` is intentionally unversioned. Its success envelope contains `name`, `version`, `api.current_version`, public `urls`, `cli_versions`, and `cli_min_version`. The `onion` and `i2p` fields appear only when the operator enables their respective exposure settings. The response contains no configuration schema, option list, or credentials.
+
+CLI release files are provisioned by the operator under `{data_dir}/cli/` (or `cli.binary_download.dir` in `yaml.d/maintenance.yml`). The directory contains `{project_name}-cli-{os}-{arch}[.exe]`, `version.txt`, and `sha256.txt`. The server computes each binary's SHA-256 and advertises only entries whose checksum matches. An empty or missing directory advertises no updates, and an unavailable binary returns `404`. Set `cli.binary_download.require_auth` to require a valid Bearer token for downloads; the default is public access.
 
 The server defaults to API version `v1`. Operators may change `server.api_version` to another `v`-prefixed numeric version; changing it requires a restart. Clients should use the discovered `server.api_base` for canonical routes. `/api/swagger`, `/api/graphql`, `/api/healthz`, and `/api/mcp` remain direct aliases for the active version's handlers.
 

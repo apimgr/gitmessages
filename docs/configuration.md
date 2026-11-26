@@ -163,6 +163,19 @@ The built-in scheduler uses persistent task state in the server database and run
 
 Built-in task IDs and default schedules follow the AI.md scheduler specification. Tor and I2P health tasks are registered only when their corresponding network mode is active.
 
+## CLI release distribution
+
+Server-side CLI distribution settings belong in the `cli` section of `yaml.d/maintenance.yml`. The default binary directory is `{data_dir}/cli`; operators provision the release binaries and the `version.txt` and `sha256.txt` metadata there. The server advertises only files whose recomputed SHA-256 matches the metadata. Downloads are public by default; setting `require_auth` to `true` requires a valid Bearer token.
+
+```yaml
+cli:
+  binary_download:
+    dir: "{data_dir}/cli"
+    require_auth: false
+```
+
+`server.update.cli_min_version` sets the minimum CLI version required for API requests. The client's `update.auto`, `update.check_interval`, and `update.channel` settings live in its user-only `cli.yml`, not on the server.
+
 ## Backup and restore settings
 
 Backup policy is stored in `yaml.d/maintenance.yml`; compliance settings are stored in `yaml.d/privacy.yml` under the `server.compliance.*` keys. The backup encryption password belongs only in `secrets.yml`.
@@ -411,9 +424,9 @@ I2P settings are under `server.i2p`:
 
 The CLI stores `cli.yml` and profile files in the platform user configuration directory under `apimgr/gitmessages`. Select a profile with `--config`. Files are created with owner-only permissions. The server selection order is `--server`, `GITMESSAGES_SERVER_PRIMARY`, then `server.primary`. A valid `--server` argument is saved only when no valid server is already configured.
 
-The CLI config supports `language`, `display.mode` (`auto`, `gui`, or `tui`), `server.primary`, and the discovered `server.api_version`. The CLI queries `/api/autodiscover` on startup and records the server's active API version before using versioned routes. Language precedence is `--lang`, CLI config `language`, `LC_ALL`, `LANG`, then English (`en`); `language: auto` uses the environment. The default static CLI uses the TUI; optional `gitmessages-cli-gui-{os}-{arch}` builds enable GUI mode on Linux, macOS, and Windows. BSD builds use the terminal interface.
+The CLI config supports `language`, `display.mode` (`auto`, `gui`, or `tui`), `server.primary`, `server.token`, the discovered `server.api_version`, and `update.auto`, `update.check_interval`, and `update.channel`. The CLI queries `/api/autodiscover` on startup and records the server's active API version before using versioned routes. Language precedence is `--lang`, CLI config `language`, `LC_ALL`, `LANG`, then English (`en`); `language: auto` uses the environment. The default static CLI uses the TUI; optional `gitmessages-cli-gui-{os}-{arch}` builds enable GUI mode on Linux, macOS, and Windows. BSD builds use the terminal interface.
 
-The server's CLI binary distribution settings are `server.cli.binary_download.dir` (defaults to `{data_dir}/cli`) and `server.cli.binary_download.require_auth` (defaults to `false`). Release binaries are provisioned by the operator, image, or package; the server does not build or download them. Downloads are public by default and require a valid Bearer token when `require_auth` is enabled. See [Integrations](integrations.md) for autodiscovery and download behavior.
+The server's CLI binary distribution settings are `cli.binary_download.dir` (defaults to `{data_dir}/cli`) and `cli.binary_download.require_auth` (defaults to `false`), stored in `yaml.d/maintenance.yml`. Release binaries are provisioned by the operator, image, or package; the server does not build or download them. Downloads are public by default and require a valid Bearer token when `require_auth` is enabled. See [Integrations](integrations.md) for autodiscovery and download behavior.
 
 ## Contact CAPTCHA behavior
 
