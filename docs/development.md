@@ -31,7 +31,7 @@ The `make test` target is the Phase 1 commit gate for source-level Go tests. Pha
 ./tests/run_tests.sh
 ./tests/docker.sh
 ./tests/incus.sh [systemd|openrc|all]
-./tests/e2e.sh
+make e2e
 ```
 
 `run_tests.sh` runs the basic Docker checks and exits with status 69 when Docker is unavailable; there is no Incus fallback because the Incus runner also needs Docker to build its test binaries. `docker.sh` validates both binaries and exercises the server routes and CLI in Alpine. `incus.sh` checks service behavior under systemd and OpenRC; it runs both modes by default. The separate `e2e.sh` suite runs the browser tests through an isolated Docker network with a Chromium sidecar. It covers server-rendered, no-JavaScript, and full-browser behavior. E2E is on demand for beta testing and is not part of the commit gate.
