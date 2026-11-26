@@ -1,6 +1,6 @@
 //go:build gui && !freebsd && !netbsd && !openbsd
 
-package main
+package gui
 
 import (
 	"bytes"
@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/apimgr/gitmessages/src/common/display"
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/messages"
 	_ "github.com/gogpu/gg/gpu"
@@ -22,9 +23,16 @@ import (
 	"github.com/gogpu/ui/widget"
 )
 
-func guiSupported() bool { return true }
+func IsGUIAvailable() bool {
+	environment := display.DetectDisplayEnv()
+	return environment.HasDisplay && !environment.IsSSH && !environment.IsMosh
+}
 
-func runGUI(server, language string, config *clientConfig) error {
+func LaunchGUI(config *Config) error {
+	if config == nil || config.ValidateServer == nil || config.DiscoverAPIVersion == nil || config.Request == nil || config.SaveProfile == nil {
+		return fmt.Errorf("GUI configuration is incomplete")
+	}
+	server, language := config.Server, config.Language
 	output := state.NewSignal(i18n.T(language, "gui.description"))
 	serverInput := state.NewSignal(server)
 	kindInput := state.NewSignal("")
@@ -34,22 +42,20 @@ func runGUI(server, language string, config *clientConfig) error {
 
 	connect := func() {
 		candidate := strings.TrimSpace(serverInput.Get())
-		if !validServer(candidate) {
+		if !config.ValidateServer(candidate) {
 			status(i18n.T(language, "gui.invalid_server"))
 			return
 		}
-		apiVersion, err := discoverAPIVersion(candidate, language)
+		apiVersion, err := config.DiscoverAPIVersion(candidate, language)
 		if err != nil {
 			status(i18n.Format(language, "gui.connection_failed", map[string]string{"error": err.Error()}))
 			return
 		}
-		if _, err := request(candidate, "GET", "/api/{api_version}/server/healthz", nil, language); err != nil {
+		if _, err := config.Request(candidate, "GET", "/api/{api_version}/server/healthz", nil, language); err != nil {
 			status(i18n.Format(language, "gui.connection_failed", map[string]string{"error": err.Error()}))
 			return
 		}
-		config.Server.Primary = candidate
-		config.Server.APIVersion = apiVersion
-		if err := saveConfig(config); err != nil {
+		if err := config.SaveProfile(candidate, apiVersion); err != nil {
 			status(i18n.Format(language, "gui.profile_save_failed", map[string]string{"error": err.Error()}))
 			return
 		}
@@ -57,11 +63,11 @@ func runGUI(server, language string, config *clientConfig) error {
 		status(i18n.T(language, "gui.connected"))
 	}
 	fetch := func(path, action string) {
-		if !validServer(server) {
+		if !config.ValidateServer(server) {
 			status(i18n.T(language, "gui.connect_first"))
 			return
 		}
-		data, err := request(server, "GET", path, nil, language)
+		data, err := config.Request(server, "GET", path, nil, language)
 		if err != nil {
 			status(i18n.Format(language, "gui.response_error", map[string]string{"error": err.Error()}))
 			return
@@ -87,7 +93,11 @@ func runGUI(server, language string, config *clientConfig) error {
 	build := func() {
 		input := messages.BuildInput{Type: strings.TrimSpace(kindInput.Get()), Scope: strings.TrimSpace(scopeInput.Get()), Description: strings.TrimSpace(descriptionInput.Get()), Convention: "conventional-commits"}
 		if _, err := messages.Build(input); err != nil {
-			status(localizeClientError(language, err))
+			if config.LocalizeError != nil {
+				status(config.LocalizeError(err))
+			} else {
+				status(err.Error())
+			}
 			return
 		}
 		payload, err := json.Marshal(input)
@@ -95,7 +105,7 @@ func runGUI(server, language string, config *clientConfig) error {
 			status(i18n.Format(language, "gui.response_error", map[string]string{"error": err.Error()}))
 			return
 		}
-		data, err := request(server, "POST", "/api/{api_version}/messages", payload, language)
+		data, err := config.Request(server, "POST", "/api/{api_version}/messages", payload, language)
 		if err != nil {
 			status(i18n.Format(language, "gui.response_error", map[string]string{"error": err.Error()}))
 			return

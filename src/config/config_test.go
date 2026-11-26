@@ -54,8 +54,18 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("Metrics.Enabled = true, want false by default")
 	}
 	privacy := cfg.Server.Privacy
-	if privacy.Data.Sold || !privacy.Data.StoredOnServer || privacy.Retention.Period == "" {
+	if privacy.Data.Sold || !privacy.Data.StoredOnServer || privacy.Retention.Period != "" || !privacy.Retention.ExportAvailable || !privacy.Retention.DeletionAvailable {
 		t.Error("privacy data and retention defaults are incomplete")
+	}
+	if got := privacy.Retention.PeriodForLanguage("en"); got == "privacy.retention.period" || strings.TrimSpace(got) == "" {
+		t.Errorf("built-in privacy retention text is missing: %q", got)
+	}
+	localizedRetention := PrivacyRetentionConfig{Period: map[string]any{"fr": "Texte français", "default": "Default text"}}
+	if got := localizedRetention.PeriodForLanguage("fr"); got != "Texte français" {
+		t.Errorf("localized retention = %q, want French text", got)
+	}
+	if got := localizedRetention.PeriodForLanguage("de"); got != "Default text" {
+		t.Errorf("default retention fallback = %q, want default text", got)
 	}
 	if !privacy.Cookies.Essential.Enabled || !privacy.Consent.ShowUntilAcknowledged || privacy.Consent.Policy.URL != "/server/privacy" {
 		t.Error("privacy consent and cookie defaults are incomplete")
@@ -268,6 +278,35 @@ func TestValidateAPIVersion(t *testing.T) {
 	}
 }
 
+func TestValidateTracking(t *testing.T) {
+	valid := []TrackingConfig{
+		{Type: "google", ID: "G-ABC123"},
+		{Type: "matomo", ID: "1", URL: "https://analytics.example.test"},
+		{Type: "fathom", ID: "ABCDEFGH"},
+		{Type: "plausible", ID: "example.test"},
+		{Type: "umami", ID: "123e4567-e89b-42d3-a456-426614174000", URL: "https://analytics.example.test"},
+		{Type: "simple"},
+		{Type: "cloudflare", ID: "beacon-token"},
+	}
+	for _, tracking := range valid {
+		if err := ValidateTracking(&tracking); err != nil {
+			t.Errorf("valid tracking config %+v: %v", tracking, err)
+		}
+	}
+	invalid := []TrackingConfig{
+		{Type: "unknown", ID: "id"},
+		{Type: "google", ID: "not-an-id"},
+		{Type: "matomo", ID: "x", URL: "https://analytics.example.test"},
+		{Type: "owa", ID: "site", URL: "javascript:alert(1)"},
+		{Type: "umami", ID: "not-a-uuid", URL: "https://analytics.example.test"},
+	}
+	for _, tracking := range invalid {
+		if err := ValidateTracking(&tracking); err == nil {
+			t.Errorf("invalid tracking config was accepted: %+v", tracking)
+		}
+	}
+}
+
 func TestNormalizeBaseURL(t *testing.T) {
 	for _, test := range []struct {
 		input string
@@ -296,7 +335,7 @@ func TestNormalizeBaseURL(t *testing.T) {
 
 func TestLoad_PrivacyConfiguration(t *testing.T) {
 	path := filepath.Join(projectTestDir(t), "server.yml")
-	yamlContent := "server:\n  privacy:\n    data:\n      sold: true\n      sharing:\n        - condition: analytics\n          when: consented\n          data: aggregate usage\n    retention:\n      period: 30 days\n      export_available: true\n    consent:\n      message_if_sold: Custom consent\n      policy:\n        text: Privacy\n        url: /privacy\n    cookies:\n      analytics:\n        description: Usage analytics\n        description_suffix_sold: Shared\n    third_party:\n      services:\n        - name: Analytics\n          purpose: Usage\n          data_sent: Aggregate counts\n          policy_url: https://example.test/privacy\n"
+	yamlContent := "server:\n  tracking:\n    type: plausible\n    id: example.test\n  privacy:\n    data:\n      sold: true\n      sharing:\n        - condition: analytics\n          when: consented\n          data: aggregate usage\n    retention:\n      period: 30 days\n      export_available: true\n    consent:\n      message_if_sold: Custom consent\n      policy:\n        text: Privacy\n        url: /privacy\n    cookies:\n      analytics:\n        description: Usage analytics\n        description_suffix_sold: Shared\n    third_party:\n      services:\n        - name: Analytics\n          purpose: Usage\n          data_sent: Aggregate counts\n          policy_url: https://example.test/privacy\nweb:\n  headers:\n    honor_dnt: true\n"
 	if err := os.WriteFile(path, []byte(yamlContent), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -305,6 +344,9 @@ func TestLoad_PrivacyConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	privacy := cfg.Server.Privacy
+	if cfg.Server.Tracking.Type != "plausible" || cfg.Server.Tracking.ID != "example.test" || !cfg.Web.Headers.HonorDNT {
+		t.Fatalf("tracking/privacy signal configuration was not loaded: tracking=%+v headers=%+v", cfg.Server.Tracking, cfg.Web.Headers)
+	}
 	if !privacy.Data.Sold || privacy.Data.Sharing[0].Data != "aggregate usage" || privacy.Retention.Period != "30 days" {
 		t.Fatalf("privacy policy configuration was not loaded: %+v", privacy)
 	}
@@ -535,8 +577,8 @@ func TestLoad_UnknownSetting(t *testing.T) {
 	if err := os.WriteFile(path, []byte("server:\n  misspelled: true\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path); err != nil {
-		t.Fatalf("unknown configuration keys must not prevent startup: %v", err)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "field misspelled not found") {
+		t.Fatalf("unknown configuration key should fail with its name, got %v", err)
 	}
 }
 

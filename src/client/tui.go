@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"os"
-	"runtime"
 	"strings"
 
+	"github.com/apimgr/gitmessages/src/common/display"
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/common/terminal"
 	"github.com/apimgr/gitmessages/src/messages"
@@ -79,17 +78,7 @@ func launchInteractive(server, language string, config *clientConfig) error {
 }
 
 func hasGUI() bool {
-	if !guiSupported() {
-		return false
-	}
-	switch runtime.GOOS {
-	case "windows", "darwin":
-		return true
-	case "freebsd", "netbsd", "openbsd":
-		return false
-	default:
-		return strings.TrimSpace(os.Getenv("DISPLAY")) != "" || strings.TrimSpace(os.Getenv("WAYLAND_DISPLAY")) != ""
-	}
+	return guiSupported() && display.DetectDisplayEnv().IsAutoDetectDisplayModeGUI()
 }
 
 func (m terminalModel) Init() tea.Cmd { return nil }

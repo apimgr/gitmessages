@@ -30,6 +30,7 @@ import (
 
 	"github.com/apimgr/gitmessages/src/auth"
 	"github.com/apimgr/gitmessages/src/cache"
+	"github.com/apimgr/gitmessages/src/common/display"
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
@@ -459,6 +460,12 @@ func main() {
 	}
 
 	// Load configuration
+	_, configStatErr := os.Stat(configPath)
+	firstConfigRun := errors.Is(configStatErr, os.ErrNotExist)
+	if firstConfigRun {
+		_, legacyConfigErr := os.Stat(strings.TrimSuffix(configPath, ".yml") + ".yaml")
+		firstConfigRun = errors.Is(legacyConfigErr, os.ErrNotExist)
+	}
 	cfg, err = config.Load(configPath)
 	if err != nil {
 		log.Fatalf("load server configuration: %v", err)
@@ -483,6 +490,13 @@ func main() {
 		debugOverride = debugFlag
 	}
 	mode.InitializeWithConfig(*modeFlag, cfg.Server.Mode, debugOverride)
+	mode.SetProfilingRates(cfg.Server.Debug.BlockProfileRate, cfg.Server.Debug.MutexProfileFraction)
+	if err := configureStructuredLogger(cfg.Server.Logging.Level); err != nil {
+		log.Fatalf("configure structured logger: %v", err)
+	}
+	if firstConfigRun {
+		log.Printf("Configuration file: %s", configPath)
+	}
 	modeInfo := string(mode.Get())
 	if mode.IsDebugEnabled() {
 		modeInfo += " [debugging]"
@@ -539,6 +553,13 @@ func main() {
 	}
 
 	// Log startup information
+	displayEnvironment := display.DetectDisplayEnv()
+	if displayEnvironment.IsTerminal && !paths.IsRunningInContainer() && !*daemonFlag && !earlyDaemonize {
+		publicURL := startupPublicURL(cfg.Server.FQDN, cfg.Server.BaseURL, listeners)
+		if err := writeStartupBanner(os.Stdout, displayEnvironment, *colorFlag, Version, CommitID, buildDate(), modeInfo, publicURL); err != nil {
+			log.Printf("write startup banner: %v", err)
+		}
+	}
 	log.Printf("gitmessages %s (commit: %s, built: %s)", Version, CommitID, buildDate())
 
 	// Setup signal handling
@@ -1136,7 +1157,6 @@ func configureOutput(color, language string) error {
 	switch color {
 	case "auto":
 	case "yes":
-		_ = os.Unsetenv("NO_COLOR")
 	case "no":
 		_ = os.Setenv("NO_COLOR", "1")
 	default:

@@ -56,6 +56,14 @@ func (d *instrumentedDriver) Open(name string) (driver.Conn, error) {
 	return &instrumentedConn{Conn: connection, observer: d.observer}, nil
 }
 
+type legacyConnBegin interface{ Begin() (driver.Tx, error) }
+type legacyStmtExec interface {
+	Exec([]driver.Value) (driver.Result, error)
+}
+type legacyStmtQuery interface {
+	Query([]driver.Value) (driver.Rows, error)
+}
+
 type instrumentedConn struct {
 	driver.Conn
 	observer *queryObserver
@@ -122,8 +130,11 @@ func (c *instrumentedConn) BeginTx(ctx context.Context, options driver.TxOptions
 	if options.ReadOnly || options.Isolation != driver.IsolationLevel(sql.LevelDefault) {
 		return nil, driver.ErrSkip
 	}
-	//lint:ignore SA1019 The driver interface requires Begin for legacy-driver compatibility.
-	return c.Conn.Begin()
+	legacy, ok := c.Conn.(legacyConnBegin)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	return legacy.Begin()
 }
 
 func (c *instrumentedConn) Ping(ctx context.Context) error {
@@ -155,16 +166,22 @@ type instrumentedStmt struct {
 
 func (s *instrumentedStmt) Exec(args []driver.Value) (driver.Result, error) {
 	started := time.Now()
-	//lint:ignore SA1019 The driver interface requires Exec for legacy-driver compatibility.
-	result, err := s.Stmt.Exec(args)
+	legacy, ok := s.Stmt.(legacyStmtExec)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	result, err := legacy.Exec(args)
 	s.observer.observe(s.query, started, err)
 	return result, err
 }
 
 func (s *instrumentedStmt) Query(args []driver.Value) (driver.Rows, error) {
 	started := time.Now()
-	//lint:ignore SA1019 The driver interface requires Query for legacy-driver compatibility.
-	rows, err := s.Stmt.Query(args)
+	legacy, ok := s.Stmt.(legacyStmtQuery)
+	if !ok {
+		return nil, driver.ErrSkip
+	}
+	rows, err := legacy.Query(args)
 	s.observer.observe(s.query, started, err)
 	return rows, err
 }

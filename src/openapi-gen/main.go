@@ -21,7 +21,7 @@ func main() {
 	}
 }
 
-func generate() error {
+func generate() (resultErr error) {
 	projectTemp := filepath.Join(os.TempDir(), "apimgr")
 	if err := os.MkdirAll(projectTemp, 0o700); err != nil {
 		return err
@@ -33,7 +33,11 @@ func generate() error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(temporaryDirectory)
+	defer func() {
+		if cleanupErr := os.RemoveAll(temporaryDirectory); cleanupErr != nil && resultErr == nil {
+			resultErr = cleanupErr
+		}
+	}()
 	if err := os.Chmod(temporaryDirectory, 0o700); err != nil {
 		return err
 	}

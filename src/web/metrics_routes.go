@@ -9,7 +9,7 @@ import (
 	"github.com/apimgr/gitmessages/src/metrics"
 )
 
-func registerMetricsRoutes(mux *http.ServeMux, cfg config.MetricsConfig, exporter *metrics.Exporter) {
+func registerMetricsRoutes(mux routeRegistrar, cfg config.MetricsConfig, exporter *metrics.Exporter) {
 	exporter.SetTorStatusProvider(func() (bool, bool, bool, uint64) {
 		status, ok := overlayStatuses()["tor"]
 		if !ok {

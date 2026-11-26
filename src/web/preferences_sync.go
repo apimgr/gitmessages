@@ -16,7 +16,7 @@ const preferenceCookieAge = 31536000
 
 var preferenceControls = map[string]bool{"csrf_token": true, "code": true, "redirect": true, "action": true, "consent_form": true, "consent_preferences": true, "consent_analytics": true, "ccpa_opt_out": true}
 
-func registerPreferenceSyncRoutes(mux *http.ServeMux) {
+func registerPreferenceSyncRoutes(mux routeRegistrar) {
 	mux.HandleFunc("/server/preferences/sync", preferenceSyncPage)
 	mux.HandleFunc("/server/preferences/sync/import", preferenceSyncImport)
 	mux.HandleFunc(APIBasePath()+"/server/preferences/sync", preferenceSyncAPI)
@@ -47,12 +47,17 @@ func preferenceSyncPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := r.ParseForm(); err != nil {
+			w.Header().Set("Cache-Control", "no-store")
 			http.Redirect(w, r, "/server/preferences/sync", http.StatusSeeOther)
 			return
 		}
-		applyPreferenceValues(w, r, mergePreferenceValues(r.Form, r.Form.Get("code")))
+		_, _, consentRequired := applyPreferenceValues(w, r, mergePreferenceValues(r.Form, r.Form.Get("code")))
 		w.Header().Set("Cache-Control", "no-store")
-		http.Redirect(w, r, preferenceRedirect(r, "/server/preferences/sync"), http.StatusSeeOther)
+		redirect := preferenceRedirect(r, "/server/preferences/sync")
+		if consentRequired {
+			redirect = addQueryParam(redirect, "consent_required", "1")
+		}
+		http.Redirect(w, r, redirect, http.StatusSeeOther)
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -88,9 +93,13 @@ func preferenceSyncImport(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, r, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	applyPreferenceValues(w, r, mergePreferenceValues(r.URL.Query(), r.URL.Query().Get("code")))
+	_, _, consentRequired := applyPreferenceValues(w, r, mergePreferenceValues(r.URL.Query(), r.URL.Query().Get("code")))
 	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, preferenceRedirect(r, "/"), http.StatusSeeOther)
+	redirect := preferenceRedirect(r, "/")
+	if consentRequired {
+		redirect = addQueryParam(redirect, "consent_required", "1")
+	}
+	http.Redirect(w, r, redirect, http.StatusSeeOther)
 }
 
 func preferenceSyncAPI(w http.ResponseWriter, r *http.Request) {
@@ -227,28 +236,58 @@ func validPreferenceInputs(values url.Values) (url.Values, []string, []string) {
 	return valid, keys, ignored
 }
 
-func applyPreferenceValues(w http.ResponseWriter, r *http.Request, values url.Values) {
-	valid, _, _ := validPreferenceInputs(values)
+func applyPreferenceValues(w http.ResponseWriter, r *http.Request, values url.Values) ([]string, []string, bool) {
+	valid, keys, ignored := validPreferenceInputs(values)
+	if privacySignalFromRequest(r) != "" {
+		ignored = append(ignored, keys...)
+		sort.Strings(ignored)
+		return nil, ignored, len(keys) > 0
+	}
+	var consent cookieConsentState
+	if cookie, err := r.Cookie("cookie_consent"); err == nil {
+		if raw, decodeErr := url.PathUnescape(cookie.Value); decodeErr == nil {
+			_ = json.Unmarshal([]byte(raw), &consent)
+		}
+	}
+	if !consent.Preferences {
+		ignored = append(ignored, keys...)
+		sort.Strings(ignored)
+		return nil, ignored, len(keys) > 0
+	}
 	scheme, _, _ := GetURLVars(r)
 	for key, entries := range valid {
-		if len(entries) == 0 {
-			continue
+		if len(entries) > 0 {
+			http.SetCookie(w, &http.Cookie{Name: key, Value: entries[0], Path: "/", MaxAge: preferenceCookieAge, SameSite: http.SameSiteLaxMode, Secure: scheme == "https"})
 		}
-		http.SetCookie(w, &http.Cookie{Name: key, Value: entries[0], Path: "/", MaxAge: preferenceCookieAge, SameSite: http.SameSiteLaxMode, Secure: scheme == "https"})
 	}
+	return keys, ignored, false
 }
 
 func writePreferenceResult(w http.ResponseWriter, r *http.Request, values url.Values) {
-	valid, applied, ignored := validPreferenceInputs(values)
-	theme, lang, _ := preferenceState(r)
-	if value := valid.Get("theme"); value != "" {
-		theme = value
+	valid, keys, ignored := validPreferenceInputs(values)
+	consentRequired := false
+	applied := keys
+	if privacySignalFromRequest(r) != "" || !preferenceCategoryAllowed(r) {
+		ignored = append(ignored, keys...)
+		sort.Strings(ignored)
+		applied = make([]string, 0)
+		consentRequired = len(keys) > 0
 	}
-	if value := valid.Get("lang"); value != "" {
-		lang = value
+	theme, lang, _ := preferenceState(r)
+	if !consentRequired {
+		if value := valid.Get("theme"); value != "" {
+			theme = value
+		}
+		if value := valid.Get("lang"); value != "" {
+			lang = value
+		}
+	}
+	data := map[string]any{"theme": theme, "lang": lang, "prefs": map[string]string{}, "applied": applied, "ignored": ignored}
+	if consentRequired {
+		data["consent_required"] = true
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]any{"theme": theme, "lang": lang, "prefs": map[string]string{}, "applied": applied, "ignored": ignored}})
+	writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": data})
 }
 
 func preferenceRedirect(r *http.Request, fallback string) string {
@@ -274,3 +313,14 @@ func refererPath(r *http.Request) string {
 }
 
 func htmlEscape(value string) string { return template.HTMLEscapeString(value) }
+
+func addQueryParam(target, key, value string) string {
+	parsed, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	query := parsed.Query()
+	query.Set(key, value)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}

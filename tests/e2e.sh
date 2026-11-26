@@ -109,7 +109,8 @@ timeout -k 30 "$docker_timeout" docker run -d --no-healthcheck \
   --pid /runtime/gitmessages.pid \
   --port "$server_port" \
   --address 0.0.0.0 \
-  --color no >/dev/null
+  --color no \
+  --debug >/dev/null
 runner_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$runner")
 if [[ -z $runner_ip ]]; then
   printf '%s\n' 'Unable to determine the isolated E2E server address.' >&2
@@ -120,6 +121,7 @@ if ! timeout -k 30 "$docker_timeout" docker exec \
   -e CHROME_CDP_ENDPOINT="ws://$chrome_ip:9222" \
   -e E2E_SERVER_HOST="$runner_ip" \
   -e E2E_SERVER_PORT="$server_port" \
+  -e E2E_CONFIG_DIR=/runtime/config \
   -e E2E_ARTIFACT_DIR=/runtime/artifacts \
   "$runner" go test -mod=readonly -tags e2e ./tests/e2e/...; then
   timeout 30 docker logs "$runner" 2>&1 | sed -E 's/([Oo]perator token[^:]*: ).*/\1[redacted]/; s/(([Tt]oken|[Pp]assword|[Ss]ecret|[Aa]pi[_-]?key|[Aa]uthorization)[=: ]+)[^ ,;]+/\1[redacted]/g; s/(adm_|own_|mtr_)[A-Za-z0-9_-]+/\1[redacted]/g' | tee "$test_dir/runtime/artifacts/server.log" >&2 || true

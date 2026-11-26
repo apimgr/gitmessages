@@ -43,7 +43,7 @@ func ConfigureContact(store *database.Store) {
 	contactStoreMu.Unlock()
 }
 
-func registerContactRoutes(mux *http.ServeMux) {
+func registerContactRoutes(mux routeRegistrar) {
 	mux.HandleFunc("/server/contact", contactPage)
 	mux.HandleFunc(APIBasePath()+"/server/contact", apiContact)
 	mux.HandleFunc("/server/security", contactSecurityPage)
@@ -831,7 +831,7 @@ func securityTextBody(r *http.Request) string {
 	if _, err := os.Stat(pgpKeyPath()); err == nil {
 		fmt.Fprintf(&body, "Encryption: %s\n", BuildURL(r, "/.well-known/pgp-key.asc"))
 	}
-	fmt.Fprintf(&body, "Policy: %s\nExpires: %s\n", BuildURL(r, "/server/security"), time.Now().UTC().AddDate(1, 0, 0).Format("2006-01-02T15:04:05Z"))
+	fmt.Fprintf(&body, "Policy: %s\nExpires: %s\n", BuildURL(r, "/server/security/policy"), time.Now().UTC().AddDate(1, 0, 0).Format("2006-01-02T15:04:05Z"))
 	if !onion {
 		fmt.Fprintf(&body, "Preferred-Languages: %s\n", strings.Join(i18n.Supported(), ", "))
 	}
@@ -966,7 +966,7 @@ func apiContactSecurity(w http.ResponseWriter, r *http.Request) {
 		"contacts":   contacts,
 		"expires":    time.Now().UTC().AddDate(1, 0, 0).Format(time.RFC3339),
 		"pgp":        map[string]any{"available": pgpAvailable, "url": pgpURL, "fingerprint": fingerprint},
-		"policy_url": BuildURL(r, "/server/security"),
+		"policy_url": BuildURL(r, "/server/security/policy"),
 		"thanks_url": BuildURL(r, "/server/security/thanks"),
 	}
 	if server.Pages.Contact.Enabled {

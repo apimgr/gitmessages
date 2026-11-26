@@ -3,6 +3,7 @@ package mode
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -20,9 +21,11 @@ const (
 )
 
 var (
-	currentMode  Mode = Production
-	debugEnabled bool
-	mu           sync.RWMutex
+	currentMode          Mode = Production
+	debugEnabled         bool
+	blockProfileRate     = 1
+	mutexProfileFraction = 1
+	mu                   sync.RWMutex
 )
 
 // Get returns the current application mode
@@ -42,8 +45,37 @@ func Set(m Mode) {
 // SetDebugEnabled sets the independent debug diagnostics switch.
 func SetDebugEnabled(enabled bool) {
 	mu.Lock()
-	defer mu.Unlock()
 	debugEnabled = enabled
+	blockRate := blockProfileRate
+	mutexFraction := mutexProfileFraction
+	mu.Unlock()
+	applyProfiling(enabled, blockRate, mutexFraction)
+}
+
+// SetProfilingRates configures runtime profiling rates used while debug diagnostics are enabled.
+func SetProfilingRates(blockRate, mutexFraction int) {
+	if blockRate < 0 {
+		blockRate = 0
+	}
+	if mutexFraction < 0 {
+		mutexFraction = 0
+	}
+	mu.Lock()
+	blockProfileRate = blockRate
+	mutexProfileFraction = mutexFraction
+	enabled := debugEnabled
+	mu.Unlock()
+	applyProfiling(enabled, blockRate, mutexFraction)
+}
+
+func applyProfiling(enabled bool, blockRate, mutexFraction int) {
+	if !enabled {
+		runtime.SetBlockProfileRate(0)
+		runtime.SetMutexProfileFraction(0)
+		return
+	}
+	runtime.SetBlockProfileRate(blockRate)
+	runtime.SetMutexProfileFraction(mutexFraction)
 }
 
 // IsDebugEnabled reports whether debug diagnostics were explicitly enabled.

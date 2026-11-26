@@ -2,6 +2,8 @@ package web
 
 import (
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -37,5 +39,32 @@ func TestMergePreferenceValuesDiscardsOversizedCode(t *testing.T) {
 	got := mergePreferenceValues(input, strings.Repeat("A", 2049))
 	if got.Get("theme") != "light" || got.Get("lang") != "" {
 		t.Fatalf("oversized code changed direct input: %v", got)
+	}
+}
+
+func TestPreferenceSyncRequiresLocalConsent(t *testing.T) {
+	handler := Handler("test-version")
+	webResponse := httptest.NewRecorder()
+	handler.ServeHTTP(webResponse, webTestRequest(http.MethodGet, "/server/preferences/sync/import?theme=light&lang=fr", nil))
+	if webResponse.Code != http.StatusSeeOther || !strings.Contains(webResponse.Header().Get("Location"), "consent_required=1") {
+		t.Fatalf("web import without consent response = %d %q", webResponse.Code, webResponse.Header().Get("Location"))
+	}
+	for _, cookie := range webResponse.Result().Cookies() {
+		if cookie.Name == "theme" || cookie.Name == "lang" {
+			t.Fatalf("web import saved a preference without consent: %#v", cookie)
+		}
+	}
+
+	apiResponse := httptest.NewRecorder()
+	handler.ServeHTTP(apiResponse, webTestRequest(http.MethodGet, "/api/v1/server/preferences/sync/import?theme=light&lang=fr", nil))
+	for _, expected := range []string{`"consent_required": true`, `"applied": []`, `"ignored": [`} {
+		if apiResponse.Code != http.StatusOK || !strings.Contains(apiResponse.Body.String(), expected) {
+			t.Errorf("API import without consent omitted %q: status=%d body=%s", expected, apiResponse.Code, apiResponse.Body.String())
+		}
+	}
+	for _, cookie := range apiResponse.Result().Cookies() {
+		if cookie.Name == "theme" || cookie.Name == "lang" {
+			t.Fatalf("API import saved a preference without consent: %#v", cookie)
+		}
 	}
 }

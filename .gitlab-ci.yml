@@ -68,7 +68,7 @@ test:
 
 secret-scan:
   stage: security
-  image: trufflesecurity/trufflehog:latest
+  image: trufflesecurity/trufflehog@sha256:9c7a8325d43a4af2960d3f21d61a08981d8a1bf0542e007efa2e47097e386452
   script:
     - |
       if [ "$CI_PIPELINE_SOURCE" = schedule ] || [ "$CI_COMMIT_BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
@@ -98,7 +98,7 @@ vuln-scan:
       set -eu
       case "$RELEASE_CHANNEL" in
         stable) VERSION="${CI_COMMIT_TAG#v}" ;;
-        beta) VERSION="$(date -u +%Y%m%d%H%M%S)-beta" ;;
+        beta) VERSION="$CI_COMMIT_TAG" ;;
         devel) VERSION="$COMMIT_ID" ;;
         *) echo "Unknown release channel: $RELEASE_CHANNEL" >&2; exit 2 ;;
       esac
@@ -138,7 +138,7 @@ build:beta:
   variables:
     RELEASE_CHANNEL: beta
   rules:
-    - if: '$CI_COMMIT_BRANCH == "beta"'
+    - if: '$CI_COMMIT_TAG =~ /-beta$/'
 
 build:devel:
   extends: .build-release
@@ -162,7 +162,7 @@ sbom:ci:
 
 release:stable:
   stage: release
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  image: registry.gitlab.com/gitlab-org/release-cli@sha256:3f52d526f48e8d10625c722fa6d6423ee82aadeae1b1aa91f07b62551d96dacf
   needs:
     - job: build:release
       artifacts: true
@@ -181,7 +181,7 @@ release:stable:
 
 release:beta:
   stage: release
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  image: registry.gitlab.com/gitlab-org/release-cli@sha256:3f52d526f48e8d10625c722fa6d6423ee82aadeae1b1aa91f07b62551d96dacf
   needs:
     - job: build:beta
       artifacts: true
@@ -190,17 +190,17 @@ release:beta:
   release:
     tag_name: "$RELEASE_VERSION"
     name: "Beta $RELEASE_VERSION"
-    description: "Beta build from the beta branch"
+    description: "Beta build for $RELEASE_VERSION"
     assets:
       links:
         - name: "Release assets (binaries, SBOM, source archive, checksums)"
           url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_SHA/browse/dist?job=build:beta"
   rules:
-    - if: '$CI_COMMIT_BRANCH == "beta"'
+    - if: '$CI_COMMIT_TAG =~ /-beta$/'
 
 release:devel:
   stage: release
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  image: registry.gitlab.com/gitlab-org/release-cli@sha256:3f52d526f48e8d10625c722fa6d6423ee82aadeae1b1aa91f07b62551d96dacf
   needs:
     - job: build:devel
       artifacts: true
@@ -225,9 +225,9 @@ release:devel:
 
 .docker-job:
   stage: docker
-  image: docker:latest
+  image: docker@sha256:0b71875158c7d82829d2933b436bc3f8ca6228d930a37d74199fe0e7d18eeb9b
   services:
-    - name: docker:dind
+    - name: docker@sha256:1c90c08b6c8fc312aa4afd066d19edeb94b0c25384e9e7f2cd9e74a28a670be8
       command: ["--tls=true"]
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
@@ -247,13 +247,13 @@ docker:build:
       BUILD_DATE="$(date -u -d "@$BUILD_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
       COMMIT_ID="$(git rev-parse --short=7 HEAD)"
       if [ -f site.txt ]; then OFFICIAL_SITE="$(cat site.txt)"; else OFFICIAL_SITE="${OFFICIAL_SITE:-}"; fi
-      if [ -n "$CI_COMMIT_TAG" ]; then
+      if [ "$CI_COMMIT_TAG" != "" ] && echo "$CI_COMMIT_TAG" | grep -q -- '-beta$'; then
+        VERSION="$COMMIT_ID"
+        TAG_ARGS="-t $CI_REGISTRY_IMAGE:$COMMIT_ID -t $CI_REGISTRY_IMAGE:beta"
+      elif [ -n "$CI_COMMIT_TAG" ]; then
         VERSION="${CI_COMMIT_TAG#v}"
         YYMM="$(date -u +%y%m)"
         TAG_ARGS="-t $CI_REGISTRY_IMAGE:$VERSION -t $CI_REGISTRY_IMAGE:latest -t $CI_REGISTRY_IMAGE:$YYMM -t $CI_REGISTRY_IMAGE:$COMMIT_ID"
-      elif [ "$CI_COMMIT_BRANCH" = beta ]; then
-        VERSION="$(date -u +%Y%m%d%H%M%S)-beta"
-        TAG_ARGS="-t $CI_REGISTRY_IMAGE:beta -t $CI_REGISTRY_IMAGE:$COMMIT_ID"
       else
         VERSION="$COMMIT_ID"
         TAG_ARGS="-t $CI_REGISTRY_IMAGE:$COMMIT_ID"
@@ -263,7 +263,7 @@ docker:build:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: never
     - if: '$CI_COMMIT_TAG'
-    - if: '$CI_COMMIT_BRANCH'
+    - if: '$CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "master"'
 
 # Create a schedule named "Devel Devel Image Build" at 04:00 UTC with
 # SCHEDULE_KIND=devel-image, targeting main or master.
@@ -283,9 +283,9 @@ docker:devel:
 
 image-scan:
   stage: security
-  image: docker:latest
+  image: docker@sha256:0b71875158c7d82829d2933b436bc3f8ca6228d930a37d74199fe0e7d18eeb9b
   services:
-    - name: docker:dind
+    - name: docker@sha256:1c90c08b6c8fc312aa4afd066d19edeb94b0c25384e9e7f2cd9e74a28a670be8
       command: ["--tls=true"]
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
@@ -295,7 +295,7 @@ image-scan:
     DOCKER_CERT_PATH: "$DOCKER_TLS_CERTDIR/client"
   script:
     - docker build -t local/gitmessages:ci -f docker/Dockerfile .
-    - docker run --rm -e DOCKER_HOST="$DOCKER_HOST" -e DOCKER_TLS_VERIFY="$DOCKER_TLS_VERIFY" -e DOCKER_CERT_PATH="$DOCKER_CERT_PATH" -v "$DOCKER_CERT_PATH:$DOCKER_CERT_PATH:ro" aquasec/trivy:latest image --exit-code 1 --severity CRITICAL,HIGH local/gitmessages:ci
+    - docker run --rm --name "gitmessages-trivy-$(tr -dc 'a-z0-9' </dev/urandom | head -c8)" -e DOCKER_HOST="$DOCKER_HOST" -e DOCKER_TLS_VERIFY="$DOCKER_TLS_VERIFY" -e DOCKER_CERT_PATH="$DOCKER_CERT_PATH" -v "$DOCKER_CERT_PATH:$DOCKER_CERT_PATH:ro" aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb image --exit-code 1 --severity CRITICAL,HIGH local/gitmessages:ci
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'

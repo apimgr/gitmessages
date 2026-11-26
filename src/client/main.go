@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/apimgr/gitmessages/src/common/display"
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/messages"
 	projectpaths "github.com/apimgr/gitmessages/src/paths"
@@ -92,11 +93,14 @@ func run(args []string) error {
 		return fmt.Errorf("%s: %w", binary, err)
 	}
 	debugEnabled = *debugFlag
-	switch *colorFlag {
-	case "no":
-		_ = os.Setenv("NO_COLOR", "1")
-	case "yes":
+	if *colorFlag != "auto" && *colorFlag != "yes" && *colorFlag != "no" {
+		return fmt.Errorf("invalid --color value %q: expected auto, yes, or no", *colorFlag)
+	}
+	displayEnvironment := display.DetectDisplayEnv()
+	if display.ColorEnabled(&displayEnvironment, *colorFlag) {
 		_ = os.Unsetenv("NO_COLOR")
+	} else {
+		_ = os.Setenv("NO_COLOR", "1")
 	}
 	if *shellFlag != "" {
 		return printClientShellIntegration(*shellFlag, flags.Args(), binary)
@@ -203,9 +207,7 @@ func run(args []string) error {
 }
 
 func isInteractive() bool {
-	input, inputErr := os.Stdin.Stat()
-	output, outputErr := os.Stdout.Stat()
-	return inputErr == nil && outputErr == nil && input.Mode()&os.ModeCharDevice != 0 && output.Mode()&os.ModeCharDevice != 0
+	return display.DetectDisplayEnv().IsAutoDetectDisplayModeTUI()
 }
 
 func printVersion(binary string) {

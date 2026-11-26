@@ -10,6 +10,8 @@
 
 # Authentication, cryptography, backup, security data, and updates require maintainer review.
 /src/auth/ @apimgr
+/src/contact/ @apimgr
+/src/ssl/ @apimgr
 /src/backup/ @apimgr
 /src/securitydata/ @apimgr
 /src/update/ @apimgr

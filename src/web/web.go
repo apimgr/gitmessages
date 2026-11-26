@@ -6,12 +6,15 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"expvar"
 	"fmt"
 	"html"
 	"html/template"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"sort"
@@ -28,6 +31,7 @@ import (
 	graphqlapi "github.com/apimgr/gitmessages/src/graphql"
 	"github.com/apimgr/gitmessages/src/messages"
 	"github.com/apimgr/gitmessages/src/metrics"
+	"github.com/apimgr/gitmessages/src/mode"
 	"github.com/apimgr/gitmessages/src/scheduler"
 	swaggerapi "github.com/apimgr/gitmessages/src/swagger"
 	htmlnode "golang.org/x/net/html"
@@ -58,6 +62,9 @@ var (
 	rateLimitCounter      cache.Counter
 	rateLimitCounterMu    sync.RWMutex
 	copyCodeSequence      atomic.Uint64
+	debugRequestCount     = expvar.NewInt("requests_total")
+	debugRequestSeconds   = expvar.NewFloat("requests_duration_seconds")
+	debugErrorCount       = expvar.NewInt("errors_total")
 )
 
 //go:embed assets/*.css
@@ -86,7 +93,7 @@ func Handler(version string, commit ...string) http.Handler {
 	if len(commit) > 1 && commit[1] != "" && commit[1] != "N/A" {
 		serverBuildDate = commit[1]
 	}
-	mux := http.NewServeMux()
+	mux := newRouteMux()
 	mux.HandleFunc("/robots.txt", robotsTxt)
 	mux.HandleFunc("/sitemap.xml", sitemapXML)
 	mux.HandleFunc("/feed.xml", atomFeedXML)
@@ -109,12 +116,16 @@ func Handler(version string, commit ...string) http.Handler {
 	mux.HandleFunc("/types", typesPage)
 	mux.HandleFunc("/templates", templatesPage)
 	mux.HandleFunc("/builder", builderPage)
+	mux.HandleFunc("/server", serverRootRedirect)
+	mux.HandleFunc("/server/tracking.js", trackingScriptPage)
 	mux.HandleFunc("/server/about", aboutPage)
 	mux.HandleFunc("/server/help", helpPage)
 	mux.HandleFunc("/server/help/mcp", mcpHelpPage)
 	mux.HandleFunc("/server/privacy", privacyPage)
 	mux.HandleFunc("/server/terms", termsPage)
 	mux.HandleFunc("/server/preferences", preferencesPage)
+	mux.HandleFunc("/server/ccpa", ccpaOptOutPage)
+	mux.HandleFunc("/server/consent", consentPage)
 	registerPreferenceSyncRoutes(mux)
 	mux.HandleFunc("/server/healthz", healthPage)
 	if config.Get().Server.Healthz.Root.Enabled {
@@ -157,10 +168,10 @@ func Handler(version string, commit ...string) http.Handler {
 	mux.HandleFunc(APIBasePath()+"/server/swagger", swaggerJSON)
 	mux.HandleFunc("/api/swagger", swaggerJSON)
 	mux.HandleFunc("/server/docs/swagger", swaggerUI)
-	mux.Handle(APIBasePath()+"/server/graphql", graphqlapi.Handler())
-	mux.Handle("/api/graphql", graphqlapi.Handler())
+	mux.HandleFunc(APIBasePath()+"/server/graphql", graphQLHandler)
+	mux.HandleFunc("/api/graphql", graphQLHandler)
 	mux.HandleFunc("/server/docs/graphql", graphQLUI)
-	mux.HandleFunc("/theme.js", themeScript)
+	mux.Handle("/debug/", debugHandler(mux.routeList))
 	handler := language(mux)
 	handler = geoIPMiddleware(handler)
 	handler = rateLimit(handler)
@@ -172,6 +183,8 @@ func Handler(version string, commit ...string) http.Handler {
 	if exporter != nil {
 		handler = exporter.Middleware(handler)
 	}
+	handler = debugMiddleware(handler)
+	handler = privacySignalMiddleware(handler)
 	return handler
 }
 
@@ -180,14 +193,29 @@ func ConfigureDatabaseMetrics(store *database.Store) {
 	metricsExporterMu.RLock()
 	exporter := activeMetricsExporter
 	metricsExporterMu.RUnlock()
-	if exporter == nil || store == nil {
+	if store == nil {
 		return
 	}
-	store.SetQueryObserver(exporter.ObserveDatabaseQuery)
-	exporter.SetDatabaseStatsProvider(func() (int, int) {
-		stats := store.Read().Stats()
-		return stats.OpenConnections, stats.InUse
+	store.SetQueryObserver(func(observation database.QueryObservation) {
+		if exporter != nil {
+			exporter.ObserveDatabaseQuery(observation)
+		}
+		if mode.IsDebugEnabled() && config.Get().Server.Debug.LogQueries {
+			slog.Debug("db query",
+				"operation", observation.Operation,
+				"table", observation.Table,
+				"duration_ms", observation.Duration.Milliseconds(),
+				"error_type", observation.ErrorType,
+				"args", "[REDACTED]",
+			)
+		}
 	})
+	if exporter != nil {
+		exporter.SetDatabaseStatsProvider(func() (int, int) {
+			stats := store.Read().Stats()
+			return stats.OpenConnections, stats.InUse
+		})
+	}
 }
 
 func ObserveDatabaseBusy(wait time.Duration) {
@@ -208,6 +236,7 @@ func ConfigureRateLimitCache(counter cache.Counter) {
 
 // ConfigureSchedulerMetrics connects task execution events to the active exporter.
 func ConfigureSchedulerMetrics(backgroundScheduler *scheduler.Scheduler) {
+	setDebugScheduler(backgroundScheduler)
 	metricsExporterMu.RLock()
 	exporter := activeMetricsExporter
 	metricsExporterMu.RUnlock()
@@ -319,9 +348,11 @@ func language(next http.Handler) http.Handler {
 		lang := ""
 		if query := r.URL.Query().Get("lang"); query != "" && i18n.IsSupported(query) {
 			lang = query
-			http.SetCookie(w, &http.Cookie{Name: "lang", Value: lang, Path: "/", MaxAge: preferenceCookieAge, SameSite: http.SameSiteLaxMode, Secure: requestIsSecure(r)})
+			if privacySignalFromRequest(r) == "" && preferenceCategoryAllowed(r) {
+				http.SetCookie(w, &http.Cookie{Name: "lang", Value: lang, Path: "/", MaxAge: preferenceCookieAge, SameSite: http.SameSiteLaxMode, Secure: requestIsSecure(r)})
+			}
 		}
-		if lang == "" {
+		if lang == "" && privacySignalFromRequest(r) == "" {
 			if cookie, err := r.Cookie("lang"); err == nil && i18n.IsSupported(cookie.Value) {
 				lang = cookie.Value
 			}
@@ -455,6 +486,7 @@ func secureHeaders(next http.Handler) http.Handler {
 		scriptSources := "'self'"
 		frameSources := "'self'"
 		connectSources := "'self'"
+		imageSources := "'self'"
 		provider := contactCaptchaProvider(r)
 		switch provider {
 		case "recaptcha":
@@ -466,7 +498,17 @@ func secureHeaders(next http.Handler) http.Handler {
 			frameSources += " https://hcaptcha.com https://*.hcaptcha.com"
 			connectSources += " https://hcaptcha.com https://*.hcaptcha.com"
 		}
-		csp := "default-src 'self'; style-src 'self'; script-src " + scriptSources + "; frame-src " + frameSources + "; connect-src " + connectSources + "; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+		trackingScript, trackingConnect, trackingImage := trackingCSPHosts(r)
+		for _, source := range strings.Fields(trackingScript) {
+			scriptSources += " " + source
+		}
+		for _, source := range strings.Fields(trackingConnect) {
+			connectSources += " " + source
+		}
+		for _, source := range strings.Fields(trackingImage) {
+			imageSources += " " + source
+		}
+		csp := "default-src 'self'; style-src 'self'; script-src " + scriptSources + "; frame-src " + frameSources + "; connect-src " + connectSources + "; img-src " + imageSources + "; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
 		if requestIsSecure(r) {
 			csp += "; upgrade-insecure-requests"
 		}
@@ -511,7 +553,17 @@ func rateLimit(next http.Handler) http.Handler {
 		counter := rateLimitCounter
 		rateLimitCounterMu.RUnlock()
 		if counter != nil {
+			started := time.Now()
 			count, err := counter.Increment(r.Context(), "rate-limit:"+ip, time.Minute)
+			if mode.IsDebugEnabled() && config.Get().Server.Debug.LogCache {
+				slog.Debug("cache",
+					"operation", "increment",
+					"namespace", "rate-limit",
+					"hit", count > 1 && err == nil,
+					"duration_us", time.Since(started).Microseconds(),
+					"error", err != nil,
+				)
+			}
 			if err == nil {
 				metricsExporterMu.RLock()
 				exporter := activeMetricsExporter
@@ -986,7 +1038,7 @@ func apiAbout(w http.ResponseWriter, r *http.Request) {
 		content = fmt.Sprintf("# %s\n\n%s\n\n%s\n\n## %s\n\n- %s\n- %s\n- %s\n- %s\n- %s\n- %s\n\n## %s\n\n- [GitHub](https://github.com/apimgr/gitmessages)\n- [Documentation](https://apimgr-gitmessages.readthedocs.io/)\n- [REST API](/server/docs/swagger)\n- [GraphQL](/server/docs/graphql)", tr(r, "about.title"), tr(r, "about.body"), tr(r, "about.detail"), tr(r, "about.features"), tr(r, "about.feature.catalog"), tr(r, "about.feature.templates"), tr(r, "about.feature.builder"), tr(r, "about.feature.api"), tr(r, "about.feature.cli"), tr(r, "about.feature.networks"), tr(r, "about.links"))
 		format = "markdown"
 	}
-	content += "\n\n## Third-Party Attribution\n\n<a href=\"https://db-ip.com/\">IP Geolocation by DB-IP</a>"
+	content += "\n\n## " + tr(r, "about.attribution") + "\n\n<a href=\"https://db-ip.com/\">IP Geolocation by DB-IP</a>"
 	writeSuccess(w, r, map[string]string{"title": tr(r, "about.title"), "content": content, "format": format})
 }
 
@@ -994,10 +1046,14 @@ func apiHelp(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
+	content := strings.TrimSpace(config.Get().Server.Pages.Help.Content)
+	if content == "" {
+		content = config.DefaultConfig().Server.Pages.Help.Content
+	}
 	writeSuccess(w, r, map[string]any{
 		"title":   tr(r, "help.title"),
-		"content": tr(r, "help.builder") + ", " + tr(r, "help.types") + ". " + tr(r, "help.api") + ": " + APIBasePath() + "/types, " + APIBasePath() + "/conventions, " + APIBasePath() + "/templates, " + APIBasePath() + "/messages/random, POST " + APIBasePath() + "/messages.",
-		"format":  "text",
+		"content": content,
+		"format":  "markdown",
 		"pages":   serverHubPages(r, "/server/help"),
 	})
 }
@@ -1006,21 +1062,69 @@ func apiMCPHelp(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	writeSuccess(w, r, map[string]any{
-		"title":    tr(r, "mcp.title"),
-		"content":  tr(r, "mcp.help.description") + " " + tr(r, "mcp.help.auth"),
-		"format":   "text",
-		"endpoint": APIBasePath() + "/server/mcp",
-		"aliases":  []string{"/api/mcp", "/mcp"},
-		"tools":    mcpTools(r),
-	})
+	writeSuccess(w, r, mcpHelpData(r))
+}
+
+func mcpHelpData(r *http.Request) map[string]any {
+	tools := make([]map[string]string, 0)
+	for _, tool := range mcpTools(r) {
+		name, _ := tool["name"].(string)
+		description, _ := tool["description"].(string)
+		tools = append(tools, map[string]string{"name": name, "description": description})
+	}
+	project := strings.TrimSpace(config.Get().Server.Pages.Help.MCP)
+	if project == "" {
+		project = config.DefaultConfig().Server.Pages.Help.MCP
+	}
+	return map[string]any{
+		"enabled": true,
+		"url":     BuildURL(r, APIBasePath()+"/server/mcp"),
+		"aliases": []string{BuildURL(r, "/api/mcp"), BuildURL(r, "/mcp")},
+		"auth":    map[string]string{"scheme": "Bearer"},
+		"tools":   tools,
+		"project": project,
+	}
 }
 
 func apiPrivacy(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	writeSuccess(w, r, map[string]string{"title": tr(r, "privacy.title"), "content": tr(r, "privacy.body"), "format": "text"})
+	privacy := config.Get().Server.Privacy
+	trackingConfig := config.Get().Server.Tracking
+	configuredServices := privacyThirdPartyServices(privacy, trackingConfig)
+	services := make([]map[string]string, 0, len(configuredServices))
+	for _, service := range configuredServices {
+		services = append(services, map[string]string{"name": service.Name, "purpose": service.Purpose, "data_sent": service.DataSent, "policy_url": service.PolicyURL})
+	}
+	configuredSharing := privacySharing(privacy, trackingConfig)
+	sharing := make([]map[string]string, 0, len(configuredSharing))
+	for _, item := range configuredSharing {
+		sharing = append(sharing, map[string]string{"condition": item.Condition, "when": item.When, "data": item.Data})
+	}
+	analyticsEnabled := privacy.Cookies.Analytics.Enabled
+	tracking := map[string]any{"enabled": trackingConfigured(), "type": trackingConfig.Type, "type_name": trackingTypeName(trackingConfig)}
+	category := func(value config.PrivacyCookieCategory) map[string]any {
+		return map[string]any{"enabled": value.Enabled, "description": value.Description}
+	}
+	ccpaOptedOut := false
+	if cookie, err := r.Cookie("ccpa_opt_out"); err == nil && cookie.Value == "true" || privacySignalFromRequest(r) == "gpc" {
+		ccpaOptedOut = true
+	}
+	writeSuccess(w, r, map[string]any{
+		"summary": map[string]any{"data_stored_on_server": privacy.Data.StoredOnServer, "data_sold": privacy.Data.Sold, "user_control": true},
+		"cookies": map[string]any{
+			"essential":   category(privacy.Cookies.Essential),
+			"preferences": category(privacy.Cookies.Preferences),
+			"analytics":   map[string]any{"enabled": analyticsEnabled, "description": privacy.GetAnalyticsDescription()},
+		},
+		"data":        map[string]any{"sold": privacy.Data.Sold, "stored_on_server": privacy.Data.StoredOnServer, "sharing": sharing},
+		"tracking":    tracking,
+		"retention":   map[string]any{"period": privacy.Retention.PeriodForLanguage(languageCode(r)), "export_available": privacy.Retention.ExportAvailable, "deletion_available": privacy.Retention.DeletionAvailable},
+		"third_party": map[string]any{"services": services},
+		"ccpa":        map[string]any{"applicable": privacy.IsCCPAApplicable(), "opt_out_url": "/server/privacy#ccpa-opt-out", "user_opted_out": ccpaOptedOut},
+		"content":     map[string]any{"consent_message": privacy.GetConsentMessage(), "data_collection": tr(r, "privacy.collection_body"), "data_usage": privacy.GetDataUsageContent(), "data_security": tr(r, "privacy.security_body")},
+	})
 }
 
 func apiTerms(w http.ResponseWriter, r *http.Request) {
@@ -1080,6 +1184,9 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
 	themeIcon := themeIconMarkup(theme)
 	robots := `<meta name="robots" content="` + seoRobotsDirective(r.URL.Path) + `">`
 	lead := serverPageLead(r)
+	if r.URL.Query().Get("consent_required") == "1" {
+		body = template.HTML(`<section class="section-card" role="status"><p>` + template.HTMLEscapeString(tr(r, "preferences.consent_required")) + ` <a href="/server/preferences#privacy-preferences">` + template.HTMLEscapeString(tr(r, "privacy.manage_preferences")) + `</a></p></section>` + string(body))
+	}
 	if strings.HasPrefix(r.URL.Path, "/server/") && !strings.Contains(string(body), `class="section-card`) {
 		body = template.HTML(`<section class="section-card" aria-labelledby="page-details"><h2 id="page-details">` + template.HTMLEscapeString(tr(r, "page.details")) + `</h2>` + string(body) + `</section>`)
 	}
@@ -1091,8 +1198,10 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
 	customHeader := operatorHTML(r, "header")
 	containerClass := pageContainerClass(r.URL.Path)
 	toolStyles := pageToolStylesheets(r)
+	trackingTags, trackingNoscript := trackingMarkup(r)
+	consentBanner := consentBannerMarkup(r, csrf)
 	_, _ = fmt.Fprintf(&output, `<!doctype html>
-<html lang="%s" dir="%s" class="theme-%s" data-theme="%s">
+<html lang="%s" dir="%s" class="theme-%s" data-theme="%s" data-build="%s" data-base-path="%s">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1112,20 +1221,21 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
     <link rel="manifest" href="/manifest.json?v=%s">
     <link rel="stylesheet" href="/styles.css?v=%s">
     %s
+    %s
     <title>%s</title>
   </head>
-  <body>
-	    <a class="skip-link" href="#main-content">%s</a><a class="skip-link skip-link-secondary" href="#navigation">%s</a><input type="checkbox" id="nav-toggle" class="nav-checkbox" aria-label="%s"><header role="banner"><a class="brand" href="/">%s</a><nav class="nav-links" id="navigation" aria-label="%s">%s</nav><label class="nav-toggle" for="nav-toggle" aria-hidden="true">☰</label><div class="header-actions"><a href="/server/preferences">%s</a><form class="theme-toggle-form" method="post" action="/server/preferences"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="theme" value="%s"><button type="submit" aria-label="%s" title="%s">%s <span>%s</span></button></form></div>%s</header>
+	  <body>%s
+	    <a class="skip-link" href="#main-content">%s</a><a class="skip-link skip-link-secondary" href="#navigation">%s</a>%s<input type="checkbox" id="nav-toggle" class="nav-checkbox" aria-label="%s"><header role="banner"><a class="brand" href="/">%s</a><nav class="nav-links" id="navigation" aria-label="%s">%s</nav><label class="nav-toggle" for="nav-toggle" aria-hidden="true">☰</label><div class="header-actions"><a href="/server/preferences">%s</a><form class="theme-toggle-form" method="post" action="/server/preferences"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="theme" value="%s"><button type="submit" aria-label="%s" title="%s">%s <span>%s</span></button></form></div>%s</header>
     <main id="main-content" role="main" tabindex="-1"><div class="container %s"><header class="page-header">%s<h1 class="page-title">%s</h1>%s</header>%s</div></main>
         <nav class="nav-panel" id="nav-panel" aria-label="%s"><label for="nav-toggle" class="nav-close" aria-label="%s">✕</label>%s</nav><label for="nav-toggle" class="nav-overlay" aria-hidden="true"></label>
         <div id="offline-indicator" class="offline-indicator" role="status" aria-live="polite" hidden>%s</div>
         <div id="pwa-update-prompt" class="pwa-update-prompt" role="status" aria-live="polite" hidden><span>%s</span><button id="pwa-update-now" type="button">%s</button></div>
         <section id="pwa-install" class="pwa-install" aria-label="%s" hidden><button id="pwa-install-button" type="button">%s</button><details id="pwa-ios-install" hidden><summary>%s</summary><p>%s</p></details></section>
         %s<footer role="contentinfo">%s · <a href="/server/about">%s</a> · <a href="/server/help">%s</a> · <a href="/server/privacy">%s</a> · <a href="/server/terms">%s</a> · <a href="/server/security">%s</a> · <a href="/server/preferences">%s</a> · <a href="/server/preferences#language" lang="%s">%s</a> · <a href="/server/docs/swagger">%s</a> · <a href="/server/docs/graphql">%s</a></footer>
-    <script src="/theme.js?v=%s" defer></script>
+    <script src="/static/js/app.js?v=%s" defer></script>
   </body>
 </html>
-	`, locale.Meta.Language, locale.Meta.Direction, theme, theme, template.HTMLEscapeString(seoDescription(r)), seoHeadMarkup(r, title), stampURL, stampURL, stampURL, stampURL, template.HTMLEscapeString(seoBrandingTitle()), stampURL, stampURL, robots, stampURL, stampURL, toolStyles, template.HTMLEscapeString(seoPageTitle(title)), tr(r, "nav.skip"), tr(r, "nav.skip_navigation"), tr(r, "nav.toggle"), brandingHeaderMarkup(r), tr(r, "nav.main"), nav, tr(r, "preferences.title"), csrf, nextTheme, themeLabel, tr(r, "nav.theme"), themeIcon, tr(r, "theme."+nextTheme), customHeader, containerClass, serverPageBreadcrumb(r), template.HTMLEscapeString(title), pageLead, body, tr(r, "nav.main"), tr(r, "nav.close"), nav, tr(r, "pwa.offline_indicator"), tr(r, "pwa.update_available"), tr(r, "pwa.update_now"), tr(r, "pwa.install_label"), tr(r, "pwa.install_button"), tr(r, "pwa.install_ios_title"), tr(r, "pwa.install_ios_instructions"), customFooter, template.HTMLEscapeString(seoBrandingTitle()), tr(r, "nav.about"), tr(r, "nav.help"), tr(r, "nav.privacy"), tr(r, "nav.terms"), tr(r, "nav.security"), tr(r, "preferences.title"), locale.Meta.Language, template.HTMLEscapeString(locale.Meta.NativeName), tr(r, "api.rest"), tr(r, "graphql.title"), stampURL)
+	`, locale.Meta.Language, locale.Meta.Direction, theme, theme, template.HTMLEscapeString(stamp), template.HTMLEscapeString(requestBasePath(r)), template.HTMLEscapeString(seoDescription(r)), seoHeadMarkup(r, title), stampURL, stampURL, stampURL, stampURL, template.HTMLEscapeString(seoBrandingTitle()), stampURL, stampURL, robots, stampURL, stampURL, toolStyles, trackingTags, template.HTMLEscapeString(seoPageTitle(title)), trackingNoscript, tr(r, "nav.skip"), tr(r, "nav.skip_navigation"), consentBanner, tr(r, "nav.toggle"), brandingHeaderMarkup(r), tr(r, "nav.main"), nav, tr(r, "preferences.title"), csrf, nextTheme, themeLabel, tr(r, "nav.theme"), themeIcon, tr(r, "theme."+nextTheme), customHeader, containerClass, serverPageBreadcrumb(r), template.HTMLEscapeString(title), pageLead, body, tr(r, "nav.main"), tr(r, "nav.close"), nav, tr(r, "pwa.offline_indicator"), tr(r, "pwa.update_available"), tr(r, "pwa.update_now"), tr(r, "pwa.install_label"), tr(r, "pwa.install_button"), tr(r, "pwa.install_ios_title"), tr(r, "pwa.install_ios_instructions"), customFooter, template.HTMLEscapeString(seoBrandingTitle()), tr(r, "nav.about"), tr(r, "nav.help"), tr(r, "nav.privacy"), tr(r, "nav.terms"), tr(r, "nav.security"), tr(r, "preferences.title"), locale.Meta.Language, template.HTMLEscapeString(locale.Meta.NativeName), tr(r, "api.rest"), tr(r, "graphql.title"), stampURL)
 	pageHTML := prefixHTMLPaths(output.String(), requestBasePath(r))
 	if wantsFrontendText(r) {
 		writeText(w, http.StatusOK, formatHTMLText(pageHTML))
@@ -1133,6 +1243,14 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = io.WriteString(w, pageHTML)
+}
+
+func serverRootRedirect(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/server" {
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, BuildURL(r, "/server/about"), http.StatusMovedPermanently)
 }
 
 func pageContainerClass(path string) string {
@@ -1263,10 +1381,12 @@ func themeIconMarkup(theme string) template.HTML {
 }
 
 func selectedTheme(r *http.Request) string {
-	if cookie, err := r.Cookie("theme"); err == nil {
-		switch cookie.Value {
-		case "auto", "light", "dark":
-			return cookie.Value
+	if privacySignalFromRequest(r) == "" {
+		if cookie, err := r.Cookie("theme"); err == nil {
+			switch cookie.Value {
+			case "auto", "light", "dark":
+				return cookie.Value
+			}
 		}
 	}
 	defaultThemeMu.RLock()
@@ -1412,7 +1532,7 @@ func aboutPage(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-features"><h2 id="about-features">%s</h2><ul><li>%s</li><li>%s</li><li>%s</li><li>%s</li><li>%s</li><li>%s</li></ul></section>`, template.HTMLEscapeString(tr(r, "about.features")), template.HTMLEscapeString(tr(r, "about.feature.catalog")), template.HTMLEscapeString(tr(r, "about.feature.templates")), template.HTMLEscapeString(tr(r, "about.feature.builder")), template.HTMLEscapeString(tr(r, "about.feature.api")), template.HTMLEscapeString(tr(r, "about.feature.cli")), template.HTMLEscapeString(tr(r, "about.feature.networks")))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-version"><h2 id="about-version">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "about.version")), template.HTMLEscapeString(serverVersion))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-links"><h2 id="about-links">%s</h2><ul><li><a href="https://github.com/apimgr/gitmessages">%s</a></li><li><a href="https://apimgr-gitmessages.readthedocs.io/">%s</a></li><li><a href="/server/docs/swagger">%s</a></li><li><a href="/server/docs/graphql">%s</a></li></ul></section>`, template.HTMLEscapeString(tr(r, "about.links")), template.HTMLEscapeString(tr(r, "about.github")), template.HTMLEscapeString(tr(r, "about.documentation")), template.HTMLEscapeString(tr(r, "api.rest")), template.HTMLEscapeString(tr(r, "graphql.title")))
-	body.WriteString(`<section class="section-card" aria-labelledby="about-attribution"><h2 id="about-attribution">Third-Party Attribution</h2><p><a href="https://db-ip.com/">IP Geolocation by DB-IP</a></p></section>`)
+	body.WriteString(`<section class="section-card" aria-labelledby="about-attribution"><h2 id="about-attribution">` + template.HTMLEscapeString(tr(r, "about.attribution")) + `</h2><p><a href="https://db-ip.com/">IP Geolocation by DB-IP</a></p></section>`)
 	body.WriteString(string(operatorCard(r, "about", "operator-about")))
 	page(w, r, tr(r, "about.title"), template.HTML(body.String()))
 }
@@ -1426,8 +1546,13 @@ func helpPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body strings.Builder
-	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="help-start"><h2 id="help-start">%s</h2><p>%s</p>%s</section><section class="section-card" aria-labelledby="help-features"><h2 id="help-features">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "help.getting_started")), template.HTMLEscapeString(tr(r, "help.getting_started_body")), codeBlockWithCopy(r, "curl -H 'Accept: application/json' "+BuildURL(r, APIBasePath()+"/types")+"\ncurl -H 'Accept: application/json' "+BuildURL(r, APIBasePath()+"/conventions")+"\ncurl -H 'Content-Type: application/json' -d '{\"type\":\"feat\",\"description\":\"add search\"}' "+BuildURL(r, APIBasePath()+"/messages")), template.HTMLEscapeString(tr(r, "help.using_catalog")), template.HTMLEscapeString(tr(r, "help.using_catalog_body")))
-	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="help-resources"><h2 id="help-resources">%s</h2><p>%s <a href="/server/docs/swagger">%s</a> · <a href="/server/docs/graphql">%s</a></p><p><a href="/server/help/mcp">%s</a></p></section>`, template.HTMLEscapeString(tr(r, "help.api_documentation")), template.HTMLEscapeString(tr(r, "help.api.docs")), template.HTMLEscapeString(tr(r, "api.rest")), template.HTMLEscapeString(tr(r, "graphql.title")), template.HTMLEscapeString(tr(r, "mcp.title")))
+	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="help-start"><h2 id="help-start">%s</h2><p>%s</p>%s</section><section class="section-card" aria-labelledby="help-features"><h2 id="help-features">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "help.getting_started")), template.HTMLEscapeString(tr(r, "help.getting_started_body")), codeBlockWithCopy(r, "curl -q -LSsf "+BuildURL(r, APIBasePath()+"/types")+"\ncurl -q -LSsf "+BuildURL(r, APIBasePath()+"/conventions")+"\ncurl -q -LSsf -X POST -H 'Content-Type: application/json' -d '{\"type\":\"feat\",\"description\":\"add message search\"}' "+BuildURL(r, APIBasePath()+"/messages")), template.HTMLEscapeString(tr(r, "help.using_catalog")), template.HTMLEscapeString(tr(r, "help.using_catalog_body")))
+	projectHelp := strings.TrimSpace(config.Get().Server.Pages.Help.Content)
+	if projectHelp == "" {
+		projectHelp = config.DefaultConfig().Server.Pages.Help.Content
+	}
+	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="help-project"><h2 id="help-project">%s</h2>%s</section>`, template.HTMLEscapeString(tr(r, "help.features")), renderMarkdown(projectHelp))
+	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="help-resources"><h2 id="help-resources">%s</h2><p>%s <a href="/server/docs/swagger">%s</a> · <a href="/server/docs/graphql">%s</a></p></section>`, template.HTMLEscapeString(tr(r, "help.api_documentation")), template.HTMLEscapeString(tr(r, "help.api.docs")), template.HTMLEscapeString(tr(r, "api.rest")), template.HTMLEscapeString(tr(r, "graphql.title")))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="help-faq"><h2 id="help-faq">%s</h2><h3>%s</h3><p>%s</p><h3>%s</h3><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "help.faq")), template.HTMLEscapeString(tr(r, "help.account_question")), template.HTMLEscapeString(tr(r, "help.account_answer")), template.HTMLEscapeString(tr(r, "help.submission_question")), template.HTMLEscapeString(tr(r, "help.submission_answer")))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="help-troubleshooting"><h2 id="help-troubleshooting">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "help.troubleshooting")), template.HTMLEscapeString(tr(r, "help.troubleshooting_body")))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="more-help"><h2 id="more-help">%s</h2><ul class="hub-list">%s</ul></section>`, template.HTMLEscapeString(tr(r, "help.more")), serverHubList(r, "/server/help"))
@@ -1441,19 +1566,26 @@ func mcpHelpPage(w http.ResponseWriter, r *http.Request) {
 	var body strings.Builder
 	fmt.Fprintf(&body, `<section class="section-card" id="overview" aria-labelledby="mcp-overview-title"><h2 id="mcp-overview-title">%s</h2><p>%s</p></section>`, tr(r, "mcp.help.overview"), tr(r, "mcp.help.description"))
 	fmt.Fprintf(&body, `<section class="section-card" id="endpoint" aria-labelledby="mcp-endpoint-title"><h2 id="mcp-endpoint-title">%s</h2>`, tr(r, "mcp.help.endpoint"))
-	for _, endpoint := range []string{"POST " + APIBasePath() + "/server/mcp", "/api/mcp", "/mcp"} {
+	for _, endpoint := range []string{"POST " + BuildURL(r, APIBasePath()+"/server/mcp"), BuildURL(r, "/api/mcp"), BuildURL(r, "/mcp")} {
 		body.WriteString(codeBlockWithCopy(r, endpoint))
 	}
 	fmt.Fprintf(&body, `<p>%s</p></section>`, tr(r, "mcp.help.endpoint"))
 	fmt.Fprintf(&body, `<section class="section-card" id="authentication" aria-labelledby="mcp-authentication-title"><h2 id="mcp-authentication-title">%s</h2><p>%s</p></section>`, tr(r, "mcp.help.authentication"), tr(r, "mcp.help.auth"))
-	connectHeaders := "Content-Type: application/json\nAccept: application/json, text/event-stream\nMCP-Protocol-Version: 2026-07-28\nMcp-Method: tools/list"
-	fmt.Fprintf(&body, `<section class="section-card" id="connect" aria-labelledby="mcp-connect-title"><h2 id="mcp-connect-title">%s</h2><p>%s</p>%s</section>`, tr(r, "mcp.help.connect"), tr(r, "mcp.help.connect"), codeBlockWithCopy(r, connectHeaders))
+	mcpURL := BuildURL(r, APIBasePath()+"/server/mcp")
+	claudeCommand := `claude mcp add --transport http gitmessages ` + mcpURL + ` --header "Authorization: Bearer $MCP_TOKEN"`
+	clientConfig := `{"mcpServers":{"gitmessages":{"type":"http","url":"` + mcpURL + `","headers":{"Authorization":"Bearer ${MCP_TOKEN}"}}}}`
+	curlRequest := `curl -q -LSsf -X POST ` + mcpURL + ` -H "Authorization: Bearer $MCP_TOKEN" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -H "MCP-Protocol-Version: 2026-07-28" -H "Mcp-Method: tools/list" --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}'`
+	fmt.Fprintf(&body, `<section class="section-card" id="connect" aria-labelledby="mcp-connect-title"><h2 id="mcp-connect-title">%s</h2><p>%s</p><h3>%s</h3>%s<h3>%s</h3>%s<h3>%s</h3>%s</section>`, tr(r, "mcp.help.connect"), tr(r, "mcp.help.connect"), tr(r, "mcp.help.claude"), codeBlockWithCopy(r, claudeCommand), tr(r, "mcp.help.generic"), codeBlockWithCopy(r, clientConfig), tr(r, "mcp.help.verify"), codeBlockWithCopy(r, curlRequest))
 	fmt.Fprintf(&body, `<section class="section-card" id="tools" aria-labelledby="mcp-tools-title"><h2 id="mcp-tools-title">%s</h2><div class="table-wrapper"><table class="data-table"><caption>%s</caption><thead><tr><th scope="col">%s</th><th scope="col">%s</th></tr></thead><tbody>`, tr(r, "mcp.help.tools"), tr(r, "mcp.help.tools"), tr(r, "mcp.help.tool_name"), tr(r, "mcp.help.tool_description"))
 	for _, tool := range mcpTools(r) {
 		fmt.Fprintf(&body, `<tr><td><code>%s</code></td><td>%s</td></tr>`, template.HTMLEscapeString(tool["name"].(string)), renderMarkdown(tool["description"].(string)))
 	}
 	body.WriteString(`</tbody></table></div></section>`)
-	fmt.Fprintf(&body, `<section class="section-card" id="limits" aria-labelledby="mcp-limits-title"><h2 id="mcp-limits-title">%s</h2><p>%s</p></section><section class="section-card" id="troubleshooting" aria-labelledby="mcp-troubleshooting-title"><h2 id="mcp-troubleshooting-title">%s</h2><p>%s</p><div class="table-wrapper"><table class="data-table"><caption>%s</caption><thead><tr><th scope="col">%s</th><th scope="col">%s</th></tr></thead><tbody><tr><td>200</td><td>%s</td></tr><tr><td>400</td><td>%s</td></tr><tr><td>401</td><td>%s</td></tr><tr><td>403</td><td>%s</td></tr><tr><td>405, 406, 415</td><td>%s</td></tr><tr><td>429</td><td>%s</td></tr></tbody></table></div></section><section class="section-card" id="project" aria-labelledby="mcp-project-title"><h2 id="mcp-project-title">%s</h2><p>%s</p></section>`, tr(r, "mcp.help.limits"), tr(r, "mcp.help.limits"), tr(r, "mcp.help.troubleshooting"), tr(r, "mcp.help.troubleshooting"), tr(r, "mcp.help.status_title"), tr(r, "mcp.help.status"), tr(r, "mcp.help.meaning"), tr(r, "mcp.help.status_200"), tr(r, "mcp.help.status_400"), tr(r, "mcp.help.status_401"), tr(r, "mcp.help.status_403"), tr(r, "mcp.help.status_headers"), tr(r, "mcp.help.status_429"), tr(r, "mcp.help.project"), tr(r, "mcp.help.project"))
+	projectHelp := strings.TrimSpace(config.Get().Server.Pages.Help.MCP)
+	if projectHelp == "" {
+		projectHelp = config.DefaultConfig().Server.Pages.Help.MCP
+	}
+	fmt.Fprintf(&body, `<section class="section-card" id="limits" aria-labelledby="mcp-limits-title"><h2 id="mcp-limits-title">%s</h2><p>%s</p></section><section class="section-card" id="troubleshooting" aria-labelledby="mcp-troubleshooting-title"><h2 id="mcp-troubleshooting-title">%s</h2><p>%s</p><div class="table-wrapper"><table class="data-table"><caption>%s</caption><thead><tr><th scope="col">%s</th><th scope="col">%s</th></tr></thead><tbody><tr><td>200</td><td>%s</td></tr><tr><td>400</td><td>%s</td></tr><tr><td>401</td><td>%s</td></tr><tr><td>403</td><td>%s</td></tr><tr><td>405, 406, 415</td><td>%s</td></tr><tr><td>429</td><td>%s</td></tr></tbody></table></div></section><section class="section-card" id="project" aria-labelledby="mcp-project-title"><h2 id="mcp-project-title">%s</h2>%s</section>`, tr(r, "mcp.help.limits"), tr(r, "mcp.help.limits"), tr(r, "mcp.help.troubleshooting"), tr(r, "mcp.help.troubleshooting"), tr(r, "mcp.help.status_title"), tr(r, "mcp.help.status"), tr(r, "mcp.help.meaning"), tr(r, "mcp.help.status_200"), tr(r, "mcp.help.status_400"), tr(r, "mcp.help.status_401"), tr(r, "mcp.help.status_403"), tr(r, "mcp.help.status_headers"), tr(r, "mcp.help.status_429"), tr(r, "mcp.help.project"), renderMarkdown(projectHelp))
 	page(w, r, tr(r, "mcp.title"), template.HTML(body.String()))
 }
 
@@ -1475,6 +1607,9 @@ func privacyPage(w http.ResponseWriter, r *http.Request) {
 	}
 	privacy := config.Get().Server.Privacy
 	var body strings.Builder
+	if signal := privacySignalFromRequest(r); signal != "" {
+		fmt.Fprintf(&body, `<section class="section-card" role="status"><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "privacy.signal."+signal)))
+	}
 	soldMessage := tr(r, "privacy.not_sold")
 	if privacy.Data.Sold {
 		soldMessage = tr(r, "privacy.sold")
@@ -1491,10 +1626,22 @@ func privacyPage(w http.ResponseWriter, r *http.Request) {
 	}{{"preferences.essential_cookies", privacy.Cookies.Essential}, {"preferences.preference_cookies", privacy.Cookies.Preferences}} {
 		fmt.Fprintf(&body, `<h3>%s</h3><p>%s</p>`, template.HTMLEscapeString(tr(r, category.title)), template.HTMLEscapeString(category.value.Description))
 	}
-	if privacy.Cookies.Analytics.Enabled {
-		fmt.Fprintf(&body, `<h3>%s</h3><p>%s</p>`, template.HTMLEscapeString(tr(r, "preferences.analytics_cookies")), template.HTMLEscapeString(privacy.GetAnalyticsDescription()))
+	fmt.Fprintf(&body, `<h3>%s</h3>`, template.HTMLEscapeString(tr(r, "preferences.analytics_cookies")))
+	if privacy.Cookies.Analytics.Enabled && trackingConfigured() {
+		fmt.Fprintf(&body, `<p>%s</p><p>%s</p>`, template.HTMLEscapeString(privacy.GetAnalyticsDescription()), template.HTMLEscapeString(i18n.Format(languageCode(r), "privacy.analytics_provider", map[string]string{"provider": trackingTypeName(config.Get().Server.Tracking)})))
+	} else {
+		fmt.Fprintf(&body, `<p>%s</p>`, template.HTMLEscapeString(tr(r, "privacy.no_analytics")))
 	}
-	fmt.Fprintf(&body, `<p><a href="/server/preferences">%s</a></p></section>`, template.HTMLEscapeString(tr(r, "privacy.manage_preferences")))
+	csrf := csrfTokenForPage(w, r)
+	consentState := readCookieConsent(r)
+	preferencesChecked, analyticsChecked := "", ""
+	if consentState.Preferences {
+		preferencesChecked = " checked"
+	}
+	if consentState.Analytics {
+		analyticsChecked = " checked"
+	}
+	fmt.Fprintf(&body, `<p><button type="button" data-action="cookie-preferences">%s</button> <a href="/server/preferences#privacy-preferences">%s</a></p><dialog id="cookie-preferences-dialog" aria-labelledby="cookie-preferences-title"><form method="post" action="/server/consent"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="choice" value="save"><input type="hidden" name="redirect" value="/server/privacy"><h2 id="cookie-preferences-title">%s</h2><label><input type="checkbox" checked disabled> %s</label><label><input type="checkbox" name="preferences"%s> %s</label><label><input type="checkbox" name="analytics"%s> %s</label><button type="submit">%s</button><button type="button" data-action="cookie-preferences-close">%s</button></form></dialog></section>`, template.HTMLEscapeString(tr(r, "privacy.manage_preferences")), template.HTMLEscapeString(tr(r, "privacy.manage_preferences")), template.HTMLEscapeString(csrf), template.HTMLEscapeString(tr(r, "preferences.title")), template.HTMLEscapeString(tr(r, "preferences.essential_cookies")), preferencesChecked, template.HTMLEscapeString(tr(r, "preferences.preference_cookies")), analyticsChecked, template.HTMLEscapeString(tr(r, "preferences.analytics_cookies")), template.HTMLEscapeString(tr(r, "preferences.save")), template.HTMLEscapeString(tr(r, "preferences.cancel")))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="privacy-collection"><h2 id="privacy-collection">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "privacy.collection_title")), template.HTMLEscapeString(tr(r, "privacy.collection_body")))
 	usageKey := "privacy.usage_not_sold"
 	if privacy.Data.Sold {
@@ -1503,23 +1650,25 @@ func privacyPage(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="privacy-usage"><h2 id="privacy-usage">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "privacy.usage_title")), template.HTMLEscapeString(tr(r, usageKey)))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="privacy-security"><h2 id="privacy-security">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "privacy.security_title")), template.HTMLEscapeString(tr(r, "privacy.security_body")))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="privacy-storage"><h2 id="privacy-storage">%s</h2>`, template.HTMLEscapeString(tr(r, "privacy.storage_title")))
-	if len(privacy.Data.Sharing) == 0 {
+	sharing := privacySharing(privacy, config.Get().Server.Tracking)
+	if len(sharing) == 0 {
 		fmt.Fprintf(&body, `<p>%s</p>`, template.HTMLEscapeString(tr(r, "privacy.third_party_none")))
 	} else {
 		body.WriteString(`<ul>`)
-		for _, sharing := range privacy.Data.Sharing {
-			fmt.Fprintf(&body, `<li><strong>%s</strong>: %s — %s</li>`, template.HTMLEscapeString(sharing.Condition), template.HTMLEscapeString(sharing.When), template.HTMLEscapeString(sharing.Data))
+		for _, item := range sharing {
+			fmt.Fprintf(&body, `<li><strong>%s</strong>: %s — %s</li>`, template.HTMLEscapeString(item.Condition), template.HTMLEscapeString(item.When), template.HTMLEscapeString(item.Data))
 		}
 		body.WriteString(`</ul>`)
 	}
 	body.WriteString(`</section>`)
-	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="privacy-retention"><h2 id="privacy-retention">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "privacy.retention_title")), template.HTMLEscapeString(privacy.Retention.Period))
+	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="privacy-retention"><h2 id="privacy-retention">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "privacy.retention_title")), template.HTMLEscapeString(privacy.Retention.PeriodForLanguage(languageCode(r))))
+	thirdPartyServices := privacyThirdPartyServices(privacy, config.Get().Server.Tracking)
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="privacy-third-party"><h2 id="privacy-third-party">%s</h2>`, template.HTMLEscapeString(tr(r, "privacy.third_party_title")))
-	if len(privacy.ThirdParty.Services) == 0 {
+	if len(thirdPartyServices) == 0 {
 		fmt.Fprintf(&body, `<p>%s</p>`, template.HTMLEscapeString(tr(r, "privacy.third_party_none")))
 	} else {
 		fmt.Fprintf(&body, `<div class="table-wrapper"><table class="data-table"><caption>%s</caption><thead><tr><th scope="col">%s</th><th scope="col">%s</th><th scope="col">%s</th><th scope="col">%s</th></tr></thead><tbody>`, template.HTMLEscapeString(tr(r, "privacy.third_party_title")), template.HTMLEscapeString(tr(r, "privacy.service")), template.HTMLEscapeString(tr(r, "privacy.purpose")), template.HTMLEscapeString(tr(r, "privacy.data_sent")), template.HTMLEscapeString(tr(r, "privacy.policy_link")))
-		for _, service := range privacy.ThirdParty.Services {
+		for _, service := range thirdPartyServices {
 			fmt.Fprintf(&body, `<tr><td>%s</td><td>%s</td><td>%s</td><td>`, template.HTMLEscapeString(service.Name), template.HTMLEscapeString(service.Purpose), template.HTMLEscapeString(service.DataSent))
 			if policyURL, err := url.Parse(service.PolicyURL); err == nil && (policyURL.Scheme == "https" || policyURL.Scheme == "http") && policyURL.Host != "" {
 				fmt.Fprintf(&body, `<a href="%s">%s</a>`, template.HTMLEscapeString(policyURL.String()), template.HTMLEscapeString(tr(r, "privacy.policy_link")))
@@ -1538,7 +1687,14 @@ func privacyPage(w http.ResponseWriter, r *http.Request) {
 	}
 	body.WriteString(`</ul></section>`)
 	if privacy.Data.Sold {
-		fmt.Fprintf(&body, `<section class="section-card" id="ccpa-opt-out" aria-labelledby="privacy-ccpa"><h2 id="privacy-ccpa">%s</h2><p>%s</p><p><a href="/server/preferences#privacy">%s</a></p></section>`, template.HTMLEscapeString(tr(r, "privacy.ccpa_title")), template.HTMLEscapeString(tr(r, "privacy.ccpa_body")), template.HTMLEscapeString(tr(r, "privacy.manage_preferences")))
+		csrf := csrfTokenForPage(w, r)
+		fmt.Fprintf(&body, `<section class="section-card" id="ccpa-opt-out" aria-labelledby="privacy-ccpa"><h2 id="privacy-ccpa">%s</h2><p>%s</p>`, template.HTMLEscapeString(tr(r, "privacy.ccpa_title")), template.HTMLEscapeString(tr(r, "privacy.ccpa_body")))
+		if cookie, err := r.Cookie("ccpa_opt_out"); err == nil && cookie.Value == "true" {
+			fmt.Fprintf(&body, `<p role="status">%s</p><form method="post" action="/server/ccpa"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="choice" value="opt-in"><button type="submit">%s</button></form>`, template.HTMLEscapeString(tr(r, "privacy.ccpa.opted_out")), template.HTMLEscapeString(csrf), template.HTMLEscapeString(tr(r, "privacy.ccpa.opt_in")))
+		} else {
+			fmt.Fprintf(&body, `<form method="post" action="/server/ccpa"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="choice" value="opt-out"><button type="submit">%s</button></form>`, template.HTMLEscapeString(csrf), template.HTMLEscapeString(tr(r, "preferences.ccpa_optout")))
+		}
+		body.WriteString(`</section>`)
 	}
 	body.WriteString(string(operatorCard(r, "privacy", "operator-privacy")))
 	dpo := config.Get().Server.Contact.DPO
@@ -1548,6 +1704,38 @@ func privacyPage(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="privacy-contact"><h2 id="privacy-contact">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "privacy.contact_title")), contact)
 	page(w, r, tr(r, "privacy.title"), template.HTML(body.String()))
+}
+
+func ccpaOptOutPage(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/server/ccpa" {
+		http.NotFound(w, r)
+		return
+	}
+	if !method(w, r, http.MethodPost) {
+		return
+	}
+	if !config.Get().Server.Privacy.Data.Sold {
+		http.NotFound(w, r)
+		return
+	}
+	if !validCSRF(r) {
+		writeHTTPError(w, r, "CSRF token validation failed", http.StatusForbidden)
+		return
+	}
+	value := ""
+	maxAge := -1
+	switch r.FormValue("choice") {
+	case "opt-out":
+		value = "true"
+		maxAge = preferenceCookieAge
+	case "opt-in":
+	default:
+		writeHTTPError(w, r, "Invalid privacy choice", http.StatusBadRequest)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: "ccpa_opt_out", Value: value, Path: "/", MaxAge: maxAge, SameSite: http.SameSiteLaxMode, Secure: requestIsSecure(r)})
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, "/server/privacy#ccpa-opt-out", http.StatusSeeOther)
 }
 
 func termsPage(w http.ResponseWriter, r *http.Request) {
@@ -1576,6 +1764,7 @@ func preferencesPage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := r.ParseForm(); err != nil {
+			w.Header().Set("Cache-Control", "no-store")
 			http.Redirect(w, r, "/server/preferences", http.StatusSeeOther)
 			return
 		}
@@ -1589,15 +1778,26 @@ func preferencesPage(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "/server/preferences", http.StatusSeeOther)
 			return
 		}
-		applyPreferenceValues(w, r, r.Form)
-		if r.Form.Get("lang") == "auto" {
+		if privacySignalFromRequest(r) == "" && r.Form.Get("lang") == "auto" && preferenceCategoryAllowed(r) {
 			http.SetCookie(w, &http.Cookie{Name: "lang", Value: "", Path: "/", MaxAge: -1, SameSite: http.SameSiteLaxMode, Secure: requestIsSecure(r)})
 		}
 		if r.Form.Get("consent_form") == "1" {
-			consentJSON := fmt.Sprintf(`{"essential":true,"preferences":%t,"analytics":%t,"timestamp":%d}`, r.Form.Get("consent_preferences") == "on", r.Form.Get("consent_analytics") == "on", time.Now().Unix())
-			consent := url.QueryEscape(consentJSON)
+			preferences := r.Form.Get("consent_preferences") == "on" && config.Get().Server.Privacy.Cookies.Preferences.Enabled
+			analytics := r.Form.Get("consent_analytics") == "on" && config.Get().Server.Privacy.Cookies.Analytics.Enabled
+			if privacySignalFromRequest(r) != "" {
+				preferences, analytics = false, false
+			}
+			consentJSON := fmt.Sprintf(`{"essential":true,"preferences":%t,"analytics":%t,"timestamp":%d}`, preferences, analytics, time.Now().Unix())
+			consent := url.PathEscape(consentJSON)
+			previousConsent := readCookieConsent(r)
+			if hasConsentCookie(r) && (previousConsent.Preferences && !preferences || previousConsent.Analytics && !analytics) {
+				w.Header().Set("Clear-Site-Data", `"cache", "storage"`)
+			}
 			http.SetCookie(w, &http.Cookie{Name: "cookie_consent", Value: consent, Path: "/", MaxAge: preferenceCookieAge, SameSite: http.SameSiteLaxMode, Secure: requestIsSecure(r)})
-			if config.Get().Server.Privacy.Data.Sold {
+			r.AddCookie(&http.Cookie{Name: "cookie_consent", Value: consent})
+			recordConsentUpdated(r.Context(), r, "preferences", preferences)
+			recordConsentUpdated(r.Context(), r, "analytics", analytics)
+			if config.Get().Server.Privacy.Data.Sold && privacySignalFromRequest(r) == "" {
 				if r.Form.Get("ccpa_opt_out") == "on" {
 					http.SetCookie(w, &http.Cookie{Name: "ccpa_opt_out", Value: "true", Path: "/", MaxAge: preferenceCookieAge, SameSite: http.SameSiteLaxMode, Secure: requestIsSecure(r)})
 				} else {
@@ -1605,8 +1805,13 @@ func preferencesPage(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		_, _, consentRequired := applyPreferenceValues(w, r, r.Form)
 		w.Header().Set("Cache-Control", "no-store")
-		http.Redirect(w, r, preferenceRedirect(r, "/server/preferences"), http.StatusSeeOther)
+		redirect := preferenceRedirect(r, "/server/preferences")
+		if consentRequired {
+			redirect = addQueryParam(redirect, "consent_required", "1")
+		}
+		http.Redirect(w, r, redirect, http.StatusSeeOther)
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -1616,6 +1821,9 @@ func preferencesPage(w http.ResponseWriter, r *http.Request) {
 	}
 	var body strings.Builder
 	csrf := ensureCSRFCookie(w, r)
+	if signal := privacySignalFromRequest(r); signal != "" {
+		fmt.Fprintf(&body, `<section class="section-card" role="status"><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "privacy.signal."+signal)))
+	}
 	fmt.Fprintf(&body, `<form method="post" action="/server/preferences"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="consent_form" value="1"><section class="section-card" id="theme" aria-labelledby="theme-title"><h2 id="theme-title">%s</h2><label for="preference-theme">%s</label><select id="preference-theme" name="theme">`, csrf, tr(r, "nav.theme"), tr(r, "nav.theme"))
 	for _, option := range []struct{ value, key string }{{"auto", "theme.auto"}, {"light", "theme.light"}, {"dark", "theme.dark"}} {
 		selected := ""
@@ -1625,6 +1833,9 @@ func preferencesPage(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&body, `<option value="%s"%s>%s</option>`, option.value, selected, tr(r, option.key))
 	}
 	consent := readCookieConsent(r)
+	if privacySignalFromRequest(r) != "" {
+		consent.Preferences, consent.Analytics = false, false
+	}
 	preferenceChecked, analyticsChecked := "", ""
 	if consent.Preferences {
 		preferenceChecked = " checked"
@@ -1640,7 +1851,8 @@ func preferencesPage(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Fprintf(&body, `<label><input type="checkbox" name="ccpa_opt_out"%s> %s</label>`, ccpaChecked, tr(r, "preferences.ccpa_optout"))
 	}
-	fmt.Fprintf(&body, `</section><div class="form-actions"><a class="btn btn-secondary" href="/server/preferences">%s</a><button class="btn btn-secondary" type="button" popovertarget="reset-preferences">%s</button><button class="btn btn-primary" type="submit">%s</button></div><div id="reset-preferences" popover><p>%s</p><button type="button" popovertarget="reset-preferences" popovertargetaction="hide">%s</button><button type="submit" name="action" value="reset">%s</button></div></form><section class="section-card" aria-labelledby="more-preferences"><h2 id="more-preferences">%s</h2><ul class="hub-list">%s</ul></section>`, tr(r, "preferences.cancel"), tr(r, "preferences.reset"), tr(r, "preferences.save"), tr(r, "preferences.erase_warning"), tr(r, "preferences.keep"), tr(r, "preferences.erase_everything"), tr(r, "preferences.more"), serverHubList(r, "/server/preferences"))
+	cancelTarget := template.HTMLEscapeString(preferenceRedirect(r, "/"))
+	fmt.Fprintf(&body, `</section><div class="form-actions"><a class="btn btn-secondary" href="%s">%s</a><button class="btn btn-secondary" type="button" popovertarget="reset-preferences">%s</button><button class="btn btn-primary" type="submit">%s</button></div><div id="reset-preferences" popover><p>%s</p><button type="button" popovertarget="reset-preferences" popovertargetaction="hide">%s</button><button type="submit" name="action" value="reset">%s</button></div></form><section class="section-card" aria-labelledby="more-preferences"><h2 id="more-preferences">%s</h2><ul class="hub-list">%s</ul></section>`, cancelTarget, tr(r, "preferences.cancel"), tr(r, "preferences.reset"), tr(r, "preferences.save"), tr(r, "preferences.erase_warning"), tr(r, "preferences.keep"), tr(r, "preferences.erase_everything"), tr(r, "preferences.more"), serverHubList(r, "/server/preferences"))
 	page(w, r, tr(r, "preferences.title"), template.HTML(body.String()))
 }
 
@@ -1657,7 +1869,7 @@ func readCookieConsent(r *http.Request) cookieConsentState {
 		return cookieConsentState{Essential: true}
 	}
 	var state cookieConsentState
-	value, decodeErr := url.QueryUnescape(cookie.Value)
+	value, decodeErr := url.PathUnescape(cookie.Value)
 	if decodeErr != nil || json.Unmarshal([]byte(value), &state) != nil {
 		return cookieConsentState{Essential: true}
 	}
@@ -1669,7 +1881,7 @@ func preferenceLanguageOptions(r *http.Request, current string) string {
 	var options strings.Builder
 	autoSelected := ""
 	cookie, cookieErr := r.Cookie("lang")
-	explicit := cookieErr == nil && i18n.IsSupported(cookie.Value) || i18n.IsSupported(r.URL.Query().Get("lang"))
+	explicit := privacySignalFromRequest(r) == "" && cookieErr == nil && i18n.IsSupported(cookie.Value) || i18n.IsSupported(r.URL.Query().Get("lang"))
 	if !explicit {
 		autoSelected = " selected"
 	}
@@ -1861,6 +2073,8 @@ func documentationScript(w http.ResponseWriter, r *http.Request) {
 		content, err = documentationAssets.ReadFile("static/js/docs-graphql.js")
 	case "/static/js/graphiql-compat.js":
 		content, err = documentationAssets.ReadFile("static/js/graphiql-compat.js")
+	case "/static/js/app.js":
+		content, err = documentationAssets.ReadFile("static/js/app.js")
 	default:
 		http.NotFound(w, r)
 		return
@@ -1908,9 +2122,9 @@ const CACHE_NAME=CACHE_PREFIX+%q;
 const MAX_CACHE_BYTES=50*1024*1024;
 const MAX_AGE_MS=7*24*60*60*1000;
 const NAV_TIMEOUT_MS=8000;
-const PRECACHE=[appURL('/styles.css?v=%s'),appURL('/theme.js?v=%s'),appURL('/manifest.json?v=%s'),appURL('/icon.svg?v=%s'),appURL('/static/icons/icon-192.png?v=%s'),appURL('/static/icons/icon-512.png?v=%s'),appURL('/static/vendor/swagger-ui/swagger-ui-bundle.js?v=%s'),appURL('/static/vendor/swagger-ui/swagger-ui-standalone-preset.js?v=%s'),appURL('/static/vendor/swagger-ui/swagger-ui.css?v=%s'),appURL('/static/vendor/swagger-ui/theme.css?v=%s'),appURL('/static/js/docs-swagger.js?v=%s'),appURL('/static/vendor/graphiql/react.production.min.js?v=%s'),appURL('/static/vendor/graphiql/react-dom.production.min.js?v=%s'),appURL('/static/js/graphiql-compat.js?v=%s'),appURL('/static/vendor/graphiql/graphiql.min.js?v=%s'),appURL('/static/vendor/graphiql/graphiql.css?v=%s'),appURL('/static/vendor/graphiql/theme.css?v=%s'),appURL('/static/js/docs-graphql.js?v=%s'),appURL('/offline.html')];
+const PRECACHE=[appURL('/styles.css?v=%s'),appURL('/static/js/app.js?v=%s'),appURL('/manifest.json?v=%s'),appURL('/icon.svg?v=%s'),appURL('/static/icons/icon-192.png?v=%s'),appURL('/static/icons/icon-512.png?v=%s'),appURL('/static/vendor/swagger-ui/swagger-ui-bundle.js?v=%s'),appURL('/static/vendor/swagger-ui/swagger-ui-standalone-preset.js?v=%s'),appURL('/static/vendor/swagger-ui/swagger-ui.css?v=%s'),appURL('/static/vendor/swagger-ui/theme.css?v=%s'),appURL('/static/js/docs-swagger.js?v=%s'),appURL('/static/vendor/graphiql/react.production.min.js?v=%s'),appURL('/static/vendor/graphiql/react-dom.production.min.js?v=%s'),appURL('/static/js/graphiql-compat.js?v=%s'),appURL('/static/vendor/graphiql/graphiql.min.js?v=%s'),appURL('/static/vendor/graphiql/graphiql.css?v=%s'),appURL('/static/vendor/graphiql/theme.css?v=%s'),appURL('/static/js/docs-graphql.js?v=%s'),appURL('/offline.html')];
 const PUBLIC_PAGES=new Set(['/','/types','/templates','/server/about','/server/help','/server/help/mcp','/server/privacy','/server/terms','/server/security','/offline.html']);
-const STATIC_PATH=path=>path==='/styles.css'||path==='/theme.js'||path==='/manifest.json'||path==='/icon.svg'||path.startsWith('/locales/')||path.startsWith('/static/icons/')||path.startsWith('/static/splash/')||path.startsWith('/static/js/')||path.startsWith('/static/vendor/');
+const STATIC_PATH=path=>path==='/styles.css'||path==='/static/js/app.js'||path==='/manifest.json'||path==='/icon.svg'||path.startsWith('/locales/')||path.startsWith('/static/icons/')||path.startsWith('/static/splash/')||path.startsWith('/static/js/')||path.startsWith('/static/vendor/');
 
 async function cacheResponse(request,response){
   if(!response.ok||response.redirected||response.type==='opaque')return;
@@ -2210,6 +2424,33 @@ func swaggerUI(w http.ResponseWriter, r *http.Request) {
 	page(w, r, tr(r, "api.rest"), template.HTML(body))
 }
 
+func graphQLHandler(w http.ResponseWriter, r *http.Request) {
+	contentType := strings.ToLower(strings.TrimSpace(strings.SplitN(r.Header.Get("Content-Type"), ";", 2)[0]))
+	if r.Method != http.MethodPost || contentType != "application/x-www-form-urlencoded" || !strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html") {
+		graphqlapi.Handler().ServeHTTP(w, r)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	if err := r.ParseForm(); err != nil {
+		writeHTTPError(w, r, "Invalid GraphQL form", http.StatusBadRequest)
+		return
+	}
+	payload, err := json.Marshal(map[string]string{"query": r.PostForm.Get("query")})
+	if err != nil {
+		writeHTTPError(w, r, "Invalid GraphQL form", http.StatusBadRequest)
+		return
+	}
+	request := r.Clone(r.Context())
+	request.Body = io.NopCloser(bytes.NewReader(payload))
+	request.ContentLength = int64(len(payload))
+	request.Header = r.Header.Clone()
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	graphqlapi.Handler().ServeHTTP(response, request)
+	body := `<section class="section-card" aria-labelledby="graphql-result"><h2 id="graphql-result">` + template.HTMLEscapeString(tr(r, "graphql.title")) + `</h2><p><a href="/server/docs/graphql">` + template.HTMLEscapeString(tr(r, "graphql.title")) + `</a></p><pre><code>` + template.HTMLEscapeString(response.Body.String()) + `</code></pre></section>`
+	page(w, r, tr(r, "graphql.title"), template.HTML(body))
+}
+
 func graphQLUI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		method(w, r, http.MethodGet)
@@ -2221,121 +2462,4 @@ func graphQLUI(w http.ResponseWriter, r *http.Request) {
 	stamp := template.HTMLEscapeString(url.QueryEscape(assetStamp()))
 	body := `<section class="section-card graphiql-ui" aria-labelledby="graphql-query-heading"><h2 id="graphql-query-heading">` + template.HTMLEscapeString(tr(r, "graphql.query")) + `</h2><p>` + template.HTMLEscapeString(tr(r, "graphql.description")) + `</p><div id="graphiql" data-endpoint="` + template.HTMLEscapeString(endpoint) + `" aria-live="polite"></div><noscript><p>` + template.HTMLEscapeString(tr(r, "graphql.nojs")) + ` <a href="` + template.HTMLEscapeString(endpoint) + `">` + template.HTMLEscapeString(endpoint) + `</a></p></noscript></section><noscript><section class="section-card" aria-labelledby="graphql-nojs-heading"><h2 id="graphql-nojs-heading">` + template.HTMLEscapeString(tr(r, "graphql.nojs_title")) + `</h2><form method="post" action="` + template.HTMLEscapeString(endpoint) + `"><input type="hidden" name="csrf_token" value="` + template.HTMLEscapeString(csrf) + `"><label for="query">` + template.HTMLEscapeString(tr(r, "graphql.query")) + `</label><textarea id="query" name="query" rows="8">{ types { type description emoji example breaking } }</textarea><button type="submit">` + template.HTMLEscapeString(tr(r, "graphql.run")) + `</button></form></section></noscript><script src="/static/vendor/graphiql/react.production.min.js?v=` + stamp + `" defer></script><script src="/static/vendor/graphiql/react-dom.production.min.js?v=` + stamp + `" defer></script><script src="/static/js/graphiql-compat.js?v=` + stamp + `" defer></script><script src="/static/vendor/graphiql/graphiql.min.js?v=` + stamp + `" defer></script><script src="/static/js/docs-graphql.js?v=` + stamp + `" defer></script>`
 	page(w, r, tr(r, "graphql.title"), template.HTML(body))
-}
-
-func themeScript(w http.ResponseWriter, r *http.Request) {
-	if !method(w, r, http.MethodGet) {
-		return
-	}
-	if !setVersionedAssetHeaders(w, r, true) {
-		return
-	}
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	_, _ = fmt.Fprintf(w, `(()=>{
-const root=document.documentElement;
-const stamp=%q;
-const BASE=%q;
-const appURL=value=>BASE+value;
-document.addEventListener('click',async event=>{
-  const button=event.target.closest('[data-copy-text],[data-copy-target]');
-  if(!button)return;
-  const target=button.dataset.copyTarget?document.getElementById(button.dataset.copyTarget):null;
-  const text=button.dataset.copyText??target?.textContent?.trim()??'';
-  if(!text||!navigator.clipboard?.writeText)return;
-  try{
-    await navigator.clipboard.writeText(text);
-    const icon=button.querySelector('.copy-icon');
-    const label=button.querySelector('.copy-text');
-    if(icon)icon.textContent='✓';
-    if(label)label.textContent=button.dataset.copiedLabel||'Copied!';
-    if(!icon&&!label)button.textContent='✓ '+(button.dataset.copiedLabel||'Copied!');
-    button.classList.add('copied');
-    setTimeout(()=>{
-      if(icon)icon.textContent=button.dataset.copyIcon||'📋';
-      if(label)label.textContent=button.dataset.copyLabel||'Copy';
-      if(!icon&&!label)button.textContent=button.dataset.copyLabel||'Copy';
-      button.classList.remove('copied');
-    },2000);
-  }catch{}
-});
-fetch(appURL('/locales/'+encodeURIComponent(root.lang)+'.json')).then(response=>response.ok?response.json():Promise.reject()).then(locale=>{window.GitMessagesLocale=locale}).catch(()=>{});
-const offline=document.getElementById('offline-indicator');
-const updatePrompt=document.getElementById('pwa-update-prompt');
-const updateButton=document.getElementById('pwa-update-now');
-const installSection=document.getElementById('pwa-install');
-const installButton=document.getElementById('pwa-install-button');
-const iosInstall=document.getElementById('pwa-ios-install');
-const dirtyForms=new WeakSet();
-document.querySelectorAll('form').forEach(form=>{
-  const markDirty=()=>dirtyForms.add(form);
-  form.addEventListener('input',markDirty);
-  form.addEventListener('change',markDirty);
-});
-const hasDirtyForm=()=>[...document.forms].some(form=>dirtyForms.has(form));
-const reloadOnce=nextStamp=>{
-  if(sessionStorage.getItem('gitmessages_recovered')===nextStamp)return;
-  sessionStorage.setItem('gitmessages_recovered',nextStamp);
-  window.location.reload();
-};
-let deferredInstallPrompt;
-const standalone=window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;
-if(installSection&&!standalone){
-  window.addEventListener('beforeinstallprompt',event=>{
-    event.preventDefault();
-    deferredInstallPrompt=event;
-    installSection.hidden=false;
-    if(installButton)installButton.hidden=false;
-  });
-  if(/iphone|ipad|ipod/i.test(navigator.userAgent)&&/safari/i.test(navigator.userAgent)&&!/(crios|fxios|edgios)/i.test(navigator.userAgent)&&iosInstall){installSection.hidden=false;iosInstall.hidden=false;if(installButton)installButton.hidden=true;}
-  if(installButton)installButton.addEventListener('click',async()=>{
-    if(!deferredInstallPrompt)return;
-    deferredInstallPrompt.prompt();
-    await deferredInstallPrompt.userChoice;
-    deferredInstallPrompt=null;
-    installSection.hidden=true;
-  });
-  window.addEventListener('appinstalled',()=>{installSection.hidden=true;deferredInstallPrompt=null;});
-}
-const updateState=()=>{if(offline)offline.hidden=navigator.onLine;};
-updateState();
-window.addEventListener('online',updateState);
-window.addEventListener('offline',updateState);
-const showUpdate=()=>{if(updatePrompt)updatePrompt.hidden=false;};
-const originalFetch=window.fetch.bind(window);
-window.fetch=async(...args)=>{
-  const response=await originalFetch(...args);
-  const nextStamp=response.headers.get('X-Build');
-  if(nextStamp&&nextStamp!==stamp){
-    if(hasDirtyForm())showUpdate();
-    else window.setTimeout(()=>reloadOnce(nextStamp),0);
-  }
-  return response;
-};
-let waitingWorker=null;
-let acceptedUpdate=false;
-if(updateButton)updateButton.addEventListener('click',()=>{
-  if(waitingWorker){
-    acceptedUpdate=true;
-    waitingWorker.postMessage({type:'SKIP_WAITING'});
-    window.setTimeout(()=>{if(acceptedUpdate){acceptedUpdate=false;reloadOnce(stamp);}},5000);
-    return;
-  }
-  reloadOnce(stamp);
-});
-if('serviceWorker'in navigator){
-  navigator.serviceWorker.addEventListener('controllerchange',()=>{
-    if(!acceptedUpdate)return;
-    acceptedUpdate=false;
-    reloadOnce(stamp);
-  });
-  window.addEventListener('load',()=>navigator.serviceWorker.register(appURL('/sw.js'),{scope:appURL('/')}).then(registration=>{
-    if(registration.waiting&&navigator.serviceWorker.controller){waitingWorker=registration.waiting;showUpdate();}
-    registration.addEventListener('updatefound',()=>{
-      const worker=registration.installing;
-      if(!worker)return;
-      worker.addEventListener('statechange',()=>{if(worker.state==='installed'&&navigator.serviceWorker.controller){waitingWorker=registration.waiting||worker;showUpdate();}});
-    });
-  }).catch(()=>{}));
-}
-})();`, assetStamp(), requestBasePath(r))
 }

@@ -121,7 +121,7 @@ The active API version is available from `GET /api/autodiscover` (default `v1`).
 
 ## Security and privacy
 
-The catalog is embedded and user-submitted commit messages or conventions are not accepted. Contact and security reports follow the configured validation, encryption, access, and retention rules. Builder fields are validated on the server. Public endpoints include security headers, CORS, request size limits, and per-client rate limiting. Tor and I2P provide alternate access. The service does not query third-party providers for catalog or message data; it can fetch operational security and GeoIP datasets from configured sources. Tor starts when its binary is available. I2P is opt-in on bare metal and in VMs and enabled by default in containers.
+The catalog is embedded and user-submitted commit messages or conventions are not accepted. Contact and security reports follow the configured validation, encryption, access, and retention rules. Builder fields are validated on the server. Browser preference cookies and optional analytics follow the visitor's cookie choices; `Sec-GPC: 1` and, when configured, `DNT: 1` disable nonessential cookies and analytics. Public endpoints include security headers, CORS, request size limits, and per-client rate limiting. Tor and I2P provide alternate access. The service does not query third-party providers for catalog or message data; it can fetch operational security and GeoIP datasets from configured sources. Tor starts when its binary is available. I2P is opt-in on bare metal and in VMs and enabled by default in containers.
 
 ## Development
 

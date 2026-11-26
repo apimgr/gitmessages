@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/apimgr/gitmessages/src/auth"
@@ -247,7 +246,7 @@ func runComplianceReport(ctx context.Context, args []string, store *database.Sto
 	for _, standard := range standards {
 		fmt.Printf("  %s: %t\n", standard.name, standard.on)
 	}
-	fmt.Printf("Retention: privacy=%s; security reports=%d days\n", valueOr(configuration.Server.Privacy.Retention.Period, "not configured"), configuration.Server.Security.Reports.RetentionDays)
+	fmt.Printf("Retention: privacy=%s; security reports=%d days\n", configuration.Server.Privacy.Retention.PeriodForLanguage("en"), configuration.Server.Security.Reports.RetentionDays)
 	fmt.Printf("Counts: owners=%d resources=%d active_tokens=%d open_security_reports=%d\n", owners, resources, tokens, reports)
 	fmt.Println("Compliance events in the last 30 days:")
 	for events.Next() {
@@ -296,11 +295,4 @@ func newComplianceRequestID() (string, error) {
 		return "", fmt.Errorf("generate request id: %w", err)
 	}
 	return hex.EncodeToString(value[:]), nil
-}
-
-func valueOr(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return value
 }

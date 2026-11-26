@@ -155,7 +155,7 @@ func currentAuthStore() *auth.Store {
 	return authStore
 }
 
-func registerTokenRoutes(mux *http.ServeMux) {
+func registerTokenRoutes(mux routeRegistrar) {
 	mux.HandleFunc("/server/preferences/tokens", tokenPageOrAction)
 	mux.HandleFunc("/server/preferences/token/create", tokenWebAction("create"))
 	mux.HandleFunc("/server/preferences/token/restore", tokenWebAction("restore"))

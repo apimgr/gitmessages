@@ -208,7 +208,14 @@ func waitForChrome(ctx context.Context, endpoint string) error {
 
 func TestSSRPagesContainRenderedContent(t *testing.T) {
 	baseURL := e2eServerURL()
-	for _, route := range []string{"/", "/types", "/templates", "/builder", "/server/about", "/server/help", "/server/help/mcp", "/server/healthz", "/server/privacy", "/server/terms", "/server/security", "/server/contact", "/server/preferences", "/server/docs/swagger", "/server/docs/graphql"} {
+	for _, route := range []string{
+		"/", "/types", "/templates", "/builder",
+		"/server/about", "/server/help", "/server/help/mcp", "/server/healthz",
+		"/server/privacy", "/server/terms", "/server/security", "/server/security/policy",
+		"/server/security/thanks", "/server/contact", "/server/dpo", "/server/preferences",
+		"/server/preferences/sync", "/server/preferences/tokens",
+		"/server/docs/swagger", "/server/docs/graphql",
+	} {
 		t.Run(strings.Trim(route, "/"), func(t *testing.T) {
 			response, err := http.Get(baseURL + route)
 			if err != nil {
@@ -231,6 +238,9 @@ func TestSSRPagesContainRenderedContent(t *testing.T) {
 			}
 			if route == "/server/docs/graphql" && (!strings.Contains(body, `id="graphiql"`) || !strings.Contains(body, `src="/static/js/docs-graphql.js?`) || !strings.Contains(body, `name="query"`)) {
 				t.Fatal("GraphiQL page omitted its interactive explorer or no-JavaScript form")
+			}
+			if route == "/server/help" && strings.Count(body, `href="/server/help/mcp"`) != 1 {
+				t.Fatal("help page must link to MCP help exactly once through its More help hub")
 			}
 		})
 	}
@@ -423,16 +433,22 @@ func TestNoJavaScriptBuilderSubmitsMessage(t *testing.T) {
 
 func TestNoJavaScriptGraphQLFormSubmitsQuery(t *testing.T) {
 	browser := newBrowserContext(t)
-	var body string
+	var body, location string
 	runBrowserSteps(t, browser,
 		browserStep{name: "disable JavaScript", action: emulation.SetScriptExecutionDisabled(true)},
 		browserStep{name: "load GraphQL documentation", action: chromedp.Navigate(e2eServerURL() + "/server/docs/graphql")},
+		browserStep{name: "decline optional cookies", action: chromedp.Click(`#cookie-consent .btn-decline`)},
+		browserStep{name: "wait for consent redirect", action: chromedp.Sleep(time.Second)},
 		browserStep{name: "clear GraphQL query", action: chromedp.Clear(`#query`)},
 		browserStep{name: "set GraphQL query", action: chromedp.SendKeys(`#query`, "{ types { type } }")},
 		browserStep{name: "submit GraphQL query", action: chromedp.Click(`#graphql-nojs-heading + form button[type="submit"]`)},
-		browserStep{name: "wait for GraphQL response page", action: chromedp.WaitNotPresent(`#graphiql`, chromedp.ByQuery)},
+		browserStep{name: "wait for GraphQL response navigation", action: chromedp.Sleep(time.Second)},
+		browserStep{name: "read GraphQL response URL", action: chromedp.Location(&location)},
 		browserStep{name: "read GraphQL response", action: chromedp.Text("body", &body, chromedp.ByQuery)},
 	)
+	if !strings.Contains(location, "/api/v1/server/graphql") {
+		t.Fatalf("no-JavaScript GraphQL form navigated to %q instead of its response page", location)
+	}
 	if !strings.Contains(body, `"types"`) || !strings.Contains(body, `"feat"`) {
 		t.Fatalf("no-JavaScript GraphQL form did not return the catalog: %s", body)
 	}

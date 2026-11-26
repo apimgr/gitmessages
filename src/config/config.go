@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	cryptorand "crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -45,6 +46,7 @@ type ServerConfig struct {
 	FQDN           string               `yaml:"fqdn"`
 	Address        string               `yaml:"address"`
 	Mode           string               `yaml:"mode"`
+	Debug          DebugConfig          `yaml:"debug"`
 	Update         UpdateConfig         `yaml:"update"`
 	CLI            CLIConfig            `yaml:"cli"`
 	CORS           CORSConfig           `yaml:"cors"`
@@ -67,10 +69,22 @@ type ServerConfig struct {
 	TrustedProxies TrustedProxiesConfig `yaml:"trusted_proxies"`
 	RateLimit      RateLimitConfig      `yaml:"rate_limit"`
 	Privacy        PrivacyConfig        `yaml:"privacy"`
+	Tracking       TrackingConfig       `yaml:"tracking"`
 	Branding       BrandingConfig       `yaml:"branding"`
 	SEO            SEOConfig            `yaml:"seo"`
 	Healthz        HealthzConfig        `yaml:"healthz"`
 	URLDetection   URLDetectionConfig   `yaml:"url_detection"`
+}
+
+type DebugConfig struct {
+	Pprof                bool   `yaml:"pprof"`
+	LogQueries           bool   `yaml:"log_queries"`
+	LogCache             bool   `yaml:"log_cache"`
+	LogBodies            bool   `yaml:"log_bodies"`
+	MaxBodyLogSize       string `yaml:"max_body_log_size"`
+	BlockProfileRate     int    `yaml:"block_profile_rate"`
+	MutexProfileFraction int    `yaml:"mutex_profile_fraction"`
+	RuntimeEndpoints     bool   `yaml:"runtime_endpoints"`
 }
 
 type DatabaseConfig struct {
@@ -228,6 +242,67 @@ type URLDetectionConfig struct {
 	LiveReload   bool   `yaml:"live_reload"`
 }
 
+type TrackingConfig struct {
+	Type string `yaml:"type"`
+	ID   string `yaml:"id"`
+	URL  string `yaml:"url"`
+}
+
+func ValidateTracking(cfg *TrackingConfig) error {
+	if cfg == nil {
+		return errors.New("tracking configuration is required")
+	}
+	cfg.Type = strings.ToLower(strings.TrimSpace(cfg.Type))
+	cfg.ID = strings.TrimSpace(cfg.ID)
+	cfg.URL = strings.TrimSpace(cfg.URL)
+	if cfg.Type == "" || cfg.Type == "none" {
+		return nil
+	}
+	validURL := func(value string) bool {
+		parsed, err := url.Parse(value)
+		return err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == ""
+	}
+	switch cfg.Type {
+	case "google":
+		if !regexp.MustCompile(`^(UA-\d+-\d+|G-[A-Z0-9]+)$`).MatchString(cfg.ID) {
+			return errors.New("invalid Google Analytics ID format")
+		}
+	case "matomo", "piwik":
+		if _, err := strconv.Atoi(cfg.ID); err != nil {
+			return fmt.Errorf("%s ID must be an integer", cfg.Type)
+		}
+		if !validURL(cfg.URL) {
+			return fmt.Errorf("%s requires a valid URL", cfg.Type)
+		}
+	case "owa":
+		if cfg.ID == "" || !validURL(cfg.URL) {
+			return errors.New("OWA requires a site ID and valid URL")
+		}
+	case "fathom", "plausible":
+		if cfg.ID == "" {
+			return fmt.Errorf("%s requires an ID", cfg.Type)
+		}
+		if cfg.Type == "plausible" && !regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$`).MatchString(cfg.ID) {
+			return errors.New("plausible ID must be a domain")
+		}
+		if cfg.URL != "" && !validURL(cfg.URL) {
+			return fmt.Errorf("invalid %s URL", cfg.Type)
+		}
+	case "umami":
+		if !regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(cfg.ID) || !validURL(cfg.URL) {
+			return errors.New("umami requires a valid UUID and URL")
+		}
+	case "simple":
+	case "cloudflare":
+		if cfg.ID == "" {
+			return errors.New("cloudflare requires a beacon token")
+		}
+	default:
+		return fmt.Errorf("unknown tracking type: %s", cfg.Type)
+	}
+	return nil
+}
+
 type PrivacyConfig struct {
 	Data       PrivacyDataConfig       `yaml:"data"`
 	Retention  PrivacyRetentionConfig  `yaml:"retention"`
@@ -249,9 +324,38 @@ type PrivacySharingConfig struct {
 }
 
 type PrivacyRetentionConfig struct {
-	Period            string `yaml:"period"`
-	ExportAvailable   bool   `yaml:"export_available"`
-	DeletionAvailable bool   `yaml:"deletion_available"`
+	Period            any  `yaml:"period"`
+	ExportAvailable   bool `yaml:"export_available"`
+	DeletionAvailable bool `yaml:"deletion_available"`
+}
+
+// PeriodForLanguage resolves an operator-provided retention string or language map.
+func (r PrivacyRetentionConfig) PeriodForLanguage(language string) string {
+	values := make(map[string]any)
+	switch value := r.Period.(type) {
+	case string:
+		if text := strings.TrimSpace(value); text != "" {
+			return value
+		}
+	case map[string]any:
+		values = value
+	case map[string]string:
+		for key, text := range value {
+			values[key] = text
+		}
+	case map[any]any:
+		for key, text := range value {
+			if name, ok := key.(string); ok {
+				values[name] = text
+			}
+		}
+	}
+	for _, key := range []string{language, "default"} {
+		if text, ok := values[key].(string); ok && strings.TrimSpace(text) != "" {
+			return text
+		}
+	}
+	return i18n.T(language, "privacy.retention.period")
 }
 
 type PrivacyConsentConfig struct {
@@ -259,8 +363,9 @@ type PrivacyConsentConfig struct {
 	Message               string `yaml:"message"`
 	MessageIfSold         string `yaml:"message_if_sold"`
 	Policy                struct {
-		Text string `yaml:"text"`
-		URL  string `yaml:"url"`
+		Text    string `yaml:"text"`
+		URL     string `yaml:"url"`
+		Version string `yaml:"version"`
 	} `yaml:"policy"`
 	Buttons struct {
 		Decline string `yaml:"decline"`
@@ -368,6 +473,12 @@ type DPOContactConfig struct {
 
 type PagesConfig struct {
 	Contact ContactPageConfig `yaml:"contact"`
+	Help    HelpPageConfig    `yaml:"help"`
+}
+
+type HelpPageConfig struct {
+	Content string `yaml:"content"`
+	MCP     string `yaml:"mcp"`
 }
 
 type ContactPageConfig struct {
@@ -464,11 +575,12 @@ type EmailFromConfig struct {
 }
 
 type SecurityConfig struct {
-	EncryptionKey string                `yaml:"encryption_key"`
-	Reports       SecurityReportsConfig `yaml:"reports"`
-	Allowlist     []AllowlistEntry      `yaml:"allowlist"`
-	BlockedIPs    []BlockedIPEntry      `yaml:"blocked_ips"`
-	Blocklists    BlocklistsConfig      `yaml:"blocklists"`
+	EncryptionKey        string                `yaml:"encryption_key"`
+	EncryptionKeyVersion int                   `yaml:"encryption_key_version"`
+	Reports              SecurityReportsConfig `yaml:"reports"`
+	Allowlist            []AllowlistEntry      `yaml:"allowlist"`
+	BlockedIPs           []BlockedIPEntry      `yaml:"blocked_ips"`
+	Blocklists           BlocklistsConfig      `yaml:"blocklists"`
 }
 
 type SecurityReportsConfig struct {
@@ -725,6 +837,11 @@ type WebConfig struct {
 	UI       WebUIConfig       `yaml:"ui"`
 	Robots   WebRobotsConfig   `yaml:"robots"`
 	Security WebSecurityConfig `yaml:"security"`
+	Headers  WebHeadersConfig  `yaml:"headers"`
+}
+
+type WebHeadersConfig struct {
+	HonorDNT bool `yaml:"honor_dnt"`
 }
 
 // WebRobotsConfig contains robots.txt settings
@@ -765,6 +882,7 @@ func DefaultConfig() *Config {
 			FQDN:       "",
 			Address:    initialAddress(),
 			Mode:       "production",
+			Debug:      DebugConfig{Pprof: true, LogQueries: true, LogCache: true, MaxBodyLogSize: "10KB", BlockProfileRate: 1, MutexProfileFraction: 1, RuntimeEndpoints: true},
 			Branding:   BrandingConfig{Title: "Git Messages"},
 			I18N:       I18NConfig{DefaultLanguage: "en", AvailableLanguages: []string{"en", "es", "fr", "de", "it", "ar"}},
 			SEO: SEOConfig{
@@ -806,7 +924,7 @@ func DefaultConfig() *Config {
 			},
 			Logging: LoggingConfig{
 				AccessFormat: "apache",
-				Level:        "info",
+				Level:        "",
 				Defaults:     LogDefaultsConfig{Rotate: "weekly,50MB", Keep: "none"},
 				Access:       LogKindConfig{Format: "apache", Rotate: "monthly"},
 				Server:       LogKindConfig{Format: "text"},
@@ -843,15 +961,21 @@ func DefaultConfig() *Config {
 				},
 				DiskLow: DiskLowNotificationConfig{Enabled: true, ThresholdPercent: 85, CheckInterval: "5m", Repeat: "24h"},
 			},
-			Pages: PagesConfig{Contact: ContactPageConfig{
-				Enabled: true, Captcha: "simple", SuccessMessage: "Thank you for your report.",
-				Antispam: ContactAntispamConfig{
-					Honeypot: true, MinFillSeconds: 3, MaxAgeSeconds: 43200,
-					PerIP: 5, PerEmail: 3, Global: 60, Window: "1h", MaxLinks: 10,
-					RejectMarkup: true, Strikes: 3, BanHours: 24,
-					ReviewMinSeconds: 2, ReviewMaxSeconds: 900, DuplicateWindowHours: 24,
+			Pages: PagesConfig{
+				Contact: ContactPageConfig{
+					Enabled: true, Captcha: "simple", SuccessMessage: "Thank you for your report.",
+					Antispam: ContactAntispamConfig{
+						Honeypot: true, MinFillSeconds: 3, MaxAgeSeconds: 43200,
+						PerIP: 5, PerEmail: 3, Global: 60, Window: "1h", MaxLinks: 10,
+						RejectMarkup: true, Strikes: 3, BanHours: 24,
+						ReviewMinSeconds: 2, ReviewMaxSeconds: 900, DuplicateWindowHours: 24,
+					},
 				},
-			}},
+				Help: HelpPageConfig{
+					Content: "Git Messages provides a curated catalog of commit types, conventions and templates, plus random examples and a stateless message builder. Read-only catalog endpoints are public; the message builder validates and formats input without storing it.",
+					MCP:     "Use `list_commit_types`, `list_conventions`, `list_templates` and `get_random_example` to browse the curated catalog. Use `build_commit_message` to validate and format a commit message. For example, ask: **Build a Conventional Commit message of type `feat`, scope `api`, and description `add message search`.** The MCP tools do not accept catalog submissions or manage tokens.",
+				},
+			},
 		},
 		Data: DataConfig{CVE: CVEConfig{Source: "https://services.nvd.nist.gov/rest/json/cves/2.0"}, Trivy: TrivyConfig{Enabled: false, Source: "ghcr.io/aquasecurity/trivy-db:2"}},
 		Web: WebConfig{
@@ -891,21 +1015,22 @@ func defaultPrivacyConfig() PrivacyConfig {
 	privacy := PrivacyConfig{
 		Data: PrivacyDataConfig{
 			Sold: false, StoredOnServer: true,
-			Sharing: []PrivacySharingConfig{{Condition: "email", When: "A visitor submits a contact or security report and email delivery is configured", Data: "Sender email address and report content"}},
+			Sharing: []PrivacySharingConfig{{Condition: "email", When: "SMTP is configured for sending contact or security-report email", Data: "Sender email address and report content"}},
 		},
-		Retention: PrivacyRetentionConfig{Period: "The catalog is embedded in the application and is not visitor-submitted. Browser preferences are stored in cookies. Operational and report data is retained according to the server operator's configuration.", ExportAvailable: false, DeletionAvailable: false},
+		Retention: PrivacyRetentionConfig{Period: "", ExportAvailable: true, DeletionAvailable: true},
 		Cookies: PrivacyCookiesConfig{
-			Essential:   PrivacyCookieCategory{Enabled: true, Description: "Required for the site to function, including security tokens and the site build marker."},
-			Preferences: PrivacyCookieCategory{Enabled: true, Description: "Remember browser choices such as theme and language."},
+			Essential:   PrivacyCookieCategory{Enabled: true, Description: "Required for the site to function. Includes the owner cookie, security tokens (CSRF) and the consent cookie itself. The theme and language preferences are not essential and require consent."},
+			Preferences: PrivacyCookieCategory{Enabled: true, Description: "Remember settings such as theme, language and interface preferences after consent."},
 			Analytics:   PrivacyAnalyticsCookie{PrivacyCookieCategory: PrivacyCookieCategory{Enabled: true, Description: "Help understand how visitors use the site."}, DescriptionSuffixNotSold: "Analytics data is anonymized and never sold.", DescriptionSuffixSold: "Analytics data may be shared with third parties."},
 		},
 		ThirdParty: PrivacyThirdPartyConfig{Services: []PrivacyThirdPartyService{}},
 	}
 	privacy.Consent.ShowUntilAcknowledged = true
-	privacy.Consent.Message = "We use cookies for essential site functionality and, with your consent, for preferences and analytics. Your data is stored on our servers and is never sold."
-	privacy.Consent.MessageIfSold = "We use cookies for essential site functionality and, with your consent, for preferences and analytics. Your data may be shared with or sold to third parties as described in our Privacy Policy."
+	privacy.Consent.Message = "In accordance with the EU GDPR law this message is being displayed. We use cookies for essential site functionality and, with your consent, for preferences and analytics. Your data is stored on our servers and is never sold."
+	privacy.Consent.MessageIfSold = "In accordance with the EU GDPR law this message is being displayed. We use cookies for essential site functionality and, with your consent, for preferences and analytics. Your data may be shared with or sold to third parties as described in our Privacy Policy."
 	privacy.Consent.Policy.Text = "Privacy Policy"
 	privacy.Consent.Policy.URL = "/server/privacy"
+	privacy.Consent.Policy.Version = "1"
 	privacy.Consent.Buttons.Decline = "Decline"
 	privacy.Consent.Buttons.Accept = "I Agree"
 	privacy.Consent.Position = "bottom"
@@ -1214,7 +1339,9 @@ func loadMergedConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("encode merged configuration: %w", err)
 	}
 	cfg := DefaultConfig()
-	if err := yaml.Unmarshal(encoded, cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(encoded))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
 		return nil, fmt.Errorf("decode merged configuration: %w", err)
 	}
 	if err := validate(cfg); err != nil {
@@ -1981,6 +2108,10 @@ func validate(cfg *Config) error {
 		warnInvalid("server.update.defer_days")
 		cfg.Server.Update.DeferDays = defaults.Server.Update.DeferDays
 	}
+	if err := ValidateTracking(&cfg.Server.Tracking); err != nil {
+		return fmt.Errorf("invalid server.tracking configuration: %w", err)
+	}
+	validatePrivacyRetention(&cfg.Server.Privacy.Retention, defaults.Server.Privacy.Retention)
 	if cfg.Web.UI.Theme != "dark" && cfg.Web.UI.Theme != "light" && cfg.Web.UI.Theme != "auto" {
 		warnInvalid("web.ui.theme")
 		cfg.Web.UI.Theme = defaults.Web.UI.Theme
@@ -2291,6 +2422,28 @@ func applySMTPEnvironment(cfg *Config) error {
 		}
 	}
 	return nil
+}
+
+func validatePrivacyRetention(retention *PrivacyRetentionConfig, defaults PrivacyRetentionConfig) {
+	switch value := retention.Period.(type) {
+	case string:
+	case map[string]any:
+		for key, text := range value {
+			if key != "default" && !i18n.IsSupported(key) {
+				warnInvalid("server.privacy.retention.period")
+				retention.Period = defaults.Period
+				return
+			}
+			if _, ok := text.(string); !ok {
+				warnInvalid("server.privacy.retention.period")
+				retention.Period = defaults.Period
+				return
+			}
+		}
+	default:
+		warnInvalid("server.privacy.retention.period")
+		retention.Period = defaults.Period
+	}
 }
 
 func warnInvalid(key string) {

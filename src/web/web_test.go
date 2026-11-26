@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,7 +142,7 @@ func TestAboutPageIncludesRequiredGeoIPAttribution(t *testing.T) {
 func TestPublicPagesAndAPI(t *testing.T) {
 	SetCORSOrigins([]string{"*"})
 	handler := Handler("test-version")
-	for _, path := range []string{"/", "/types", "/templates", "/builder", "/server/about", "/server/help", "/server/help/mcp", "/server/healthz", "/server/privacy", "/server/terms", "/server/security", "/server/preferences", "/.well-known/security.txt", "/server/docs/swagger", "/server/docs/graphql", "/manifest.json", "/icon.svg", "/styles.css", "/locales/en.json", "/sw.js", "/static/js/docs-swagger.js", "/static/js/docs-graphql.js", "/static/vendor/swagger-ui/swagger-ui-bundle.js", "/static/js/graphiql-compat.js", "/static/vendor/graphiql/graphiql.min.js", "/theme.js", "/api/healthz", "/api/v1", "/api/v1/types", "/api/v1/conventions", "/api/v1/templates", "/api/v1/templates/random", "/api/v1/messages/random", "/api/v1/server/healthz", "/api/v1/server/about", "/api/v1/server/help", "/api/v1/server/help/mcp", "/api/v1/server/privacy", "/api/v1/server/terms", "/api/v1/server/security", "/api/v1/server/preferences", "/api/v1/server/swagger"} {
+	for _, path := range []string{"/", "/types", "/templates", "/builder", "/server/about", "/server/help", "/server/help/mcp", "/server/healthz", "/server/privacy", "/server/terms", "/server/security", "/server/preferences", "/.well-known/security.txt", "/server/docs/swagger", "/server/docs/graphql", "/manifest.json", "/icon.svg", "/styles.css", "/locales/en.json", "/sw.js", "/static/js/docs-swagger.js", "/static/js/docs-graphql.js", "/static/vendor/swagger-ui/swagger-ui-bundle.js", "/static/js/graphiql-compat.js", "/static/vendor/graphiql/graphiql.min.js", "/static/js/app.js", "/api/healthz", "/api/v1", "/api/v1/types", "/api/v1/conventions", "/api/v1/templates", "/api/v1/templates/random", "/api/v1/messages/random", "/api/v1/server/healthz", "/api/v1/server/about", "/api/v1/server/help", "/api/v1/server/help/mcp", "/api/v1/server/privacy", "/api/v1/server/terms", "/api/v1/server/security", "/api/v1/server/preferences", "/api/v1/server/swagger"} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, webTestRequest(http.MethodGet, path, nil))
 		if recorder.Code == http.StatusNotFound {
@@ -546,7 +547,8 @@ func assertPageConformance(t *testing.T, source string) {
 		}
 		if node.Data == "input" || node.Data == "select" || node.Data == "textarea" {
 			inputName := attrs["type"] == "submit" || attrs["type"] == "button" || attrs["type"] == "reset"
-			if attrs["type"] != "hidden" && attrs["aria-label"] == "" && attrs["aria-labelledby"] == "" && !hasAssociatedLabel(node, attrs["id"], nodes) && !(inputName && attrs["value"] != "") {
+			accessibleName := attrs["aria-label"] != "" || attrs["aria-labelledby"] != "" || hasAssociatedLabel(node, attrs["id"], nodes) || inputName && attrs["value"] != ""
+			if attrs["type"] != "hidden" && !accessibleName {
 				t.Errorf("<%s> control is missing a label", node.Data)
 			}
 		}
@@ -1063,9 +1065,12 @@ func parseIDEAAPIRoutes(specification, apiVersion string) ([]ideaAPIRoute, error
 
 func TestMCPHelpPageAndAPIStayAligned(t *testing.T) {
 	handler := Handler("test-version")
+	request := webTestRequest(http.MethodGet, "/server/help/mcp", nil)
+	request.Host = "docs.example.test"
+	mcpURL := BuildURL(request, APIBasePath()+"/server/mcp")
 	page := httptest.NewRecorder()
-	handler.ServeHTTP(page, webTestRequest(http.MethodGet, "/server/help/mcp", nil))
-	for _, expected := range []string{`id="overview"`, `id="endpoint"`, `id="authentication"`, `id="connect"`, `id="tools"`, `id="limits"`, `id="troubleshooting"`, `id="project"`, "build_commit_message", `data-copy-text="/mcp"`} {
+	handler.ServeHTTP(page, request)
+	for _, expected := range []string{`id="overview"`, `id="endpoint"`, `id="authentication"`, `id="connect"`, `id="tools"`, `id="limits"`, `id="troubleshooting"`, `id="project"`, "build_commit_message", "claude mcp add --transport http gitmessages " + mcpURL, "Mcp-Method: tools/list", `data-copy-text="` + BuildURL(request, "/mcp") + `"`} {
 		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), expected) {
 			t.Errorf("MCP help page missing %q: %d", expected, page.Code)
 		}
@@ -1075,9 +1080,48 @@ func TestMCPHelpPageAndAPIStayAligned(t *testing.T) {
 	}
 	api := httptest.NewRecorder()
 	handler.ServeHTTP(api, webTestRequest(http.MethodGet, "/api/v1/server/help/mcp", nil))
-	for _, expected := range []string{"/api/v1/server/mcp", "list_commit_types", "build_commit_message"} {
+	for _, expected := range []string{"/api/v1/server/mcp", "list_commit_types", "build_commit_message", `"scheme": "Bearer"`, `"project"`} {
 		if api.Code != http.StatusOK || !strings.Contains(api.Body.String(), expected) {
 			t.Errorf("MCP help API missing %q: %d", expected, api.Code)
+		}
+	}
+}
+
+func TestServerRootRedirectsToAbout(t *testing.T) {
+	response := httptest.NewRecorder()
+	Handler("test-version").ServeHTTP(response, webTestRequest(http.MethodGet, "/server", nil))
+	location, err := url.Parse(response.Header().Get("Location"))
+	if err != nil || response.Code != http.StatusMovedPermanently || location.Path != "/server/about" {
+		t.Fatalf("/server redirect = %d %q", response.Code, response.Header().Get("Location"))
+	}
+}
+
+func TestCCPAOptOutAndOptInForm(t *testing.T) {
+	privacy := &config.Get().Server.Privacy
+	original := privacy.Data.Sold
+	privacy.Data.Sold = true
+	t.Cleanup(func() { privacy.Data.Sold = original })
+
+	pageRequest := webTestRequest(http.MethodGet, "/server/privacy", nil)
+	page := httptest.NewRecorder()
+	Handler("test-version").ServeHTTP(page, pageRequest)
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `action="/server/ccpa"`) || !strings.Contains(page.Body.String(), `name="choice" value="opt-out"`) {
+		t.Fatalf("privacy page omitted the CCPA opt-out form: %d %s", page.Code, page.Body.String())
+	}
+
+	for _, choice := range []string{"opt-out", "opt-in"} {
+		form := url.Values{"csrf_token": {"csrf-test"}, "choice": {choice}}
+		request := webTestRequest(http.MethodPost, "/server/ccpa", strings.NewReader(form.Encode()))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "csrf-test"})
+		response := httptest.NewRecorder()
+		Handler("test-version").ServeHTTP(response, request)
+		cookie := response.Result().Cookies()
+		if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/server/privacy#ccpa-opt-out" || len(cookie) == 0 || cookie[0].Name != "ccpa_opt_out" {
+			t.Fatalf("CCPA %s response = %d %q cookies=%#v", choice, response.Code, response.Header().Get("Location"), cookie)
+		}
+		if (choice == "opt-out") != (cookie[0].Value == "true") {
+			t.Errorf("CCPA %s cookie value = %q", choice, cookie[0].Value)
 		}
 	}
 }
@@ -1094,14 +1138,14 @@ func TestSecurityPageMirrorAndSecurityTxt(t *testing.T) {
 	if api.Code != http.StatusOK {
 		t.Fatalf("security API mirror returned %d: %s", api.Code, api.Body.String())
 	}
-	for _, field := range []string{`"contacts"`, `"policy_url"`, `"thanks_url"`} {
+	for _, field := range []string{`"contacts"`, `"policy_url"`, `"thanks_url"`, `/server/security/policy`} {
 		if !bytes.Contains(api.Body.Bytes(), []byte(field)) {
 			t.Errorf("security API mirror omitted %s: %s", field, api.Body.String())
 		}
 	}
 	text := httptest.NewRecorder()
 	handler.ServeHTTP(text, webTestRequest(http.MethodGet, "/.well-known/security.txt", nil))
-	for _, expected := range []string{"Contact: https://github.com/apimgr/gitmessages/security/advisories/new", "Expires:", "Policy:"} {
+	for _, expected := range []string{"Contact: https://github.com/apimgr/gitmessages/security/advisories/new", "Expires:", "/server/security/policy"} {
 		if text.Code != http.StatusOK || !strings.Contains(text.Body.String(), expected) {
 			t.Errorf("security.txt missing %q: %s", expected, text.Body.String())
 		}
@@ -1179,17 +1223,17 @@ func TestCORSUsesConfiguredOrigins(t *testing.T) {
 func TestServerPolicyPagesHaveMatchingAPIResponses(t *testing.T) {
 	handler := Handler("test-version")
 	for _, route := range []struct {
-		path string
-		key  string
+		path     string
+		expected string
 	}{
-		{path: "/api/v1/server/privacy", key: "privacy.title"},
-		{path: "/api/v1/server/terms", key: "terms.title"},
+		{path: "/api/v1/server/privacy", expected: `"data_stored_on_server"`},
+		{path: "/api/v1/server/terms", expected: i18n.T("en", "terms.title")},
 	} {
 		request := webTestRequest(http.MethodGet, route.path, nil)
 		request.Header.Set("Accept", "application/json")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
-		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(i18n.T("en", route.key))) {
+		if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(route.expected)) {
 			t.Errorf("%s response = %d %s", route.path, response.Code, response.Body.String())
 		}
 	}
@@ -1284,9 +1328,9 @@ func TestThemePreferenceUsesCookieAndServerRenderedMarkup(t *testing.T) {
 	}
 
 	script := httptest.NewRecorder()
-	handler.ServeHTTP(script, webTestRequest(http.MethodGet, "/theme.js", nil))
-	if strings.Contains(script.Body.String(), "localStorage") || strings.Contains(script.Body.String(), "document.cookie") {
-		t.Fatal("theme changes must work through the server form without JavaScript")
+	handler.ServeHTTP(script, webTestRequest(http.MethodGet, "/static/js/app.js", nil))
+	if !strings.Contains(script.Body.String(), "cookie-preferences") || !strings.Contains(script.Body.String(), "navigator.serviceWorker") {
+		t.Fatal("shared app script omitted preferences or PWA behavior")
 	}
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, webTestRequest(http.MethodGet, "/", nil))
@@ -1319,7 +1363,7 @@ func TestPreferencesPageAndAPI(t *testing.T) {
 	if csrfCookie == nil {
 		t.Fatal("preferences page did not set its CSRF cookie")
 	}
-	preferencesPost := webTestRequest(http.MethodPost, "/server/preferences", strings.NewReader("csrf_token="+csrfCookie.Value+"&consent_form=1&lang=fr&theme=light"))
+	preferencesPost := webTestRequest(http.MethodPost, "/server/preferences", strings.NewReader("csrf_token="+csrfCookie.Value+"&consent_form=1&consent_preferences=on&lang=fr&theme=light"))
 	preferencesPost.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	preferencesPost.AddCookie(csrfCookie)
 	preferencesResponse := httptest.NewRecorder()
@@ -1342,6 +1386,11 @@ func TestPreferencesPageAndAPI(t *testing.T) {
 	postTheme := webTestRequest(http.MethodPost, "/server/preferences", strings.NewReader("csrf_token="+csrfCookie.Value+"&theme=dark&redirect=%2Fserver%2Fabout"))
 	postTheme.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	postTheme.AddCookie(csrfCookie)
+	for _, cookie := range preferencesResponse.Result().Cookies() {
+		if cookie.Name == "cookie_consent" {
+			postTheme.AddCookie(cookie)
+		}
+	}
 	posted := httptest.NewRecorder()
 	handler.ServeHTTP(posted, postTheme)
 	if posted.Code != http.StatusSeeOther || posted.Header().Get("Location") != "/server/about" {
@@ -1357,6 +1406,60 @@ func TestPreferencesPageAndAPI(t *testing.T) {
 	handler.ServeHTTP(apiResponse, apiRequest)
 	if apiResponse.Code != http.StatusOK || !strings.Contains(apiResponse.Body.String(), `"theme": "light"`) {
 		t.Fatalf("preferences API returned %d: %s", apiResponse.Code, apiResponse.Body.String())
+	}
+}
+
+func TestGraphQLBrowserFormReturnsHTMLDocument(t *testing.T) {
+	request := webTestRequest(http.MethodPost, "/api/v1/server/graphql", strings.NewReader("query=%7B+types+%7B+type+%7D+%7D"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Accept", "text/html,application/xhtml+xml")
+	response := httptest.NewRecorder()
+	Handler("test-version").ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Type"), "text/html") || !strings.Contains(response.Body.String(), `&#34;feat&#34;`) || strings.Contains(response.Body.String(), `id="graphiql"`) {
+		t.Fatalf("GraphQL form browser response = %d %q: %s", response.Code, response.Header().Get("Content-Type"), response.Body.String())
+	}
+}
+
+func TestPreferencesResetPreservesCredentialCookies(t *testing.T) {
+	handler := Handler("test-version")
+	pageResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pageResponse, webTestRequest(http.MethodGet, "/server/preferences", nil))
+	var csrf *http.Cookie
+	for _, cookie := range pageResponse.Result().Cookies() {
+		if cookie.Name == csrfCookieName {
+			csrf = cookie
+		}
+	}
+	if csrf == nil {
+		t.Fatal("preferences page omitted its CSRF cookie")
+	}
+	request := webTestRequest(http.MethodPost, "/server/preferences", strings.NewReader("csrf_token="+url.QueryEscape(csrf.Value)+"&action=reset"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.AddCookie(csrf)
+	request.AddCookie(&http.Cookie{Name: ownerCookieName, Value: "owner-credential"})
+	request.AddCookie(&http.Cookie{Name: "theme", Value: "light"})
+	request.AddCookie(&http.Cookie{Name: "lang", Value: "fr"})
+	request.AddCookie(&http.Cookie{Name: "cookie_consent", Value: "consent"})
+	request.AddCookie(&http.Cookie{Name: "ccpa_opt_out", Value: "true"})
+	request.AddCookie(&http.Cookie{Name: "gitmessages_build", Value: "old-build"})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther || response.Header().Get("Clear-Site-Data") != `"storage"` {
+		t.Fatalf("Reset response = %d Clear-Site-Data=%q", response.Code, response.Header().Get("Clear-Site-Data"))
+	}
+	deleted := make(map[string]bool)
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.MaxAge < 0 {
+			deleted[cookie.Name] = true
+		}
+	}
+	for _, name := range []string{"theme", "lang", "cookie_consent", "ccpa_opt_out", "gitmessages_build"} {
+		if !deleted[name] {
+			t.Errorf("Reset did not delete %q", name)
+		}
+	}
+	if deleted[ownerCookieName] || deleted[csrfCookieName] {
+		t.Fatalf("Reset deleted a credential cookie: %#v", response.Result().Cookies())
 	}
 }
 
@@ -1507,8 +1610,8 @@ func TestVersionedAssetCachingAndPurge(t *testing.T) {
 		}
 	}
 	installScript := httptest.NewRecorder()
-	handler.ServeHTTP(installScript, webTestRequest(http.MethodGet, "/theme.js", nil))
-	for _, marker := range []string{"beforeinstallprompt", "appinstalled", "display-mode: standalone", "hasDirtyForm", "X-Build", "appURL('/sw.js')"} {
+	handler.ServeHTTP(installScript, webTestRequest(http.MethodGet, "/static/js/app.js", nil))
+	for _, marker := range []string{"beforeinstallprompt", "appinstalled", "display-mode: standalone", "hasDirtyForm", "X-Build", "navigator.serviceWorker.register"} {
 		if !strings.Contains(installScript.Body.String(), marker) {
 			t.Errorf("PWA script omitted install behavior %q", marker)
 		}
@@ -1609,8 +1712,10 @@ func TestLanguageSelection(t *testing.T) {
 	if recorder.Code != http.StatusOK || !bytes.Contains(recorder.Body.Bytes(), []byte(`<html lang="ar" dir="rtl"`)) || !bytes.Contains(recorder.Body.Bytes(), []byte("استكشف")) {
 		t.Fatalf("Arabic page was not localized: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if cookie := recorder.Result().Cookies(); len(cookie) == 0 || cookie[0].Name != "lang" || cookie[0].Value != "ar" || cookie[0].HttpOnly {
-		t.Fatalf("language preference cookie missing or unsafe: %#v", cookie)
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == "lang" {
+			t.Fatalf("language preference persisted without consent: %#v", cookie)
+		}
 	}
 
 	request = webTestRequest(http.MethodGet, "/", nil)

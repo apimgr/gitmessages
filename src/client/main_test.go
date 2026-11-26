@@ -248,6 +248,12 @@ func TestClientShellIntegrationAutoDetectsAndValidatesArguments(t *testing.T) {
 	}
 }
 
+func TestClientRejectsInvalidColorMode(t *testing.T) {
+	if err := run([]string{"--color", "sometimes"}); err == nil {
+		t.Fatal("invalid color mode was accepted")
+	}
+}
+
 func TestTerminalSetupAndDisplaySelection(t *testing.T) {
 	configHome := clientTestDir(t)
 	t.Setenv("XDG_CONFIG_HOME", configHome)

@@ -146,7 +146,7 @@ func TestContactPagesExposeProviderFallbackAndFreshCaptchaErrors(t *testing.T) {
 	if reviewResponse.Code != http.StatusOK || !strings.Contains(reviewResponse.Body.String(), tr(webTestRequest(http.MethodGet, "/server/contact", nil), "contact.review_title")) || strings.Count(reviewResponse.Body.String(), `<h1 class="page-title">`) != 1 {
 		t.Fatalf("valid HTML report did not reach review: status=%d body=%s", reviewResponse.Code, reviewResponse.Body.String())
 	}
-	if strings.Count(reviewResponse.Body.String(), `name="csrf_token"`) != 3 {
+	if strings.Count(reviewResponse.Body.String(), `name="csrf_token"`) != 5 {
 		t.Fatalf("contact review forms omitted CSRF tokens: %s", reviewResponse.Body.String())
 	}
 	missingCSRF := make(url.Values, len(formValues))
@@ -409,7 +409,7 @@ func TestSecurityURLsUseTrustedProxyBuildURL(t *testing.T) {
 	request.Header.Set("X-Forwarded-Proto", "https")
 	request.Header.Set("X-Forwarded-Prefix", "/app")
 	body := securityTextBody(request)
-	if !strings.Contains(body, "Policy: https://public.example.test/app/server/security\n") {
+	if !strings.Contains(body, "Policy: https://public.example.test/app/server/security/policy\n") {
 		t.Fatalf("security.txt policy URL did not use BuildURL: %s", body)
 	}
 	pageResponse := httptest.NewRecorder()
