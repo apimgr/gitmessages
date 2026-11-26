@@ -75,7 +75,7 @@ func currentContactService() (*contact.Service, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	secret, err := contact.InstallationSecret(ctx, store)
+	secret, previousSecrets, err := contact.InstallationSecretValues(ctx, store, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func currentContactService() (*contact.Service, error) {
 	if err != nil || window <= 0 {
 		window = time.Hour
 	}
-	settings := contact.Settings{MinFill: antispam.MinFillSeconds, MaxAge: antispam.MaxAgeSeconds, ReviewMin: antispam.ReviewMinSeconds, ReviewMax: antispam.ReviewMaxSeconds, PerIP: antispam.PerIP, PerEmail: antispam.PerEmail, Global: antispam.Global, Window: window, MaxLinks: antispam.MaxLinks, Strikes: antispam.Strikes, BanHours: antispam.BanHours, DuplicateHours: antispam.DuplicateWindowHours, RejectMarkup: antispam.RejectMarkup, Honeypot: antispam.Honeypot, BlockedWords: antispam.BlockedWords, BlockedEmailDomains: antispam.BlockedEmailDomains, CaptchaProvider: cfg.Server.Pages.Contact.Captcha, CaptchaSecretKey: cfg.Server.Pages.Contact.CaptchaSecretKey}
+	settings := contact.Settings{MinFill: antispam.MinFillSeconds, MaxAge: antispam.MaxAgeSeconds, ReviewMin: antispam.ReviewMinSeconds, ReviewMax: antispam.ReviewMaxSeconds, PerIP: antispam.PerIP, PerEmail: antispam.PerEmail, Global: antispam.Global, Window: window, MaxLinks: antispam.MaxLinks, Strikes: antispam.Strikes, BanHours: antispam.BanHours, DuplicateHours: antispam.DuplicateWindowHours, RejectMarkup: antispam.RejectMarkup, Honeypot: antispam.Honeypot, BlockedWords: antispam.BlockedWords, BlockedEmailDomains: antispam.BlockedEmailDomains, CaptchaProvider: cfg.Server.Pages.Contact.Captcha, CaptchaSecretKey: cfg.Server.Pages.Contact.CaptchaSecretKey, PreviousSecrets: previousSecrets}
 	if configDir := config.ConfigDirectory(); configDir != "" {
 		if key, readErr := os.ReadFile(filepath.Join(configDir, "security", "pgp.pub.asc")); readErr == nil {
 			settings.ProjectPGPKey = key
@@ -300,7 +300,7 @@ func apiContact(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		kind := r.URL.Query().Get("type")
-		security := contact.ValidSecurityID(mustInstallationSecret(r, service), r.URL.Query().Get("security_id"), time.Now())
+		security := service.ValidSecurityID(r.URL.Query().Get("security_id"), time.Now())
 		if kind == "security" && !security {
 			writeError(w, r, http.StatusForbidden, "SECURITY_ID_REQUIRED", tr(r, "contact.error.security_id"))
 			return
@@ -400,18 +400,6 @@ func writeContactCaptchaError(w http.ResponseWriter, r *http.Request, service *c
 		return
 	}
 	writeJSON(w, r, http.StatusBadRequest, map[string]any{"ok": false, "error": "VALIDATION_FAILED", "message": tr(r, "contact.error.failure"), "details": map[string]any{"field": "captcha", "captcha": descriptor}})
-}
-
-func mustInstallationSecret(r *http.Request, service *contact.Service) []byte {
-	store := getContactStore()
-	if store == nil {
-		return nil
-	}
-	secret, err := contact.InstallationSecret(r.Context(), store)
-	if err != nil {
-		return nil
-	}
-	return secret
 }
 
 func getContactStore() *database.Store {
@@ -534,7 +522,7 @@ func renderContactForm(w http.ResponseWriter, r *http.Request, input *contact.Me
 	}
 	securityID := r.URL.Query().Get("security_id")
 	security := false
-	if secret, err := contact.InstallationSecret(r.Context(), getContactStore()); err == nil && contact.ValidSecurityID(secret, securityID, time.Now()) {
+	if service.ValidSecurityID(securityID, time.Now()) {
 		security = true
 	}
 	if kind != "" && kind != "abuse" && kind != "dmca" && kind != "privacy" {
@@ -828,8 +816,10 @@ func securityTextBody(r *http.Request) string {
 	if securityEmail != "" {
 		fmt.Fprintf(&body, "Contact: mailto:%s\n", securityEmail)
 	}
-	if _, err := os.Stat(pgpKeyPath()); err == nil {
-		fmt.Fprintf(&body, "Encryption: %s\n", BuildURL(r, "/.well-known/pgp-key.asc"))
+	if cfg.Web.Security.PublishPGPKey {
+		if _, fingerprint, available := pgpPublicInfo(); available {
+			fmt.Fprintf(&body, "Encryption: %s\n# PGP-Fingerprint: %s\n", BuildURL(r, "/.well-known/pgp-key.asc"), fingerprint)
+		}
 	}
 	fmt.Fprintf(&body, "Policy: %s\nExpires: %s\n", BuildURL(r, "/server/security/policy"), time.Now().UTC().AddDate(1, 0, 0).Format("2006-01-02T15:04:05Z"))
 	if !onion {
@@ -955,11 +945,11 @@ func apiContactSecurity(w http.ResponseWriter, r *http.Request) {
 	}
 	var pgpURL, fingerprint any
 	pgpAvailable := false
-	if key, err := os.ReadFile(pgpKeyPath()); err == nil {
-		if ring, parseErr := openpgp.ReadArmoredKeyRing(strings.NewReader(string(key))); parseErr == nil && len(ring) > 0 {
+	if _, value, available := pgpPublicInfo(); available {
+		fingerprint = value
+		pgpAvailable = true
+		if cfg.Web.Security.PublishPGPKey {
 			pgpURL = BuildURL(r, "/.well-known/pgp-key.asc")
-			fingerprint = strings.ToUpper(hex.EncodeToString(ring[0].PrimaryKey.Fingerprint[:]))
-			pgpAvailable = true
 		}
 	}
 	data := map[string]any{
@@ -980,6 +970,19 @@ func resolveBaseURL(r *http.Request) string        { return BuildURL(r, "") }
 
 func pgpKeyPath() string { return filepath.Join(config.ConfigDirectory(), "security", "pgp.pub.asc") }
 
+func pgpPublicInfo() ([]byte, string, bool) {
+	key, err := os.ReadFile(pgpKeyPath())
+	if err != nil {
+		return nil, "", false
+	}
+	ring, err := openpgp.ReadArmoredKeyRing(strings.NewReader(string(key)))
+	if err != nil || len(ring) == 0 {
+		return nil, "", false
+	}
+	fingerprint := strings.ToUpper(hex.EncodeToString(ring[0].PrimaryKey.Fingerprint[:]))
+	return key, fingerprint, true
+}
+
 func pgpKeyPage(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/.well-known/pgp-key.asc" {
 		http.NotFound(w, r)
@@ -990,8 +993,8 @@ func pgpKeyPage(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
-	key, err := os.ReadFile(pgpKeyPath())
-	if err != nil {
+	key, _, available := pgpPublicInfo()
+	if !config.Get().Web.Security.PublishPGPKey || !available {
 		http.NotFound(w, r)
 		return
 	}
@@ -1127,8 +1130,8 @@ func securityReportPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var expected, status, comment string
-	var lastUsed, closed sql.NullString
-	err := store.Read().QueryRowContext(r.Context(), "SELECT token_hash,status,researcher_comment,token_last_used,closed_at FROM security_reports WHERE tracking_id = ?", id).Scan(&expected, &status, &comment, &lastUsed, &closed)
+	var lastUsed, closed, disclosureDate sql.NullString
+	err := store.Read().QueryRowContext(r.Context(), "SELECT token_hash,status,researcher_comment,token_last_used,closed_at,disclosure_date FROM security_reports WHERE tracking_id = ?", id).Scan(&expected, &status, &comment, &lastUsed, &closed, &disclosureDate)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -1173,6 +1176,9 @@ func securityReportPage(w http.ResponseWriter, r *http.Request) {
 	body := `<section class="section-card" aria-labelledby="security-status"><h2 id="security-status">` + template.HTMLEscapeString(tr(r, "contact.status_title")) + `</h2><p><strong>` + template.HTMLEscapeString(tr(r, "contact.status")) + `:</strong> ` + template.HTMLEscapeString(label) + `</p>`
 	if comment != "" {
 		body += `<p><strong>` + template.HTMLEscapeString(tr(r, "contact.maintainer_comment")) + `:</strong> ` + template.HTMLEscapeString(comment) + `</p>`
+	}
+	if disclosureDate.Valid {
+		body += `<p><strong>` + template.HTMLEscapeString(tr(r, "contact.disclosure_date")) + `:</strong> <time datetime="` + template.HTMLEscapeString(disclosureDate.String) + `">` + template.HTMLEscapeString(disclosureDate.String) + `</time></p>`
 	}
 	body += `</section>`
 	page(w, r, tr(r, "contact.status_title"), template.HTML(body))

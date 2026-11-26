@@ -2,15 +2,20 @@ package web
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html"
 	"html/template"
 	"io"
+	"net"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,13 +23,15 @@ import (
 
 	"github.com/apimgr/gitmessages/src/auth"
 	"github.com/apimgr/gitmessages/src/common/i18n"
+	"github.com/apimgr/gitmessages/src/config"
+	"github.com/apimgr/gitmessages/src/database"
 )
 
 const (
 	ownerCookieName       = "gitmessages_owner_token_wtoavxex"
 	legacyOwnerCookieName = "gitmessages_owner_token_7gT2qA"
 	csrfCookieName        = "csrf_token"
-	tokenFlashCookieName  = "token_flash"
+	tokenFlashCookieName  = "gitmessages_token_view"
 )
 
 var (
@@ -35,13 +42,11 @@ var (
 	tokenFailureRate                      = map[string]tokenRateWindow{}
 	tokenStrictCount, tokenFailureCount   = 10, 5
 	tokenStrictWindow, tokenFailureWindow = 15 * time.Minute, 15 * time.Minute
-	tokenFlashMu                          sync.Mutex
-	tokenFlashes                          = map[string]tokenFlash{}
 )
 
 type tokenFlash struct {
-	value, toast string
-	expires      time.Time
+	card  string
+	toast string
 }
 
 func tokenText(r *http.Request, key string) string {
@@ -189,12 +194,15 @@ func tokenPageOrAction(w http.ResponseWriter, r *http.Request) {
 			writeHTTPError(w, r, err.Error(), http.StatusBadRequest)
 			return
 		}
-		raw, _, err := store.CreateLinked(r.Context(), identity.OwnerID, r.FormValue("name"), expires)
+		_, token, err := store.CreateLinked(r.Context(), identity.OwnerID, r.FormValue("name"), expires)
 		if err != nil {
 			writeHTTPError(w, r, "Unable to create linked token", http.StatusBadRequest)
 			return
 		}
-		setTokenFlash(w, raw, "tokens.toast_created")
+		if !setTokenFlash(w, r, strconv.FormatInt(token.ID, 10), "tokens.toast_created") {
+			writeHTTPError(w, r, "Token view is unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		http.Redirect(w, r, "/server/preferences/tokens#primary", http.StatusSeeOther)
 		return
 	}
@@ -210,10 +218,26 @@ func tokenPageOrAction(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, ok := ownerCookieIdentity(w, r, store)
 	flash, foundFlash := takeTokenFlash(w, r)
-	if foundFlash && flash.value != "" {
-		w.Header().Set("Cache-Control", "no-store")
-		tokenResultPage(w, r, flash.value, strings.TrimPrefix(flash.toast, "tokens."))
-		return
+	if foundFlash && ok {
+		tokens, listErr := store.List(r.Context(), identity.OwnerID)
+		if listErr != nil {
+			writeHTTPError(w, r, "Unable to load tokens", http.StatusInternalServerError)
+			return
+		}
+		var tokenID int64
+		if flash.card == "primary" {
+			tokenID = primaryToken(tokens).ID
+		} else {
+			tokenID, _ = strconv.ParseInt(flash.card, 10, 64)
+		}
+		if tokenID > 0 {
+			if token, revealErr := store.Reveal(r.Context(), identity.OwnerID, tokenID); revealErr == nil {
+				toast := strings.TrimPrefix(flash.toast, "tokens.")
+				w.Header().Set("Cache-Control", "no-store")
+				tokenResultPage(w, r, token.Value, toast)
+				return
+			}
+		}
 	}
 	csrf := ensureCSRFCookie(w, r)
 	var tokens []auth.Token
@@ -306,8 +330,11 @@ func tokenWebAction(action string) http.HandlerFunc {
 				writeHTTPError(w, r, "Unable to create token", 500)
 				return
 			}
-			setOwnerCookie(w, raw, store.CookieMaxAge())
-			setTokenFlash(w, raw, "tokens.toast_created")
+			setOwnerCookie(w, r, raw, store.CookieMaxAge())
+			if !setTokenFlash(w, r, "primary", "tokens.toast_created") {
+				writeHTTPError(w, r, "Token view is unavailable", http.StatusServiceUnavailable)
+				return
+			}
 			http.Redirect(w, r, "/server/preferences/tokens#primary", http.StatusSeeOther)
 		case "restore":
 			if err := r.ParseForm(); err != nil {
@@ -323,10 +350,10 @@ func tokenWebAction(action string) http.HandlerFunc {
 				writeHTTPError(w, r, "Invalid primary token", http.StatusUnauthorized)
 				return
 			}
-			setOwnerCookie(w, raw, store.CookieMaxAge())
+			setOwnerCookie(w, r, raw, store.CookieMaxAge())
 			http.Redirect(w, r, "/server/preferences/tokens", http.StatusSeeOther)
 		case "forget":
-			clearOwnerCookie(w)
+			clearOwnerCookie(w, r)
 			w.Header().Set("Clear-Site-Data", `"storage"`)
 			http.Redirect(w, r, "/server/preferences/tokens", http.StatusSeeOther)
 		case "primary-reveal", "primary-rotate":
@@ -335,8 +362,6 @@ func tokenWebAction(action string) http.HandlerFunc {
 				writeHTTPError(w, r, "Primary token required", http.StatusForbidden)
 				return
 			}
-			var raw string
-			var err error
 			if action == "primary-rotate" {
 				tokens, listErr := store.List(r.Context(), identity.OwnerID)
 				if listErr != nil {
@@ -344,25 +369,28 @@ func tokenWebAction(action string) http.HandlerFunc {
 					return
 				}
 				primary := primaryToken(tokens)
-				raw, _, err = store.Rotate(r.Context(), identity.OwnerID, primary.ID)
-				if err == nil {
-					setOwnerCookie(w, raw, store.CookieMaxAge())
+				raw, _, err := store.Rotate(r.Context(), identity.OwnerID, primary.ID)
+				if err != nil {
+					writeHTTPError(w, r, "Unable to access token", http.StatusInternalServerError)
+					return
 				}
-			} else {
-				token, revealErr := store.Reveal(r.Context(), identity.OwnerID, identity.TokenID)
-				raw, err = token.Value, revealErr
-			}
-			if err != nil {
-				writeHTTPError(w, r, "Unable to access token", 500)
-				return
-			}
-			if action == "primary-rotate" {
-				setTokenFlash(w, raw, "tokens.toast_rotated")
+				setOwnerCookie(w, r, raw, store.CookieMaxAge())
+				if rotateErr := store.Database().RotateAppSecret(r.Context(), "csrf_token_secret"); rotateErr != nil {
+					writeHTTPError(w, r, "Unable to rotate CSRF secret", http.StatusInternalServerError)
+					return
+				}
+				if !setTokenFlash(w, r, "primary", "tokens.toast_rotated") {
+					writeHTTPError(w, r, "Token view is unavailable", http.StatusServiceUnavailable)
+					return
+				}
 				http.Redirect(w, r, "/server/preferences/tokens#primary", http.StatusSeeOther)
 				return
 			}
-			w.Header().Set("Cache-Control", "no-store")
-			tokenResultPage(w, r, raw)
+			if !setTokenFlash(w, r, "primary", "") {
+				writeHTTPError(w, r, "Token view is unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			http.Redirect(w, r, "/server/preferences/tokens#primary", http.StatusSeeOther)
 		case "primary-revoke":
 			identity, ok := ownerCookieIdentity(w, r, store)
 			if !ok || identity.Kind != "primary" {
@@ -388,8 +416,8 @@ func tokenWebAction(action string) http.HandlerFunc {
 				writeHTTPError(w, r, tokenText(r, "revoke_failed"), http.StatusInternalServerError)
 				return
 			}
-			setTokenToast(w, "tokens.toast_revoked")
-			clearOwnerCookie(w)
+			clearOwnerCookie(w, r)
+			clearCSRFCookie(w, r)
 			w.Header().Set("Clear-Site-Data", `"storage"`)
 			http.Redirect(w, r, "/server/preferences/tokens", http.StatusSeeOther)
 		}
@@ -431,27 +459,33 @@ func tokenLinkedWebAction(w http.ResponseWriter, r *http.Request) {
 	}
 	switch parts[1] {
 	case "reveal":
-		token, err := store.Reveal(r.Context(), identity.OwnerID, id)
-		if err != nil {
-			http.NotFound(w, r)
+		if !setTokenFlash(w, r, strconv.FormatInt(id, 10), "") {
+			writeHTTPError(w, r, "Token view is unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		w.Header().Set("Cache-Control", "no-store")
-		tokenResultPage(w, r, token.Value)
+		http.Redirect(w, r, "/server/preferences/tokens#token-"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 	case "rotate":
-		raw, _, err := store.Rotate(r.Context(), identity.OwnerID, id)
+		_, _, err := store.Rotate(r.Context(), identity.OwnerID, id)
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		setTokenFlash(w, raw, "tokens.toast_rotated")
+		if err := store.Database().RotateAppSecret(r.Context(), "csrf_token_secret"); err != nil {
+			writeHTTPError(w, r, "Unable to rotate CSRF secret", http.StatusInternalServerError)
+			return
+		}
+		if !setTokenFlash(w, r, strconv.FormatInt(id, 10), "tokens.toast_rotated") {
+			writeHTTPError(w, r, "Token view is unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		http.Redirect(w, r, "/server/preferences/tokens#token-"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 	case "revoke":
 		if err := store.RevokeLinked(r.Context(), identity.OwnerID, id); err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		setTokenToast(w, "tokens.toast_revoked")
+		setTokenFlash(w, r, strconv.FormatInt(id, 10), "tokens.toast_revoked")
+		clearCSRFCookie(w, r)
 		http.Redirect(w, r, "/server/preferences/tokens#token-"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 	case "update":
 		if err := r.ParseForm(); err != nil {
@@ -467,7 +501,7 @@ func tokenLinkedWebAction(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		setTokenToast(w, "tokens.toast_renamed")
+		setTokenFlash(w, r, strconv.FormatInt(id, 10), "tokens.toast_renamed")
 		http.Redirect(w, r, "/server/preferences/tokens#token-"+strconv.FormatInt(id, 10), http.StatusSeeOther)
 	default:
 		http.NotFound(w, r)
@@ -602,6 +636,12 @@ func tokenAPI(w http.ResponseWriter, r *http.Request) {
 			raw, err = token.Value, revealErr
 		} else {
 			raw, _, err = store.Rotate(r.Context(), identity.OwnerID, primary.ID)
+			if err == nil {
+				if rotateErr := store.Database().RotateAppSecret(r.Context(), "csrf_token_secret"); rotateErr != nil {
+					tokenJSONError(w, 500, "INTERNAL_ERROR", "Unable to rotate CSRF secret")
+					return
+				}
+			}
 		}
 		if err != nil {
 			tokenJSONError(w, 500, "INTERNAL_ERROR", "Unable to access token")
@@ -699,6 +739,10 @@ func tokenAPI(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		if err := store.Database().RotateAppSecret(r.Context(), "csrf_token_secret"); err != nil {
+			tokenJSONError(w, 500, "INTERNAL_ERROR", "Unable to rotate CSRF secret")
+			return
+		}
 		token.Value = ""
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]any{"token": token, "value": raw}})
@@ -746,10 +790,10 @@ func ownerCookieIdentity(w http.ResponseWriter, r *http.Request, store *auth.Sto
 func authenticateOwnerCookie(w http.ResponseWriter, r *http.Request, store *auth.Store, cookie *http.Cookie) (auth.Identity, bool) {
 	identity, err := store.Authenticate(r.Context(), cookie.Value)
 	if err != nil || identity.Kind != "primary" {
-		clearOwnerCookie(w)
+		clearOwnerCookie(w, r)
 		return auth.Identity{}, false
 	}
-	setOwnerCookie(w, cookie.Value, store.CookieMaxAge())
+	setOwnerCookie(w, r, cookie.Value, store.CookieMaxAge())
 	return identity, true
 }
 
@@ -765,9 +809,9 @@ func TokenCookieMiddleware(next http.Handler) http.Handler {
 					identity, authErr = store.Authenticate(r.Context(), cookie.Value)
 				}
 				if authErr != nil || identity.Kind != "primary" {
-					clearOwnerCookie(w)
+					clearOwnerCookie(w, r)
 				} else {
-					setOwnerCookie(w, cookie.Value, store.CookieMaxAge())
+					setOwnerCookie(w, r, cookie.Value, store.CookieMaxAge())
 				}
 			}
 		}
@@ -775,36 +819,76 @@ func TokenCookieMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func setTokenFlash(w http.ResponseWriter, value, toast string) {
-	var id [24]byte
-	if _, err := rand.Read(id[:]); err != nil {
-		return
+func setTokenFlash(w http.ResponseWriter, r *http.Request, card, toast string) bool {
+	keys, err := loadSigningKeys(r.Context(), "cookie_signing_key")
+	if err != nil || len(keys) == 0 || !validTokenViewCard(card) || !validTokenToast(toast) {
+		return false
 	}
-	key := base64.RawURLEncoding.EncodeToString(id[:])
-	tokenFlashMu.Lock()
-	tokenFlashes[key] = tokenFlash{value: value, toast: toast, expires: time.Now().Add(2 * time.Minute)}
-	tokenFlashMu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: tokenFlashCookieName, Value: key, Path: "/server/preferences/tokens", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: 120})
+	expires := time.Now().Add(time.Minute).Unix()
+	payload := card + "|" + strconv.FormatInt(expires, 10) + "|" + toast
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(payload))
+	value := encoded + "." + signValue(keys[0], "token-view|"+encoded)
+	http.SetCookie(w, &http.Cookie{Name: tokenFlashCookieName, Value: value, Path: "/server/preferences/tokens", HttpOnly: true, Secure: secureOwnerCookie(r), SameSite: http.SameSiteStrictMode, MaxAge: 60})
+	return true
 }
-
-func setTokenToast(w http.ResponseWriter, toast string) { setTokenFlash(w, "", toast) }
 
 func takeTokenFlash(w http.ResponseWriter, r *http.Request) (tokenFlash, bool) {
 	cookie, err := r.Cookie(tokenFlashCookieName)
 	if err != nil {
 		return tokenFlash{}, false
 	}
-	http.SetCookie(w, &http.Cookie{Name: tokenFlashCookieName, Value: "", Path: "/server/preferences/tokens", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
-	tokenFlashMu.Lock()
-	flash, ok := tokenFlashes[cookie.Value]
-	delete(tokenFlashes, cookie.Value)
-	for key, entry := range tokenFlashes {
-		if time.Now().After(entry.expires) {
-			delete(tokenFlashes, key)
-		}
+	http.SetCookie(w, &http.Cookie{Name: tokenFlashCookieName, Value: "", Path: "/server/preferences/tokens", HttpOnly: true, Secure: secureOwnerCookie(r), SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	parts := strings.Split(cookie.Value, ".")
+	if len(parts) != 2 {
+		return tokenFlash{}, false
 	}
-	tokenFlashMu.Unlock()
-	return flash, ok && time.Now().Before(flash.expires)
+	keys, err := loadSigningKeys(r.Context(), "cookie_signing_key")
+	if err != nil {
+		return tokenFlash{}, false
+	}
+	supplied, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || len(supplied) != sha256.Size {
+		return tokenFlash{}, false
+	}
+	valid := 0
+	for _, key := range keys {
+		mac := hmac.New(sha256.New, key)
+		_, _ = mac.Write([]byte("token-view|" + parts[0]))
+		valid |= subtle.ConstantTimeCompare(supplied, mac.Sum(nil))
+	}
+	if valid == 0 {
+		return tokenFlash{}, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return tokenFlash{}, false
+	}
+	fields := strings.Split(string(payload), "|")
+	if len(fields) != 3 || !validTokenViewCard(fields[0]) || !validTokenToast(fields[2]) {
+		return tokenFlash{}, false
+	}
+	expires, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil || expires <= time.Now().Unix() || expires > time.Now().Add(2*time.Minute).Unix() {
+		return tokenFlash{}, false
+	}
+	return tokenFlash{card: fields[0], toast: fields[2]}, true
+}
+
+func validTokenViewCard(card string) bool {
+	if card == "primary" {
+		return true
+	}
+	id, err := strconv.ParseInt(card, 10, 64)
+	return err == nil && id > 0 && strconv.FormatInt(id, 10) == card
+}
+
+func validTokenToast(toast string) bool {
+	switch toast {
+	case "", "tokens.toast_created", "tokens.toast_rotated", "tokens.toast_renamed", "tokens.toast_revoked":
+		return true
+	default:
+		return false
+	}
 }
 
 func hasValidPresentedToken(w http.ResponseWriter, r *http.Request, store *auth.Store) bool {
@@ -869,22 +953,33 @@ func hasValidBearer(ctx context.Context, r *http.Request, store *auth.Store) boo
 }
 
 func ensureCSRFCookie(w http.ResponseWriter, r *http.Request) string {
-	if cookie, err := r.Cookie(csrfCookieName); err == nil && cookie.Value != "" {
+	cookieName := configuredCSRFCookieName()
+	if cookie, err := r.Cookie(cookieName); err == nil && validSignedCSRF(r.Context(), cookie.Value) {
 		return cookie.Value
 	}
-	var raw [32]byte
-	if _, err := rand.Read(raw[:]); err != nil {
+	keys, err := loadSigningKeys(r.Context(), "csrf_token_secret")
+	if err != nil || len(keys) == 0 {
 		return ""
 	}
-	value := base64.RawURLEncoding.EncodeToString(raw[:])
-	http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: value, Path: "/", SameSite: http.SameSiteStrictMode, Secure: requestUsesHTTPS(r), HttpOnly: false, MaxAge: 86400})
+	length := config.Get().Server.CSRF.TokenLength
+	if length < 16 || length > 128 {
+		length = 32
+	}
+	raw := make([]byte, length)
+	if _, err := rand.Read(raw); err != nil {
+		return ""
+	}
+	nonce := base64.RawURLEncoding.EncodeToString(raw)
+	value := nonce + "." + signValue(keys[0], "csrf|"+nonce)
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: value, Path: "/", SameSite: http.SameSiteStrictMode, Secure: csrfCookieSecure(r), HttpOnly: false, MaxAge: 86400})
 	return value
 }
 
 func csrfTokenForPage(w http.ResponseWriter, r *http.Request) string {
 	value := ensureCSRFCookie(w, r)
-	if _, err := r.Cookie(csrfCookieName); err != nil && value != "" {
-		r.AddCookie(&http.Cookie{Name: csrfCookieName, Value: value})
+	cookieName := configuredCSRFCookieName()
+	if _, err := r.Cookie(cookieName); err != nil && value != "" {
+		r.AddCookie(&http.Cookie{Name: cookieName, Value: value})
 	}
 	return value
 }
@@ -893,7 +988,15 @@ func requestUsesHTTPS(r *http.Request) bool {
 	return requestIsSecure(r)
 }
 
+func clearCSRFCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: configuredCSRFCookieName(), Value: "", Path: "/", SameSite: http.SameSiteStrictMode, Secure: csrfCookieSecure(r), HttpOnly: false, MaxAge: -1})
+}
+
 func validCSRF(r *http.Request) bool {
+	csrf := config.Get().Server.CSRF
+	if !csrf.Enabled || csrfPathExempt(r.URL.Path, csrf.ExemptPaths) {
+		return true
+	}
 	if value := strings.TrimSpace(r.Header.Get("Authorization")); len(value) > 7 && strings.EqualFold(value[:7], "Bearer ") {
 		if store := currentAuthStore(); store != nil {
 			if identity, err := store.AuthenticateBearer(r.Context(), strings.TrimSpace(value[7:])); err == nil && identity.Kind == "primary" {
@@ -904,32 +1007,145 @@ func validCSRF(r *http.Request) bool {
 	if err := r.ParseForm(); err != nil {
 		return false
 	}
-	cookie, err := r.Cookie(csrfCookieName)
+	cookie, err := r.Cookie(configuredCSRFCookieName())
 	if err != nil {
 		return false
 	}
 	got := r.FormValue("csrf_token")
 	if got == "" {
-		got = r.Header.Get("X-CSRF-Token")
+		got = r.Header.Get(configuredCSRFHeaderName())
 	}
-	return got != "" && len(got) == len(cookie.Value) && subtle.ConstantTimeCompare([]byte(got), []byte(cookie.Value)) == 1
+	return got != "" && len(got) == len(cookie.Value) && subtle.ConstantTimeCompare([]byte(got), []byte(cookie.Value)) == 1 && validSignedCSRF(r.Context(), cookie.Value)
 }
 
-func setOwnerCookie(w http.ResponseWriter, raw string, age time.Duration) {
+func configuredCSRFCookieName() string {
+	if value := strings.TrimSpace(config.Get().Server.CSRF.CookieName); value != "" {
+		return value
+	}
+	return csrfCookieName
+}
+
+func configuredCSRFHeaderName() string {
+	if value := strings.TrimSpace(config.Get().Server.CSRF.HeaderName); value != "" {
+		return value
+	}
+	return "X-CSRF-Token"
+}
+
+func csrfCookieSecure(r *http.Request) bool {
+	if !secureOwnerCookie(r) {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(r.Host)), ".")
+	if name, _, err := net.SplitHostPort(host); err == nil {
+		host = name
+	}
+	if strings.HasSuffix(host, ".onion") {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(config.Get().Server.CSRF.Secure)) {
+	case "true":
+		return true
+	case "false":
+		return false
+	default:
+		return requestUsesHTTPS(r)
+	}
+}
+
+func csrfPathExempt(requestPath string, patterns []string) bool {
+	for _, pattern := range patterns {
+		if matched, err := path.Match(pattern, requestPath); err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
+
+func validSignedCSRF(ctx context.Context, value string) bool {
+	parts := strings.Split(value, ".")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	nonce, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil || len(nonce) != config.Get().Server.CSRF.TokenLength {
+		return false
+	}
+	supplied, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || len(supplied) != sha256.Size {
+		return false
+	}
+	keys, err := loadSigningKeys(ctx, "csrf_token_secret")
+	if err != nil {
+		return false
+	}
+	valid := 0
+	for _, key := range keys {
+		mac := hmac.New(sha256.New, key)
+		_, _ = mac.Write([]byte("csrf|" + parts[0]))
+		valid |= subtle.ConstantTimeCompare(supplied, mac.Sum(nil))
+	}
+	return valid != 0
+}
+
+func loadSigningKeys(ctx context.Context, name string) ([][]byte, error) {
+	db := signingDatabase()
+	if db == nil {
+		return nil, errors.New("application secret database is unavailable")
+	}
+	var encoded string
+	if err := db.Read().QueryRowContext(ctx, `SELECT value FROM app_secrets WHERE name = ?`, name).Scan(&encoded); err != nil {
+		return nil, fmt.Errorf("load %s: %w", name, err)
+	}
+	current, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(current) != 32 {
+		return nil, fmt.Errorf("stored %s is invalid", name)
+	}
+	keys := [][]byte{current}
+	var previous string
+	var until string
+	if err := db.Read().QueryRowContext(ctx, `SELECT value FROM app_secrets WHERE name = ?`, name+"_previous").Scan(&previous); err == nil {
+		if err := db.Read().QueryRowContext(ctx, `SELECT value FROM app_secrets WHERE name = ?`, name+"_previous_until").Scan(&until); err == nil {
+			expires, parseErr := time.Parse(time.RFC3339Nano, until)
+			old, decodeErr := base64.StdEncoding.DecodeString(previous)
+			if parseErr == nil && time.Now().Before(expires) && decodeErr == nil && len(old) == 32 {
+				keys = append(keys, old)
+			}
+		}
+	}
+	return keys, nil
+}
+
+func signingDatabase() *database.Store {
+	if store := currentAuthStore(); store != nil {
+		return store.Database()
+	}
+	contactStoreMu.RLock()
+	defer contactStoreMu.RUnlock()
+	return contactStore
+}
+
+func signValue(key []byte, value string) string {
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(value))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func setOwnerCookie(w http.ResponseWriter, r *http.Request, raw string, age time.Duration) {
 	if age <= 0 {
 		age = 365 * 24 * time.Hour
 	}
-	http.SetCookie(w, &http.Cookie{Name: ownerCookieName, Value: raw, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: int(age.Seconds())})
-	clearLegacyOwnerCookie(w)
+	http.SetCookie(w, &http.Cookie{Name: ownerCookieName, Value: raw, Path: "/", HttpOnly: true, Secure: secureOwnerCookie(r), SameSite: http.SameSiteStrictMode, MaxAge: int(age.Seconds())})
+	clearLegacyOwnerCookie(w, r)
 }
 
-func clearOwnerCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: ownerCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
-	clearLegacyOwnerCookie(w)
+func clearOwnerCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: ownerCookieName, Value: "", Path: "/", HttpOnly: true, Secure: secureOwnerCookie(r), SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	clearLegacyOwnerCookie(w, r)
 }
 
-func clearLegacyOwnerCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: legacyOwnerCookieName, Value: "", Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+func clearLegacyOwnerCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: legacyOwnerCookieName, Value: "", Path: "/", HttpOnly: true, Secure: secureOwnerCookie(r), SameSite: http.SameSiteStrictMode, MaxAge: -1})
 }
 
 func primaryToken(tokens []auth.Token) auth.Token {

@@ -356,13 +356,15 @@ func (m *Manager) UpdateBlocklists(ctx context.Context, extra []Source, trusted 
 			continue
 		}
 		updatedAt := m.now().UTC()
+		marker := filepath.Join(directory, source.ID+".last_updated")
+		if err := atomicWrite(marker, []byte(updatedAt.Format(time.RFC3339)+"\n")); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: store freshness marker failed: %v", source.ID, err))
+			continue
+		}
 		results[source.ID] = BlocklistResult{ValidEntries: len(entries), SkippedEntries: skipped, UpdatedAt: updatedAt}
 	}
 	if len(failures) > 0 {
 		return results, fmt.Errorf("blocklist update incomplete: %s", strings.Join(failures, "; "))
-	}
-	if err := m.writeUpdated(directory); err != nil {
-		return results, err
 	}
 	return results, nil
 }
@@ -778,6 +780,38 @@ func (m *Manager) fetchNVDWindow(ctx context.Context, start, end time.Time, apiK
 
 // Check reports a dataset's loaded/fresh status using its .last_updated marker.
 func (m *Manager) Check(name string, maxAge time.Duration) (string, time.Time) {
+	if name == "blocklists" {
+		entries, err := os.ReadDir(filepath.Join(m.Dir, name))
+		if err != nil {
+			return "error", time.Time{}
+		}
+		var oldest time.Time
+		count := 0
+		degraded := false
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".txt") {
+				continue
+			}
+			count++
+			status, updated := m.CheckBlocklist(strings.TrimSuffix(entry.Name(), ".txt"), maxAge)
+			if status == "error" {
+				return "error", time.Time{}
+			}
+			if status == "degraded" {
+				degraded = true
+			}
+			if oldest.IsZero() || updated.Before(oldest) {
+				oldest = updated
+			}
+		}
+		if count == 0 {
+			return "error", time.Time{}
+		}
+		if degraded {
+			return "degraded", oldest
+		}
+		return "ok", oldest
+	}
 	path := filepath.Join(m.Dir, name, ".last_updated")
 	updated, err := readUpdatedFile(path)
 	if err != nil {
@@ -789,17 +823,20 @@ func (m *Manager) Check(name string, maxAge time.Duration) (string, time.Time) {
 	return "ok", updated
 }
 
-// CheckBlocklist reports one source's state and age using its data file modification time.
+// CheckBlocklist reports one source's state and age using its successful-update marker.
 func (m *Manager) CheckBlocklist(id string, maxAge time.Duration) (string, time.Time) {
 	if !sourceIDPattern.MatchString(id) {
 		return "error", time.Time{}
 	}
-	path := filepath.Join(m.Dir, "blocklists", id+".txt")
-	info, err := os.Stat(path)
+	directory := filepath.Join(m.Dir, "blocklists")
+	info, err := os.Stat(filepath.Join(directory, id+".txt"))
 	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 		return "error", time.Time{}
 	}
-	updated := info.ModTime().UTC()
+	updated, err := readUpdatedFile(filepath.Join(directory, id+".last_updated"))
+	if err != nil {
+		return "error", time.Time{}
+	}
 	if maxAge > 0 && m.now().Sub(updated) > maxAge {
 		return "degraded", updated
 	}

@@ -385,6 +385,18 @@ func requestIsSecure(r *http.Request) bool {
 	return scheme == "https"
 }
 
+func secureOwnerCookie(r *http.Request) bool {
+	if r == nil {
+		return true
+	}
+	host, _, ok := splitHostPort(strings.TrimSpace(r.Host))
+	if !ok {
+		host = strings.TrimSpace(r.Host)
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	return !strings.HasSuffix(host, ".b32.i2p")
+}
+
 // GetBaseDomain returns the configured primary domain or the learned registrable domain.
 func GetBaseDomain() string {
 	if domains := domainList(osDomainList(), config.Get().Server.FQDN); len(domains) > 0 {

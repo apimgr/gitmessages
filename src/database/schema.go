@@ -4,7 +4,15 @@ var schemaStatements = []string{
 	`CREATE TABLE IF NOT EXISTS app_secrets (
 		name TEXT PRIMARY KEY,
 		value TEXT NOT NULL,
+		version INTEGER NOT NULL DEFAULT 1,
 		updated_at TEXT NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS app_secret_revocations (
+		name TEXT NOT NULL,
+		version INTEGER NOT NULL,
+		node_id TEXT NOT NULL,
+		revoked_at TEXT NOT NULL,
+		PRIMARY KEY (name, version, node_id)
 	)`,
 	`CREATE TABLE IF NOT EXISTS rate_limits (
 		key TEXT PRIMARY KEY,
@@ -61,7 +69,7 @@ var schemaStatements = []string{
 	`CREATE INDEX IF NOT EXISTS idx_captcha_challenges_expires ON captcha_challenges(expires_at)`,
 	`CREATE TABLE IF NOT EXISTS security_reports (
 		tracking_id TEXT PRIMARY KEY,
-		security_id TEXT NOT NULL,
+		id_window INTEGER NOT NULL,
 		severity TEXT NOT NULL,
 		component TEXT NOT NULL,
 		status TEXT NOT NULL DEFAULT 'received',
@@ -106,6 +114,15 @@ var schemaStatements = []string{
 		credit TEXT NOT NULL,
 		severity TEXT NOT NULL,
 		disclosed_on DATE NOT NULL
+	)`,
+	`CREATE TABLE IF NOT EXISTS pgp_key_metadata (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		fingerprint TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		expires_at TEXT NOT NULL,
+		last_rotated_at TEXT,
+		keyservers_published TEXT NOT NULL DEFAULT '[]',
+		revoked INTEGER NOT NULL DEFAULT 0 CHECK (revoked IN (0, 1))
 	)`,
 	`CREATE TABLE IF NOT EXISTS backups (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,

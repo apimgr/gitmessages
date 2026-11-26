@@ -9,9 +9,9 @@ import (
 	"time"
 )
 
-var localCacheTables = []string{"app_secrets", "rate_limits", "audit_log", "owners", "api_tokens", "captcha_challenges", "security_reports", "scheduler_tasks", "scheduler_history", "security_thanks", "backups"}
+var localCacheTables = []string{"app_secrets", "app_secret_revocations", "rate_limits", "audit_log", "owners", "api_tokens", "captcha_challenges", "security_reports", "scheduler_tasks", "scheduler_history", "security_thanks", "pgp_key_metadata", "backups"}
 
-var localCachePrimaryKeys = map[string]string{"app_secrets": "name", "rate_limits": "key", "audit_log": "id", "owners": "id", "api_tokens": "id", "captcha_challenges": "id", "security_reports": "tracking_id", "scheduler_tasks": "id", "scheduler_history": "id", "security_thanks": "tracking_id", "backups": "id"}
+var localCachePrimaryKeys = map[string][]string{"app_secrets": {"name"}, "app_secret_revocations": {"name", "version", "node_id"}, "rate_limits": {"key"}, "audit_log": {"id"}, "owners": {"id"}, "api_tokens": {"id"}, "captcha_challenges": {"id"}, "security_reports": {"tracking_id"}, "scheduler_tasks": {"id"}, "scheduler_history": {"id"}, "security_thanks": {"tracking_id"}, "pgp_key_metadata": {"id"}, "backups": {"id"}}
 
 type cacheSyncFailure struct {
 	remote bool
@@ -112,32 +112,35 @@ func (s *Store) syncLocalCache(ctx context.Context) error {
 		if err := createTx.Commit(); err != nil {
 			return cacheSyncFailure{err: fmt.Errorf("commit staging table %s: %w", table, err)}
 		}
-		primaryKey, ok := localCachePrimaryKeys[table]
+		primaryKeys, ok := localCachePrimaryKeys[table]
 		if !ok {
 			return cacheSyncFailure{err: fmt.Errorf("cache table %s has no configured primary key", table)}
 		}
-		primaryIndex := -1
-		for index, column := range columns {
-			if column == primaryKey {
-				primaryIndex = index
-				break
+		primaryIndexes := make([]int, len(primaryKeys))
+		for keyIndex, primaryKey := range primaryKeys {
+			primaryIndexes[keyIndex] = -1
+			for index, column := range columns {
+				if column == primaryKey {
+					primaryIndexes[keyIndex] = index
+					break
+				}
 			}
-		}
-		if primaryIndex < 0 {
-			return s.remoteCacheFailure(ctx, fmt.Errorf("remote cache table %s is missing primary key %s", table, primaryKey))
+			if primaryIndexes[keyIndex] < 0 {
+				return s.remoteCacheFailure(ctx, fmt.Errorf("remote cache table %s is missing primary key %s", table, primaryKey))
+			}
 		}
 		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(columns)), ",")
 		statement := `INSERT INTO cache_stage_` + table + ` (` + quoteColumns(columns) + `) VALUES (` + placeholders + `)`
-		var lastKey any
+		var lastKey []any
 		hasLastKey := false
 		for {
 			query := `SELECT ` + quoteColumns(columns) + ` FROM ` + table
 			arguments := []any{}
 			if hasLastKey {
-				query += ` WHERE ` + quoteColumns([]string{primaryKey}) + ` > ?`
-				arguments = append(arguments, lastKey)
+				query += ` WHERE (` + quoteColumns(primaryKeys) + `) > (` + strings.TrimSuffix(strings.Repeat("?,", len(primaryKeys)), ",") + `)`
+				arguments = append(arguments, lastKey...)
 			}
-			query += ` ORDER BY ` + quoteColumns([]string{primaryKey}) + ` LIMIT 500`
+			query += ` ORDER BY ` + quoteColumns(primaryKeys) + ` LIMIT 500`
 			rows, err := s.read.QueryContext(ctx, query, arguments...)
 			if err != nil {
 				return s.remoteCacheFailure(ctx, fmt.Errorf("read remote cache table %s: %w", table, err))
@@ -174,7 +177,11 @@ func (s *Store) syncLocalCache(ctx context.Context) error {
 			if len(batch) == 0 {
 				break
 			}
-			lastKey = batch[len(batch)-1][primaryIndex]
+			lastRow := batch[len(batch)-1]
+			lastKey = make([]any, len(primaryIndexes))
+			for index, primaryIndex := range primaryIndexes {
+				lastKey[index] = lastRow[primaryIndex]
+			}
 			hasLastKey = true
 			batchTx, err := s.cache.write.BeginTx(ctx, nil)
 			if err != nil {

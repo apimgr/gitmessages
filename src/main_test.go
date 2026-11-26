@@ -53,6 +53,32 @@ func TestConfigureOutputRejectsUnknownColor(t *testing.T) {
 	}
 }
 
+func TestStagedUpdateVersionAndPresence(t *testing.T) {
+	dataDirectory := t.TempDir()
+	if stagedUpdateExists(dataDirectory) {
+		t.Fatal("missing update directory reported as staged")
+	}
+	stageDirectory := filepath.Join(dataDirectory, "update")
+	if err := os.Mkdir(stageDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !stagedUpdateExists(dataDirectory) {
+		t.Fatal("existing update directory was not detected")
+	}
+	if err := os.WriteFile(filepath.Join(stageDirectory, paths.ProjectName+".json"), []byte(`{"tag_name":"v1.2.3"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := stagedUpdateVersion(dataDirectory); got != "v1.2.3" {
+		t.Fatalf("stagedUpdateVersion() = %q, want v1.2.3", got)
+	}
+	if err := os.WriteFile(filepath.Join(stageDirectory, paths.ProjectName+".json"), []byte(`{"tag_name":"../../binary"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := stagedUpdateVersion(dataDirectory); got != "unknown" {
+		t.Fatalf("unsafe stagedUpdateVersion() = %q, want unknown", got)
+	}
+}
+
 func TestCommandHelpRecognizesBothHelpForms(t *testing.T) {
 	for _, next := range []string{"--help", "-h", "help"} {
 		command, ok := commandHelp([]string{"--maintenance", next}, "shell", "service", "maintenance", "update")
@@ -1051,7 +1077,7 @@ func TestCleanupSecurityDataHonorsClosedReportRetention(t *testing.T) {
 		{id: "recent-closed", status: "disclosed", closedAt: recent},
 	} {
 		if err := store.Write(ctx, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, `INSERT INTO security_reports(tracking_id,security_id,severity,component,status,body_enc,body_alg,token_hash,closed_at) VALUES(?,?,?,?,?,?,?,?,?)`, report.id, "sec_test", "low", "test", report.status, []byte("encrypted"), "aes-256-gcm", "hash", report.closedAt)
+			_, err := tx.ExecContext(ctx, `INSERT INTO security_reports(tracking_id,id_window,severity,component,status,body_enc,body_alg,token_hash,closed_at) VALUES(?,?,?,?,?,?,?,?,?)`, report.id, time.Now().Unix()/172800, "low", "test", report.status, []byte("encrypted"), "aes-256-gcm", "hash", report.closedAt)
 			return err
 		}); err != nil {
 			t.Fatal(err)

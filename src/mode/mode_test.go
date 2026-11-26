@@ -190,6 +190,11 @@ func TestInitializeWithConfigPriority(t *testing.T) {
 	if Get() != Debug || IsDebugEnabled() {
 		t.Fatalf("explicit DEBUG=false initialization = %s, debug=%v", Get(), IsDebugEnabled())
 	}
+	t.Setenv("DEBUG", "")
+	InitializeWithConfig("debug", "production", nil)
+	if Get() != Debug || !IsDebugEnabled() {
+		t.Fatalf("empty DEBUG did not preserve the debug-mode default = %s, debug=%v", Get(), IsDebugEnabled())
+	}
 	debugFlag := true
 	InitializeWithConfig("production", "development", &debugFlag)
 	if Get() != Production || !IsDebugEnabled() {

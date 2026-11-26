@@ -357,3 +357,79 @@ func TestIdleOwnerPurgeAndStoreAccessors(t *testing.T) {
 		t.Fatalf("purged owner's token state was unexpected: %v", err)
 	}
 }
+
+func TestReencryptTokenDataMovesOwnerAndLinkedCopiesToCurrentKey(t *testing.T) {
+	store, _ := testStore(t)
+	ctx := context.Background()
+	primary, identity, err := store.IssueOwner(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, _, err := store.CreateLinked(ctx, identity.OwnerID, "automation", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, err := decodeEncryptionKey(base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := []byte("abcdef0123456789abcdef0123456789")
+	if err := ReencryptTokenData(ctx, store.db, previous, current); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := store.db.Read().QueryContext(ctx, `SELECT owner_id,kind,token_enc FROM api_tokens ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	seen := map[string]string{}
+	for rows.Next() {
+		var owner, kind, encrypted string
+		if err := rows.Scan(&owner, &kind, &encrypted); err != nil {
+			t.Fatal(err)
+		}
+		plain, err := decryptTokenWithKey(current, encrypted, owner, kind)
+		if err != nil {
+			t.Fatalf("current key cannot open %s token: %v", kind, err)
+		}
+		seen[kind] = plain
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if seen["primary"] != primary || seen["linked"] != linked {
+		t.Fatalf("re-encrypted token values changed: %#v", seen)
+	}
+}
+
+func TestReloadEncryptionKeyReadsGraceKeyAndReencryptsOnReveal(t *testing.T) {
+	store, _ := testStore(t)
+	ctx := context.Background()
+	primary, identity, err := store.IssueOwner(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := []byte("0123456789abcdef0123456789abcdef")
+	current := []byte("abcdef0123456789abcdef0123456789")
+	if err := store.db.StorePreviousEncryptionKey(ctx, previous, current, 30*24*time.Hour, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReloadEncryptionKey(ctx, base64.RawURLEncoding.EncodeToString(current), 2); err != nil {
+		t.Fatal(err)
+	}
+	var tokenID int64
+	if err := store.db.Read().QueryRowContext(ctx, `SELECT id FROM api_tokens WHERE owner_id=? AND kind='primary'`, identity.OwnerID).Scan(&tokenID); err != nil {
+		t.Fatal(err)
+	}
+	revealed, err := store.Reveal(ctx, identity.OwnerID, tokenID)
+	if err != nil || revealed.Value != primary {
+		t.Fatalf("grace-key token reveal = %q, %v", revealed.Value, err)
+	}
+	var encrypted string
+	if err := store.db.Read().QueryRowContext(ctx, `SELECT token_enc FROM api_tokens WHERE id=?`, tokenID).Scan(&encrypted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decryptTokenWithKey(current, encrypted, identity.OwnerID, "primary"); err != nil {
+		t.Fatalf("revealed token was not re-encrypted under current key: %v", err)
+	}
+}

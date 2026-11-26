@@ -55,15 +55,107 @@ type Token struct {
 }
 
 type Store struct {
-	db              *database.Store
-	operatorHash    [32]byte
-	operatorEnabled bool
-	encryptionKey   []byte
-	maxLinked       int
-	idlePurgeDays   int
-	cookieMaxAge    time.Duration
-	authObserverMu  sync.RWMutex
-	authObserver    func(method string, success bool)
+	db                    *database.Store
+	operatorHash          [32]byte
+	operatorEnabled       bool
+	encryptionKey         []byte
+	previousEncryptionKey []byte
+	encryptionKeyMu       sync.RWMutex
+	maxLinked             int
+	idlePurgeDays         int
+	cookieMaxAge          time.Duration
+	authObserverMu        sync.RWMutex
+	authObserver          func(method string, success bool)
+}
+
+// ReencryptTokenData eagerly moves stored owner and linked token copies to a replacement key.
+func ReencryptTokenData(ctx context.Context, store *database.Store, previous, current []byte) error {
+	if store == nil || len(previous) != 32 || len(current) != 32 {
+		return errors.New("token re-encryption requires a database and two 32-byte keys")
+	}
+	rows, err := store.Read().QueryContext(ctx, `SELECT id,owner_id,kind,token_enc FROM api_tokens ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	type tokenCipher struct {
+		id      int64
+		encoded string
+	}
+	updates := make([]tokenCipher, 0)
+	for rows.Next() {
+		var id int64
+		var owner, kind, encoded string
+		if err := rows.Scan(&id, &owner, &kind, &encoded); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if _, err := decryptTokenWithKey(current, encoded, owner, kind); err == nil {
+			continue
+		}
+		plain, err := decryptTokenWithKey(previous, encoded, owner, kind)
+		if err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("decrypt stored token %d with current or grace key: %w", id, err)
+		}
+		reencrypted, err := encryptTokenWithKey(current, plain, owner, kind)
+		if err != nil {
+			_ = rows.Close()
+			return err
+		}
+		updates = append(updates, tokenCipher{id: id, encoded: reencrypted})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	return store.Write(ctx, func(tx *sql.Tx) error {
+		for _, update := range updates {
+			if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_enc=? WHERE id=?`, update.encoded, update.id); err != nil {
+				return fmt.Errorf("update encrypted token %d: %w", update.id, err)
+			}
+		}
+		return nil
+	})
+}
+
+func encryptTokenWithKey(key []byte, raw, ownerID, kind string) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	sealed := gcm.Seal(nonce, nonce, []byte(raw), []byte(ownerID+":"+kind))
+	return base64.RawURLEncoding.EncodeToString(sealed), nil
+}
+
+func decryptTokenWithKey(key []byte, encoded, ownerID, kind string) (string, error) {
+	sealed, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil || len(sealed) < gcm.NonceSize() {
+		return "", errors.New("invalid encrypted token")
+	}
+	plain, err := gcm.Open(nil, sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():], []byte(ownerID+":"+kind))
+	if err != nil {
+		return "", err
+	}
+	return string(plain), nil
 }
 
 // Open creates an auth store backed by the shared local SQLite database.
@@ -130,7 +222,7 @@ func (s *Store) populateTokenLast4(ctx context.Context) error {
 		return err
 	}
 	for _, token := range pending {
-		raw, err := s.decrypt(token.encoded, token.ownerID, token.kind)
+		raw, usedPrevious, err := s.decrypt(token.encoded, token.ownerID, token.kind)
 		if err != nil {
 			return fmt.Errorf("decrypt existing token %d: %w", token.id, err)
 		}
@@ -138,12 +230,38 @@ func (s *Store) populateTokenLast4(ctx context.Context) error {
 			return fmt.Errorf("existing token %d is shorter than four characters", token.id)
 		}
 		if err := s.db.Write(ctx, func(tx *sql.Tx) error {
+			if usedPrevious {
+				encoded, err := s.encrypt(raw, token.ownerID, token.kind)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_enc=? WHERE id=?`, encoded, token.id); err != nil {
+					return err
+				}
+			}
 			_, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_last4 = ? WHERE id = ? AND token_last4 = ''`, raw[len(raw)-4:], token.id)
 			return err
 		}); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// ReloadEncryptionKey updates the live data key and its database-protected grace key.
+func (s *Store) ReloadEncryptionKey(ctx context.Context, value string, version int) error {
+	current, err := decodeEncryptionKey(value)
+	if err != nil {
+		return err
+	}
+	previous, err := s.db.PreviousEncryptionKey(ctx, current, time.Now().UTC(), version)
+	if err != nil {
+		return err
+	}
+	s.encryptionKeyMu.Lock()
+	s.encryptionKey = append(s.encryptionKey[:0], current...)
+	s.previousEncryptionKey = append(s.previousEncryptionKey[:0], previous...)
+	s.encryptionKeyMu.Unlock()
 	return nil
 }
 
@@ -482,9 +600,21 @@ func (s *Store) Reveal(ctx context.Context, ownerID string, tokenID int64) (Toke
 	if err != nil {
 		return Token{}, ErrNotFound
 	}
-	value, err := s.decrypt(encoded, ownerID, token.Kind)
+	value, usedPrevious, err := s.decrypt(encoded, ownerID, token.Kind)
 	if err != nil {
 		return Token{}, err
+	}
+	if usedPrevious {
+		reencrypted, err := s.encrypt(value, ownerID, token.Kind)
+		if err != nil {
+			return Token{}, err
+		}
+		if err := s.db.Write(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_enc=? WHERE id=?`, reencrypted, tokenID)
+			return err
+		}); err != nil {
+			return Token{}, err
+		}
 	}
 	token.Value = value
 	token.CreatedAt = time.Unix(created, 0).UTC()
@@ -678,7 +808,10 @@ func audit(tx *sql.Tx, ctx context.Context, action, ownerID, prefix, source stri
 }
 
 func (s *Store) encrypt(raw, ownerID, kind string) (string, error) {
-	block, err := aes.NewCipher(s.encryptionKey)
+	s.encryptionKeyMu.RLock()
+	key := append([]byte(nil), s.encryptionKey...)
+	s.encryptionKeyMu.RUnlock()
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
 	}
@@ -694,28 +827,44 @@ func (s *Store) encrypt(raw, ownerID, kind string) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(sealed), nil
 }
 
-func (s *Store) decrypt(encoded, ownerID, kind string) (string, error) {
+func (s *Store) decrypt(encoded, ownerID, kind string) (string, bool, error) {
 	sealed, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	block, err := aes.NewCipher(s.encryptionKey)
+	s.encryptionKeyMu.RLock()
+	current := append([]byte(nil), s.encryptionKey...)
+	previous := append([]byte(nil), s.previousEncryptionKey...)
+	s.encryptionKeyMu.RUnlock()
+	plain, err := decryptTokenCiphertext(current, sealed, ownerID, kind)
+	if err == nil {
+		return string(plain), false, nil
+	}
+	plain, previousErr := decryptTokenCiphertext(previous, sealed, ownerID, kind)
+	if previousErr == nil {
+		return string(plain), true, nil
+	}
+	return "", false, err
+}
+
+func decryptTokenCiphertext(key, sealed []byte, ownerID, kind string) ([]byte, error) {
+	block, err := aes.NewCipher(key)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(sealed) < gcm.NonceSize() {
-		return "", errors.New("invalid encrypted token")
+		return nil, errors.New("invalid encrypted token")
 	}
 	nonce, ciphertext := sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():]
 	plain, err := gcm.Open(nil, nonce, ciphertext, []byte(ownerID+":"+kind))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return string(plain), nil
+	return plain, nil
 }
 
 func tokenHash(raw string) string {

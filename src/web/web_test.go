@@ -123,7 +123,7 @@ func TestAboutPageIncludesRequiredGeoIPAttribution(t *testing.T) {
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, webTestRequest(http.MethodGet, "/server/about", nil))
 	const attribution = `<a href="https://db-ip.com/">IP Geolocation by DB-IP</a>`
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), attribution) {
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), attribution) || !strings.Contains(page.Body.String(), tr(webTestRequest(http.MethodGet, "/server/about", nil), "about.catalog_attribution")) {
 		t.Fatalf("About page returned %d or omitted GeoIP attribution", page.Code)
 	}
 
@@ -134,7 +134,7 @@ func TestAboutPageIncludesRequiredGeoIPAttribution(t *testing.T) {
 			Content string `json:"content"`
 		} `json:"data"`
 	}
-	if api.Code != http.StatusOK || json.Unmarshal(api.Body.Bytes(), &response) != nil || !strings.Contains(response.Data.Content, attribution) {
+	if api.Code != http.StatusOK || json.Unmarshal(api.Body.Bytes(), &response) != nil || !strings.Contains(response.Data.Content, attribution) || !strings.Contains(response.Data.Content, "project-authored") {
 		t.Fatalf("About API returned %d or omitted GeoIP attribution", api.Code)
 	}
 }
@@ -311,6 +311,13 @@ func TestServerPageShellAndRegisteredPages(t *testing.T) {
 				t.Errorf("GET %s must use %s", path, wantWidth)
 			}
 			assertPageConformance(t, body)
+			if path == "/server/preferences" {
+				if strings.Contains(body, `class="theme-toggle-form"`) {
+					t.Error("preferences page must use the theme control in its single form")
+				}
+			} else if !strings.Contains(body, `class="theme-toggle-form" method="post" action="/server/preferences"`) {
+				t.Errorf("GET %s omitted the header theme form", path)
+			}
 			if path == "/server/security/thanks" && !strings.Contains(body, tr(webTestRequest(http.MethodGet, path, nil), "security.thanks.empty")) {
 				t.Error("security acknowledgments page omitted its empty state")
 			}
@@ -609,8 +616,10 @@ func assertPageConformance(t *testing.T, source string) {
 		}
 		if len(children) == 4 {
 			actions := elementChildren(children[3])
-			if len(actions) != 2 || actions[0].Data != "a" || actions[1].Data != "form" || !hasClass(actions[1], "theme-toggle-form") {
-				t.Error("header actions must contain only preferences and the theme form")
+			if len(actions) < 1 || len(actions) > 2 || actions[0].Data != "a" || attrValue(actions[0], "href") != "/server/preferences" {
+				t.Error("header actions must start with the preferences link")
+			} else if len(actions) == 2 && (actions[1].Data != "form" || !hasClass(actions[1], "theme-toggle-form")) {
+				t.Error("the optional second header action must be the theme form")
 			}
 		}
 	}
@@ -1097,6 +1106,7 @@ func TestServerRootRedirectsToAbout(t *testing.T) {
 }
 
 func TestCCPAOptOutAndOptInForm(t *testing.T) {
+	tokenRouteStore(t)
 	privacy := &config.Get().Server.Privacy
 	original := privacy.Data.Sold
 	privacy.Data.Sold = true
@@ -1108,12 +1118,21 @@ func TestCCPAOptOutAndOptInForm(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `action="/server/ccpa"`) || !strings.Contains(page.Body.String(), `name="choice" value="opt-out"`) {
 		t.Fatalf("privacy page omitted the CCPA opt-out form: %d %s", page.Code, page.Body.String())
 	}
+	var csrfCookie *http.Cookie
+	for _, cookie := range page.Result().Cookies() {
+		if cookie.Name == csrfCookieName {
+			csrfCookie = cookie
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("privacy page did not set its CSRF cookie")
+	}
 
 	for _, choice := range []string{"opt-out", "opt-in"} {
-		form := url.Values{"csrf_token": {"csrf-test"}, "choice": {choice}}
+		form := url.Values{"csrf_token": {csrfCookie.Value}, "choice": {choice}}
 		request := webTestRequest(http.MethodPost, "/server/ccpa", strings.NewReader(form.Encode()))
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "csrf-test"})
+		request.AddCookie(csrfCookie)
 		response := httptest.NewRecorder()
 		Handler("test-version").ServeHTTP(response, request)
 		cookie := response.Result().Cookies()
@@ -1345,9 +1364,19 @@ func TestThemePreferenceUsesCookieAndServerRenderedMarkup(t *testing.T) {
 }
 
 func TestPreferencesPageAndAPI(t *testing.T) {
+	tokenRouteStore(t)
 	handler := Handler("test-version")
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, webTestRequest(http.MethodGet, "/server/preferences", nil))
+	if strings.Contains(page.Body.String(), `id="cookie-consent"`) {
+		t.Fatal("preferences page rendered a separate consent banner")
+	}
+	if got := strings.Count(page.Body.String(), `method="post" action="/server/preferences"`); got != 1 {
+		t.Fatalf("preferences page has %d preference POST forms, want the single page form", got)
+	}
+	if strings.Contains(page.Body.String(), `class="theme-toggle-form"`) {
+		t.Fatal("preferences page rendered the separate header theme form")
+	}
 	for _, expected := range []string{`method="post" action="/server/preferences"`, `name="lang"`, `value="auto"`, `Automatic (English)`, `name="theme"`, `Preferences`} {
 		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), expected) {
 			t.Errorf("preferences page missing %q: %d %s", expected, page.Code, page.Body.String())
@@ -1421,6 +1450,7 @@ func TestGraphQLBrowserFormReturnsHTMLDocument(t *testing.T) {
 }
 
 func TestPreferencesResetPreservesCredentialCookies(t *testing.T) {
+	tokenRouteStore(t)
 	handler := Handler("test-version")
 	pageResponse := httptest.NewRecorder()
 	handler.ServeHTTP(pageResponse, webTestRequest(http.MethodGet, "/server/preferences", nil))
@@ -1722,7 +1752,7 @@ func TestLanguageSelection(t *testing.T) {
 	request.Header.Set("Accept-Language", "fr-CA,fr;q=0.9,en;q=0.8")
 	recorder = httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
-	if !bytes.Contains(recorder.Body.Bytes(), []byte(`<html lang="fr" dir="ltr"`)) || !bytes.Contains(recorder.Body.Bytes(), []byte("Explorez les types")) {
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(`<html lang="fr" dir="ltr"`)) || !bytes.Contains(recorder.Body.Bytes(), []byte("Parcourir")) {
 		t.Fatalf("Accept-Language was not applied: %s", recorder.Body.String())
 	}
 }

@@ -63,6 +63,8 @@ Open `http://127.0.0.1:8080/`. The application uses a read-only embedded catalog
 
 The server supports `-h`/`--help`, `-v`/`--version`, `--port`, `--address`, `--config`, `--mode`, `--update`, `--service`, `--maintenance`, `--debug`, `--color auto|yes|no`, `--lang CODE`, shell completions/init with `--shell`, and `email test` commands. Use `gitmessages email test --dry-run` to preview and validate templates, or `gitmessages email test --to ADDRESS` to send a test message through the configured SMTP relay. Server settings are documented in the [configuration reference](docs/configuration.md).
 
+Maintenance commands cover backup and restore, updates, server mode and setup, OpenPGP key management, application secret rotation, security report management, owner tokens and data, and compliance reporting. See the [CLI reference](docs/cli.md) for the command syntax and security requirements.
+
 ## Client
 
 Install `gitmessages-cli` from the same release as the server. The default CLI is a static command-line and terminal interface; with no configured server, it provides a first-run connection flow. Optional `gitmessages-cli-gui-{os}-{arch}` release artifacts enable the native desktop GUI on Linux, macOS, and Windows and require the toolchain's system loader. BSD builds use the terminal interface. Select `display.mode` as `auto`, `gui`, or `tui` in `cli.yml`; without the optional GUI build, automatic mode selects the TUI when a terminal is available.

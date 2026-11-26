@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -67,6 +68,12 @@ func buildDate() string {
 }
 
 var cfg *config.Config
+
+var startedElevated = privilege.IsElevated()
+
+var pendingUpdateFailure string
+
+var updateRestartRequests = make(chan struct{}, 1)
 
 type optionalUpdate string
 
@@ -191,7 +198,7 @@ func main() {
 	serviceCmd := flag.String("service", "", "Service commands: start, stop, restart, reload, status, --install, --uninstall, --disable")
 
 	// Maintenance commands
-	maintenanceCmd := flag.String("maintenance", "", "Maintenance commands: backup, restore, update, mode, setup, pgp, secret, token, data, compliance")
+	maintenanceCmd := flag.String("maintenance", "", "Maintenance commands: backup, restore, update, mode, setup, pgp, secret, security, token, data, compliance")
 	includeSSLFlag := flag.Bool("include-ssl", false, "Include SSL files with --maintenance backup")
 	includeDataFlag := flag.Bool("include-data", false, "Include data files with --maintenance backup")
 	i2pFlag := flag.Bool("i2p", false, "Enable the I2P eepsite")
@@ -304,7 +311,7 @@ func main() {
 		return
 	}
 	if *maintenanceCmd == "--help" {
-		fmt.Println("Usage: gitmessages --maintenance {backup|restore|update|mode|setup|token} [arguments]")
+		fmt.Println("Usage: gitmessages --maintenance {backup|restore|update|mode|setup|pgp|secret|security|token|data|compliance} [arguments]")
 		return
 	}
 	if updateCmd == "help" {
@@ -384,6 +391,23 @@ func main() {
 		return
 	}
 
+	if startedElevated && runtime.GOOS != "windows" {
+		if stagedUpdateExists(dirs.Data) {
+			stagedVersion := stagedUpdateVersion(dirs.Data)
+			epoch, _ := strconv.ParseInt(BuildEpoch, 10, 64)
+			executable, executableErr := os.Executable()
+			if executableErr == nil {
+				if _, applyErr := updatepkg.ApplyStaged(context.Background(), dirs.Data, paths.ProjectName, executable, Version, epoch, startedElevated); applyErr != nil {
+					pendingUpdateFailure = stagedVersion
+					log.Printf("ERROR update.failed version=%s error=%q", pendingUpdateFailure, applyErr.Error())
+				}
+			} else {
+				pendingUpdateFailure = stagedVersion
+				_ = os.RemoveAll(filepath.Join(dirs.Data, "update"))
+				log.Printf("ERROR update.failed version=%s error=%q", pendingUpdateFailure, "locate executable failed")
+			}
+		}
+	}
 	startupIdentity, err := prepareStartupDirectories(dirs)
 	if err != nil {
 		log.Fatalf("prepare startup directories: %v", err)
@@ -572,6 +596,15 @@ func main() {
 		log.Fatalf("open application database: %v", err)
 	}
 	defer func() { _ = sharedDB.Close() }()
+	if err := recoverEncryptionKeyRotation(context.Background(), sharedDB, cfg); err != nil {
+		log.Fatalf("recover encryption key rotation: %v", err)
+	}
+	if err := recoverInstallationSecretPGPKey(context.Background(), sharedDB, configDir); err != nil {
+		log.Fatalf("recover PGP private key after secret rotation: %v", err)
+	}
+	if err := recoverPGPKeyState(context.Background(), sharedDB, configDir); err != nil {
+		log.Fatalf("recover PGP key state: %v", err)
+	}
 	cacheCounter, err := cache.New(cfg.Server.Cache, configDir)
 	if err != nil {
 		log.Fatalf("configure rate limit cache: %v", err)
@@ -624,6 +657,15 @@ func main() {
 	}
 	web.ConfigureAuth(authStore)
 	web.ConfigureContact(sharedDB)
+	if pendingUpdateFailure != "" {
+		if err := recordUpdateEvent(context.Background(), sharedDB, "update.failed", pendingUpdateFailure, "verification_failed"); err != nil {
+			log.Printf("WARN update.failed_audit_write version=%s", pendingUpdateFailure)
+		}
+		if err := sendOperatorEmail(context.Background(), cfg, "update_failed", "", map[string]string{"version": pendingUpdateFailure, "error": "staged update verification failed; the previous binary remains active"}); err != nil {
+			log.Printf("WARN update.failed_notification version=%s", pendingUpdateFailure)
+		}
+		pendingUpdateFailure = ""
+	}
 	mux := http.NewServeMux()
 	setupRoutes(mux)
 	web.ConfigureAuthMetrics(authStore)
@@ -710,6 +752,10 @@ func main() {
 			}
 			loaded.Server.BaseURL = baseURL
 		}
+		if err := authStore.ReloadEncryptionKey(context.Background(), loaded.Server.Security.EncryptionKey, loaded.Server.Security.EncryptionKeyVersion); err != nil {
+			log.Printf("Encryption key reload failed: %v", err)
+			return
+		}
 		configureSMTP(loaded)
 		cfg = loaded
 		web.SetCORSOrigins(cfg.Server.CORS.AllowedOrigins)
@@ -769,6 +815,26 @@ func main() {
 			return
 		case <-reloadChan:
 			reloadConfiguration()
+		case <-updateRestartRequests:
+			log.Printf("INFO update.restart_requested exit_code=75")
+			stopWatcher()
+			backgroundScheduler.Stop()
+			cancelSecurity()
+			if err := i2pManager.Close(); err != nil {
+				log.Printf("I2P shutdown failed: %v", err)
+			}
+			if err := torManager.Close(); err != nil {
+				log.Printf("Tor shutdown failed: %v", err)
+			}
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			for _, server := range servers {
+				if err := server.Shutdown(shutdownCtx); err != nil {
+					log.Printf("Graceful update shutdown failed: %v", err)
+					_ = server.Close()
+				}
+			}
+			cancel()
+			os.Exit(75)
 		case sig := <-sigChan:
 			switch sig {
 			case syscall.SIGHUP:
@@ -896,6 +962,12 @@ func newApplicationScheduler(
 		}
 	}
 	callbacks := map[string]func() error{
+		"keyserver_retry": withTaskContext(func(ctx context.Context) error {
+			if !configuration.Web.Security.PublishPGPKey {
+				return nil
+			}
+			return publishPGPKey(ctx, store, configuration, filepath.Join(config.ConfigDirectory(), "security"))
+		}),
 		"healthcheck_self": func() error { return store.Read().Ping() },
 		"log_rotation": withTaskContext(func(context.Context) error {
 			return rotateLogFiles(directories.Logs, configuration.Server.Logging, time.Now())
@@ -984,29 +1056,58 @@ func newApplicationScheduler(
 				return err
 			}
 			if configuration.Server.Update.AutoInstall {
-				return fmt.Errorf("update %s is available, but scheduled privileged staging is not configured", release.TagName)
-			}
-			inserted := false
-			err = store.Write(ctx, func(tx *sql.Tx) error {
-				var count int
-				if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_log WHERE category='update' AND action='update.available' AND target_id=?`, release.TagName).Scan(&count); err != nil {
-					return err
-				}
-				if count > 0 {
+				if !startedElevated || runtime.GOOS == "windows" {
+					reason := "not_elevated"
+					if runtime.GOOS == "windows" {
+						reason = "windows_service"
+					}
+					if !updateEventRecorded(ctx, store, "update.install_skipped", release.TagName) {
+						if err := recordUpdateEvent(ctx, store, "update.install_skipped", release.TagName, reason); err != nil {
+							return err
+						}
+						if err := recordUpdateEvent(ctx, store, "update.available", release.TagName, ""); err != nil {
+							return err
+						}
+						logger.Printf("WARN update.install_skipped reason=%s version=%s command='gitmessages --update yes'", reason, release.TagName)
+						if err := sendOperatorEmail(ctx, configuration, "update_available", "", updateEmailValues(Version, release.TagName, branch)); err != nil {
+							logger.Printf("WARN update.notification_failed version=%s", release.TagName)
+						}
+					}
 					return nil
 				}
-				details := fmt.Sprintf(`{"version":%q}`, release.TagName)
-				if _, err := tx.ExecContext(ctx, `INSERT INTO audit_log(level,category,action,target_type,target_id,details,success) VALUES('warn','update','update.available','release',?,?,1)`, release.TagName, details); err != nil {
+				if updateEventRecorded(ctx, store, "update.staged", release.TagName) || updateEventRecorded(ctx, store, "update.failed", release.TagName) {
+					return nil
+				}
+				stageDir := filepath.Join(directories.Data, "update")
+				if err := updatepkg.Stage(ctx, release, stageDir, paths.ProjectName); err != nil {
+					_ = os.RemoveAll(stageDir)
+					_ = recordUpdateEvent(ctx, store, "update.failed", release.TagName, "staging_failed")
+					_ = sendOperatorEmail(ctx, configuration, "update_failed", "", map[string]string{"version": release.TagName, "error": "release download or checksum verification failed"})
+					return fmt.Errorf("stage update %s: %w", release.TagName, err)
+				}
+				if err := recordUpdateEvent(ctx, store, "update.staged", release.TagName, ""); err != nil {
+					_ = os.RemoveAll(stageDir)
 					return err
 				}
-				inserted = true
+				if err := sendOperatorEmail(ctx, configuration, "update_staged", "", updateEmailValues(Version, release.TagName, branch)); err != nil {
+					logger.Printf("WARN update.staged_notification_failed version=%s", release.TagName)
+				}
+				if restartAfterTempFailure() {
+					select {
+					case updateRestartRequests <- struct{}{}:
+					default:
+					}
+				}
 				return nil
-			})
-			if err != nil {
-				return err
 			}
-			if inserted {
+			if !updateEventRecorded(ctx, store, "update.available", release.TagName) {
+				if err := recordUpdateEvent(ctx, store, "update.available", release.TagName, ""); err != nil {
+					return err
+				}
 				logger.Printf("WARN update.available version=%s command='gitmessages --update yes'", release.TagName)
+				if err := sendOperatorEmail(ctx, configuration, "update_available", "", updateEmailValues(Version, release.TagName, branch)); err != nil {
+					logger.Printf("WARN update.notification_failed version=%s", release.TagName)
+				}
 			}
 			return nil
 		}),
@@ -1039,7 +1140,7 @@ func newApplicationScheduler(
 			return nil
 		}
 	}
-	for _, id := range []string{"healthcheck_self", "security_cleanup", "token_cleanup", "geoip_update", "blocklist_update", "cve_update", "update_check", "ssl_renewal", "log_rotation", "disk_check", "backup_daily", "backup_hourly", "tor_health", "i2p_health"} {
+	for _, id := range []string{"healthcheck_self", "security_cleanup", "keyserver_retry", "token_cleanup", "geoip_update", "blocklist_update", "cve_update", "update_check", "ssl_renewal", "log_rotation", "disk_check", "backup_daily", "backup_hourly", "tor_health", "i2p_health"} {
 		callback, ok := callbacks[id]
 		if !ok {
 			continue
@@ -1052,6 +1153,9 @@ func newApplicationScheduler(
 }
 
 func cleanupSecurityData(ctx context.Context, store *database.Store, configDir string, retentionDays int, now time.Time) error {
+	if err := store.RetireExpiredAppSecrets(ctx, now); err != nil {
+		return fmt.Errorf("retire expired application secrets: %w", err)
+	}
 	if retentionDays <= 0 {
 		retentionDays = 365
 	}
@@ -1303,7 +1407,7 @@ func printCommandHelp(command string) {
 	case "service":
 		fmt.Printf("Usage: %s --service {start|stop|restart|reload|status|--install|--uninstall|--disable|--help}\n", binary)
 	case "maintenance":
-		fmt.Printf("Usage: %s --maintenance {backup|restore|update|mode|setup|pgp|secret|token|data|compliance} [arguments]\nBackup modifiers: --include-ssl, --include-data\n", binary)
+		fmt.Printf("Usage: %s --maintenance {backup|restore|update|mode|setup|pgp|secret|security|token|data|compliance} [arguments]\nBackup modifiers: --include-ssl, --include-data\n", binary)
 	case "update":
 		fmt.Printf("Usage: %s --update [check|yes|branch {stable|beta|devel}]\n", binary)
 	}
@@ -1348,6 +1452,9 @@ Maintenance Commands:
       --include-data            Include data files
   --maintenance restore [file]  Restore from backup
   --maintenance update          Check for updates
+  --maintenance pgp generate|rotate|publish|export|import|delete  Manage the security PGP key
+  --maintenance secret rotate installation_secret|encryption_key   Rotate a project secret
+  --maintenance security list|show|export|update  Manage security report workflow
   --maintenance token list      List token metadata
   --maintenance token revoke    Revoke a token by prefix
   --maintenance data export     Export owner data by token prefix
@@ -1503,6 +1610,18 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, bac
 	args := flag.Args()
 
 	switch cmd {
+	case "security":
+		if err := handleSecurityMaintenance(args, databaseDir, logsDir, configuration); err != nil {
+			log.Fatalf("security maintenance failed: %v", err)
+		}
+	case "pgp":
+		if err := handlePGPMaintenance(args, configDir, databaseDir, configuration); err != nil {
+			log.Fatalf("PGP maintenance failed: %v", err)
+		}
+	case "secret":
+		if err := handleSecretMaintenance(args, databaseDir, configDir, logsDir, configuration); err != nil {
+			log.Fatalf("secret maintenance failed: %v", err)
+		}
 	case "token":
 		handleTokenMaintenance(args, databaseDir, configuration)
 	case "data", "compliance":
@@ -2118,6 +2237,74 @@ func handleUpdateCommand(cmd string, currentCfg *config.Config) {
 			return
 		}
 		fmt.Printf("Update branch set to: %s\n", branch)
+	}
+}
+
+func stagedUpdateVersion(dataDirectory string) string {
+	path := filepath.Join(dataDirectory, "update", paths.ProjectName+".json")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "unknown"
+		}
+		return "unknown"
+	}
+	var metadata struct {
+		TagName string `json:"tag_name"`
+	}
+	if json.Unmarshal(contents, &metadata) != nil || metadata.TagName == "" || strings.ContainsAny(metadata.TagName, `/\\`) {
+		return "unknown"
+	}
+	return metadata.TagName
+}
+
+func stagedUpdateExists(dataDirectory string) bool {
+	info, err := os.Stat(filepath.Join(dataDirectory, "update"))
+	return err == nil && info.IsDir()
+}
+
+func recordUpdateEvent(ctx context.Context, store *database.Store, action, version, reason string) error {
+	if store == nil || action == "" || version == "" {
+		return errors.New("update event requires a store, action, and version")
+	}
+	level, success := "info", 1
+	if action == "update.install_skipped" || action == "update.available" {
+		level = "warn"
+	}
+	if action == "update.failed" {
+		level, success = "error", 0
+	}
+	details := fmt.Sprintf(`{"version":%q}`, version)
+	if reason != "" {
+		details = fmt.Sprintf(`{"reason":%q,"version":%q}`, reason, version)
+	}
+	return store.Write(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO audit_log(level,category,action,target_type,target_id,details,success) VALUES(?, 'update', ?, 'release', ?, ?, ?)`, level, action, version, details, success)
+		return err
+	})
+}
+
+func updateEventRecorded(ctx context.Context, store *database.Store, action, version string) bool {
+	if store == nil {
+		return false
+	}
+	var count int
+	if err := store.Read().QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_log WHERE category='update' AND action=? AND target_id=?`, action, version).Scan(&count); err != nil {
+		return false
+	}
+	return count > 0
+}
+
+func updateEmailValues(currentVersion, newVersion, branch string) map[string]string {
+	return map[string]string{"current_version": currentVersion, "new_version": newVersion, "version": newVersion, "channel": branch}
+}
+
+func restartAfterTempFailure() bool {
+	switch servicepkg.DetectServiceManager() {
+	case servicepkg.ServiceSystemd, servicepkg.ServiceLaunchd, servicepkg.ServiceRunit, servicepkg.ServiceS6, servicepkg.ServiceBSDRC:
+		return true
+	default:
+		return false
 	}
 }
 

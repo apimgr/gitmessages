@@ -107,10 +107,20 @@ func TestTokenIssueRequiresCSRFAndRedirectsAfterIssue(t *testing.T) {
 		t.Fatalf("invalid CSRF status = %d", badResponse.Code)
 	}
 
-	csrf := "0123456789abcdef"
-	r := httptest.NewRequest(http.MethodPost, "/server/preferences/token/create", strings.NewReader("csrf_token="+csrf))
+	getPage := httptest.NewRecorder()
+	tokenPageOrAction(getPage, httptest.NewRequest(http.MethodGet, "https://example.test/server/preferences/tokens", nil))
+	var csrf *http.Cookie
+	for _, cookie := range getPage.Result().Cookies() {
+		if cookie.Name == csrfCookieName {
+			csrf = cookie
+		}
+	}
+	if csrf == nil {
+		t.Fatal("token page did not issue its signed CSRF cookie")
+	}
+	r := httptest.NewRequest(http.MethodPost, "/server/preferences/token/create", strings.NewReader("csrf_token="+csrf.Value))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	r.AddCookie(&http.Cookie{Name: csrfCookieName, Value: csrf})
+	r.AddCookie(csrf)
 	w := httptest.NewRecorder()
 	tokenWebAction("create")(w, r)
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/server/preferences/tokens#primary" {
@@ -248,6 +258,107 @@ func TestInvalidLegacyOwnerCookieIsCleared(t *testing.T) {
 	}
 }
 
+func TestOwnerAndFlashCookiesOmitSecureOnI2P(t *testing.T) {
+	tokenRouteStore(t)
+	request := httptest.NewRequest(http.MethodPost, "http://gitmessages.b32.i2p/server/preferences/tokens", nil)
+	response := httptest.NewRecorder()
+	setOwnerCookie(response, request, "own_example", 0)
+	if !setTokenFlash(response, request, "primary", "tokens.toast_created") {
+		t.Fatal("could not sign I2P token-view selector")
+	}
+
+	secure := make(map[string]bool)
+	for _, cookie := range response.Result().Cookies() {
+		secure[cookie.Name] = cookie.Secure
+	}
+	if secure[ownerCookieName] || secure[tokenFlashCookieName] {
+		t.Fatalf("I2P cookies must omit Secure: %#v", response.Result().Cookies())
+	}
+	followup := httptest.NewRequest(http.MethodGet, "http://gitmessages.b32.i2p/server/preferences/tokens", nil)
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == tokenFlashCookieName {
+			followup.AddCookie(cookie)
+		}
+	}
+	if flash, ok := takeTokenFlash(httptest.NewRecorder(), followup); !ok || flash.card != "primary" || flash.toast != "tokens.toast_created" {
+		t.Fatal("I2P flash cookie was not usable on its follow-up request")
+	}
+}
+
+func TestCSRFCookieSecurePolicyIncludesHiddenServices(t *testing.T) {
+	if !csrfCookieSecure(httptest.NewRequest(http.MethodGet, "https://example.test/", nil)) {
+		t.Fatal("HTTPS CSRF cookie should be Secure with auto policy")
+	}
+	if !csrfCookieSecure(httptest.NewRequest(http.MethodGet, "http://service.onion/", nil)) {
+		t.Fatal("Tor CSRF cookie should be Secure")
+	}
+	if csrfCookieSecure(httptest.NewRequest(http.MethodGet, "http://gitmessages.b32.i2p/", nil)) {
+		t.Fatal("I2P CSRF cookie must omit Secure")
+	}
+}
+
+func TestCSRFCookieIsSignedAndRotatesImmediately(t *testing.T) {
+	store := tokenRouteStore(t)
+	request := httptest.NewRequest(http.MethodGet, "https://example.test/server/preferences/tokens", nil)
+	response := httptest.NewRecorder()
+	tokenPageOrAction(response, request)
+	var csrf *http.Cookie
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == csrfCookieName {
+			csrf = cookie
+		}
+	}
+	if csrf == nil || !validSignedCSRF(request.Context(), csrf.Value) {
+		t.Fatal("CSRF cookie was not signed with the application secret")
+	}
+	old := csrf.Value
+	if err := store.Database().RotateAppSecret(request.Context(), "csrf_token_secret"); err != nil {
+		t.Fatalf("rotate CSRF secret: %v", err)
+	}
+	if validSignedCSRF(request.Context(), old) {
+		t.Fatal("CSRF token signed by a rotated key remained valid")
+	}
+	parts := strings.Split(old, ".")
+	parts[1] = strings.Repeat("A", len(parts[1]))
+	if validSignedCSRF(request.Context(), strings.Join(parts, ".")) {
+		t.Fatal("tampered CSRF signature was accepted")
+	}
+}
+
+func TestTokenViewCookieCarriesSignedSelectorOnly(t *testing.T) {
+	store := tokenRouteStore(t)
+	primary, _, err := store.IssueOwner(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "https://example.test/server/preferences/tokens", nil)
+	response := httptest.NewRecorder()
+	if !setTokenFlash(response, request, "primary", "tokens.toast_created") {
+		t.Fatal("could not sign token-view selector")
+	}
+	var view *http.Cookie
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == tokenFlashCookieName {
+			view = cookie
+		}
+	}
+	if view == nil || strings.Contains(view.Value, primary) {
+		t.Fatalf("token-view cookie is missing or exposes the raw token: %#v", view)
+	}
+	followup := httptest.NewRequest(http.MethodGet, "https://example.test/server/preferences/tokens", nil)
+	followup.AddCookie(view)
+	flash, ok := takeTokenFlash(httptest.NewRecorder(), followup)
+	if !ok || flash.card != "primary" || flash.toast != "tokens.toast_created" {
+		t.Fatalf("signed token-view selector = %#v, %v", flash, ok)
+	}
+	view.Value += "tampered"
+	followup = httptest.NewRequest(http.MethodGet, "https://example.test/server/preferences/tokens", nil)
+	followup.AddCookie(view)
+	if _, ok := takeTokenFlash(httptest.NewRecorder(), followup); ok {
+		t.Fatal("tampered token-view selector was accepted")
+	}
+}
+
 func TestTokenCookieMiddlewareMigratesLegacyCookieAndIgnoresAPI(t *testing.T) {
 	store := tokenRouteStore(t)
 	primary, _, err := store.IssueOwner(t.Context())
@@ -348,11 +459,20 @@ func TestPrimaryRevocationRequiresLastFourAndDeletesOwner(t *testing.T) {
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), primary[len(primary)-4:]) || !strings.Contains(page.Body.String(), `name="confirm"`) || !strings.Contains(page.Body.String(), "Linked tokens (1)") {
 		t.Fatalf("primary token page omitted the last-four revocation flow: status=%d", page.Code)
 	}
+	var csrf *http.Cookie
+	for _, cookie := range page.Result().Cookies() {
+		if cookie.Name == csrfCookieName {
+			csrf = cookie
+		}
+	}
+	if csrf == nil {
+		t.Fatal("token page did not issue its signed CSRF cookie")
+	}
 	call := func(confirm string) *httptest.ResponseRecorder {
-		body := "csrf_token=csrf-value&confirm=" + confirm
+		body := "csrf_token=" + csrf.Value + "&confirm=" + confirm
 		r := httptest.NewRequest(http.MethodPost, "https://example.test/server/preferences/token/revoke", strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		r.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "csrf-value"})
+		r.AddCookie(csrf)
 		r.AddCookie(&http.Cookie{Name: ownerCookieName, Value: primary})
 		w := httptest.NewRecorder()
 		tokenWebAction("primary-revoke")(w, r)
@@ -368,6 +488,13 @@ func TestPrimaryRevocationRequiresLastFourAndDeletesOwner(t *testing.T) {
 	valid := call(primary[len(primary)-4:])
 	if valid.Code != http.StatusSeeOther || valid.Header().Get("Clear-Site-Data") != `"storage"` {
 		t.Fatalf("valid primary revocation returned %d or omitted storage clearing", valid.Code)
+	}
+	csrfCleared := false
+	for _, cookie := range valid.Result().Cookies() {
+		csrfCleared = csrfCleared || cookie.Name == csrfCookieName && cookie.MaxAge == -1
+	}
+	if !csrfCleared {
+		t.Fatal("primary token revocation did not expire the CSRF token for regeneration")
 	}
 	if _, err := store.Authenticate(t.Context(), primary); err == nil {
 		t.Fatal("primary token remained valid after owner deletion")

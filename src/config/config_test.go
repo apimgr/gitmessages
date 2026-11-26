@@ -44,6 +44,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Web.UI.Theme != "dark" {
 		t.Errorf("Web.UI.Theme = %q, want dark", cfg.Web.UI.Theme)
 	}
+	if !cfg.Server.CSRF.Enabled || cfg.Server.CSRF.TokenLength != 32 || cfg.Server.CSRF.CookieName != "csrf_token" || cfg.Server.CSRF.HeaderName != "X-CSRF-Token" || cfg.Server.CSRF.Secure != "auto" {
+		t.Errorf("CSRF defaults do not match the frontend token contract: %+v", cfg.Server.CSRF)
+	}
 	if len(cfg.Web.Robots.Allow) == 0 {
 		t.Error("Web.Robots.Allow should not be empty")
 	}
@@ -221,7 +224,7 @@ func TestValidateSkipsInvalidSecurityEntries(t *testing.T) {
 		{CIDR: "not-an-ip", Description: "invalid"},
 	}
 	cfg.Server.Security.BlockedIPs = []BlockedIPEntry{
-		{CIDR: "198.51.100.8", Reason: "test"},
+		{CIDR: "198.51.100.8", Description: "test"},
 		{CIDR: "invalid"},
 	}
 	cfg.Server.Security.Blocklists.ExtraSources = []BlocklistSourceConfig{
@@ -240,6 +243,9 @@ func TestValidateSkipsInvalidSecurityEntries(t *testing.T) {
 	}
 	if len(cfg.Server.Security.BlockedIPs) != 1 || cfg.Server.Security.BlockedIPs[0].CIDR != "198.51.100.8/32" {
 		t.Fatalf("validated blocked IPs = %+v", cfg.Server.Security.BlockedIPs)
+	}
+	if cfg.Server.Security.BlockedIPs[0].Description != "test" {
+		t.Fatalf("blocked IP description = %q, want test", cfg.Server.Security.BlockedIPs[0].Description)
 	}
 	if len(cfg.Server.Security.Blocklists.ExtraSources) != 1 || cfg.Server.Security.Blocklists.ExtraSources[0].ID != "valid_feed" {
 		t.Fatalf("validated blocklist sources = %+v", cfg.Server.Security.Blocklists.ExtraSources)

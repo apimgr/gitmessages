@@ -48,7 +48,7 @@ func TestInstallationSecretMigratesLegacyHexStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.Write(context.Background(), func(tx *sql.Tx) error {
-		_, err := tx.Exec("INSERT INTO app_secrets(name, value, updated_at) VALUES(?, ?, 'before')", installationSecretName, hex.EncodeToString(raw))
+		_, err := tx.Exec("UPDATE app_secrets SET value = ?, updated_at = 'before' WHERE name = ?", hex.EncodeToString(raw), installationSecretName)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestInstallationSecretRejectsInvalidStoredValue(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 	if err := store.Write(context.Background(), func(tx *sql.Tx) error {
-		_, err := tx.Exec("INSERT INTO app_secrets(name, value, updated_at) VALUES(?, 'invalid', 'now')", installationSecretName)
+		_, err := tx.Exec("UPDATE app_secrets SET value = 'invalid', updated_at = 'now' WHERE name = ?", installationSecretName)
 		return err
 	}); err != nil {
 		t.Fatal(err)

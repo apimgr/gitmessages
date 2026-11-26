@@ -501,7 +501,13 @@ func selectLanguage(flagValue, configValue string) string {
 		}
 		return "en"
 	}
-	for _, value := range []string{flagValue, os.Getenv("GITMESSAGES_LANG"), configValue, os.Getenv("LANG")} {
+	if strings.TrimSpace(configValue) != "" && strings.TrimSpace(configValue) != "auto" {
+		if code := normalizeLanguage(configValue); i18n.IsSupported(code) {
+			return code
+		}
+		return "en"
+	}
+	for _, value := range []string{os.Getenv("LC_ALL"), os.Getenv("LANG")} {
 		code := normalizeLanguage(value)
 		if i18n.IsSupported(code) {
 			return code

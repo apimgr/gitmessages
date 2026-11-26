@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -29,6 +31,12 @@ type Release struct {
 type Asset struct {
 	Name string `json:"name"`
 	URL  string `json:"browser_download_url"`
+}
+
+type stagedRelease struct {
+	TagName   string    `json:"tag_name"`
+	Published time.Time `json:"published_at"`
+	AssetName string    `json:"asset_name"`
 }
 
 func Check(ctx context.Context, branch, current string, buildEpoch int64) (Release, bool, error) {
@@ -165,10 +173,7 @@ func compareTags(left, right string) int {
 }
 
 func Install(ctx context.Context, release Release) error {
-	assetName := fmt.Sprintf("gitmessages-%s-%s", runtime.GOOS, runtime.GOARCH)
-	if runtime.GOOS == "windows" {
-		assetName += ".exe"
-	}
+	assetName := platformAssetName()
 	var binaryURL, checksumURL string
 	for _, asset := range release.Assets {
 		switch asset.Name {
@@ -234,6 +239,275 @@ func Install(ctx context.Context, release Release) error {
 		return fmt.Errorf("replace executable: %w", err)
 	}
 	return nil
+}
+
+// Stage downloads and verifies a release into a service-writable update directory.
+func Stage(ctx context.Context, release Release, directory, projectName string) error {
+	assetName := platformAssetName()
+	binaryURL, checksumURL := releaseAssetURLs(release, assetName)
+	if binaryURL == "" || checksumURL == "" {
+		return fmt.Errorf("release %s is missing the platform binary or sha256.txt", release.TagName)
+	}
+	if !httpsURL(binaryURL) || !httpsURL(checksumURL) {
+		return fmt.Errorf("release assets must use HTTPS")
+	}
+	checksumText, err := download(ctx, checksumURL, 1<<20)
+	if err != nil {
+		return fmt.Errorf("download release checksums: %w", err)
+	}
+	want, ok := checksumFor(string(checksumText), assetName)
+	if !ok {
+		return fmt.Errorf("release checksum file has no entry for %s", assetName)
+	}
+	binary, err := download(ctx, binaryURL, 1<<30)
+	if err != nil {
+		return fmt.Errorf("download release binary: %w", err)
+	}
+	if !matchesSHA256(binary, want) {
+		return fmt.Errorf("SHA-256 verification failed for %s", assetName)
+	}
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return fmt.Errorf("create update staging directory: %w", err)
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		return fmt.Errorf("secure update staging directory: %w", err)
+	}
+	metadata, err := json.Marshal(stagedRelease{TagName: release.TagName, Published: release.PublishedAt, AssetName: assetName})
+	if err != nil {
+		return fmt.Errorf("encode staged release metadata: %w", err)
+	}
+	if err := writeAtomic(filepath.Join(directory, projectName+".new"), binary, 0o755); err != nil {
+		return fmt.Errorf("stage update binary: %w", err)
+	}
+	if err := writeAtomic(filepath.Join(directory, projectName+".sha256"), []byte(strings.ToLower(want)+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write informational update checksum: %w", err)
+	}
+	if err := writeAtomic(filepath.Join(directory, projectName+".json"), metadata, 0o600); err != nil {
+		return fmt.Errorf("write staged release metadata: %w", err)
+	}
+	return nil
+}
+
+// ApplyStaged verifies a staged binary against a fresh official release checksum and applies it.
+func ApplyStaged(ctx context.Context, directory, projectName, executable, currentVersion string, buildEpoch int64, startedElevated bool) (bool, error) {
+	if runtime.GOOS == "windows" || !startedElevated {
+		return false, nil
+	}
+	stageDir := filepath.Join(directory, "update")
+	metadataPath := filepath.Join(stageDir, projectName+".json")
+	metadataBytes, err := os.ReadFile(metadataPath)
+	if errors.Is(err, os.ErrNotExist) {
+		if _, stageErr := os.Stat(stageDir); errors.Is(stageErr, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, failAndClearStaged(stageDir, errors.New("staged update metadata is missing"))
+	}
+	if err != nil {
+		return false, failAndClearStaged(stageDir, fmt.Errorf("read staged update metadata: %w", err))
+	}
+	var metadata stagedRelease
+	if err := json.Unmarshal(metadataBytes, &metadata); err != nil || metadata.TagName == "" || metadata.AssetName != platformAssetName() {
+		return false, failAndClearStaged(stageDir, errors.New("staged update metadata is invalid"))
+	}
+	release, err := officialRelease(ctx, metadata.TagName)
+	if err != nil {
+		return false, failAndClearStaged(stageDir, fmt.Errorf("re-fetch official release checksum: %w", err))
+	}
+	assetName := platformAssetName()
+	binaryURL, checksumURL := releaseAssetURLs(release, assetName)
+	if binaryURL == "" || checksumURL == "" {
+		return false, failAndClearStaged(stageDir, fmt.Errorf("official release %s is missing the platform binary or checksum", metadata.TagName))
+	}
+	if !httpsURL(binaryURL) || !httpsURL(checksumURL) {
+		return false, failAndClearStaged(stageDir, errors.New("official release assets must use HTTPS"))
+	}
+	checksumText, err := download(ctx, checksumURL, 1<<20)
+	if err != nil {
+		return false, failAndClearStaged(stageDir, fmt.Errorf("re-fetch official release checksum: %w", err))
+	}
+	want, ok := checksumFor(string(checksumText), assetName)
+	if !ok {
+		return false, failAndClearStaged(stageDir, fmt.Errorf("official checksum has no entry for %s", assetName))
+	}
+	if !releaseIsNewer(metadata.TagName, release.PublishedAt, currentVersion, buildEpoch) {
+		return false, failAndClearStaged(stageDir, fmt.Errorf("staged update %s is not newer than running version %s", metadata.TagName, currentVersion))
+	}
+	stagedPath := filepath.Join(stageDir, projectName+".new")
+	binary, err := readRegularFile(stagedPath, 1<<30)
+	if err != nil {
+		return false, failAndClearStaged(stageDir, fmt.Errorf("read staged update binary: %w", err))
+	}
+	if !matchesSHA256(binary, want) {
+		return false, failAndClearStaged(stageDir, errors.New("staged update checksum does not match the official release"))
+	}
+	if _, err := os.Stat(executable); err != nil {
+		return false, failAndClearStaged(stageDir, fmt.Errorf("inspect current executable: %w", err))
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		return false, failAndClearStaged(stageDir, fmt.Errorf("resolve current executable: %w", err))
+	}
+	info, err := os.Stat(executable)
+	if err != nil {
+		return false, failAndClearStaged(stageDir, fmt.Errorf("inspect resolved executable: %w", err))
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(executable), ".gitmessages-update-*")
+	if err != nil {
+		return false, failAndClearStaged(stageDir, fmt.Errorf("create privileged update file: %w", err))
+	}
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+	if err := temporary.Chmod(info.Mode().Perm()); err != nil {
+		_ = temporary.Close()
+		return false, failAndClearStaged(stageDir, fmt.Errorf("set privileged update permissions: %w", err))
+	}
+	if _, err := temporary.Write(binary); err != nil {
+		_ = temporary.Close()
+		return false, failAndClearStaged(stageDir, fmt.Errorf("copy verified update: %w", err))
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return false, failAndClearStaged(stageDir, fmt.Errorf("sync verified update: %w", err))
+	}
+	if err := temporary.Close(); err != nil {
+		return false, failAndClearStaged(stageDir, fmt.Errorf("close verified update: %w", err))
+	}
+	if err := os.RemoveAll(stageDir); err != nil {
+		return false, fmt.Errorf("remove staged update files: %w", err)
+	}
+	if err := replaceAndRestart(executable, temporaryPath); err != nil {
+		return false, fmt.Errorf("replace and restart executable: %w", err)
+	}
+	return true, nil
+}
+
+func officialRelease(ctx context.Context, tag string) (Release, error) {
+	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(request *http.Request, via []*http.Request) error {
+		if request.URL.Scheme != "https" {
+			return errors.New("refusing non-HTTPS redirect")
+		}
+		return nil
+	}}
+	if !httpsURL(releaseAPI) {
+		return Release{}, errors.New("official release API must use HTTPS")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseAPI, nil)
+	if err != nil {
+		return Release{}, err
+	}
+	request.Header.Set("Accept", "application/vnd.github+json")
+	request.Header.Set("User-Agent", "gitmessages-update-verify")
+	response, err := client.Do(request)
+	if err != nil {
+		return Release{}, err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusOK {
+		return Release{}, fmt.Errorf("GitHub releases returned %s", response.Status)
+	}
+	var releases []Release
+	if err := json.NewDecoder(io.LimitReader(response.Body, 8<<20)).Decode(&releases); err != nil {
+		return Release{}, fmt.Errorf("decode official releases: %w", err)
+	}
+	for _, release := range releases {
+		if release.TagName == tag {
+			return release, nil
+		}
+	}
+	return Release{}, fmt.Errorf("official release %q was not found", tag)
+}
+
+func releaseAssetURLs(release Release, assetName string) (string, string) {
+	var binaryURL, checksumURL string
+	for _, asset := range release.Assets {
+		switch asset.Name {
+		case assetName:
+			binaryURL = asset.URL
+		case "sha256.txt":
+			checksumURL = asset.URL
+		}
+	}
+	return binaryURL, checksumURL
+}
+
+func platformAssetName() string {
+	assetName := fmt.Sprintf("gitmessages-%s-%s", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		assetName += ".exe"
+	}
+	return assetName
+}
+
+func releaseIsNewer(tag string, published time.Time, current string, buildEpoch int64) bool {
+	if tag == "devel" {
+		return published.Unix() > buildEpoch
+	}
+	return compareTags(tag, current) > 0
+}
+
+func matchesSHA256(data []byte, digest string) bool {
+	sum := sha256.Sum256(data)
+	return strings.EqualFold(hex.EncodeToString(sum[:]), strings.TrimSpace(digest))
+}
+
+func httpsURL(address string) bool {
+	parsed, err := url.Parse(address)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != ""
+}
+
+func readRegularFile(path string, maxSize int64) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxSize {
+		return nil, errors.New("staged file is not a bounded regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, maxSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxSize {
+		return nil, errors.New("staged file exceeds its size limit")
+	}
+	return data, nil
+}
+
+func writeAtomic(path string, data []byte, mode os.FileMode) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".stage-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+	if err := temporary.Chmod(mode); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
+}
+
+func failAndClearStaged(directory string, err error) error {
+	if removeErr := os.RemoveAll(directory); removeErr != nil {
+		return errors.Join(err, fmt.Errorf("remove failed staged update: %w", removeErr))
+	}
+	return err
 }
 
 func download(ctx context.Context, address string, maxSize int64) ([]byte, error) {

@@ -158,7 +158,7 @@ func hasConsentCookie(r *http.Request) bool {
 
 func consentBannerMarkup(r *http.Request, csrf string) string {
 	consent := config.Get().Server.Privacy.Consent
-	if !consent.ShowUntilAcknowledged || hasConsentCookie(r) {
+	if !consent.ShowUntilAcknowledged || hasConsentCookie(r) || r.URL.Path == "/server/preferences" {
 		return ""
 	}
 	policyURL := validConsentPolicyURL(consent.Policy.URL)
@@ -175,12 +175,8 @@ func consentBannerMarkup(r *http.Request, csrf string) string {
 	if policyText == "" {
 		policyText = config.DefaultConfig().Server.Privacy.Consent.Policy.Text
 	}
-	position := "bottom"
-	if consent.Position == "top" {
-		position = "top"
-	}
 	var body strings.Builder
-	fmt.Fprintf(&body, `<div id="cookie-consent" class="cookie-banner cookie-banner-%s" data-sold="%t" role="region" aria-label="%s"><div class="cookie-banner-content"><span class="cookie-message">%s - <a href="%s" class="policy-link">%s</a></span><div class="cookie-buttons">`, position, config.Get().Server.Privacy.Data.Sold, aria, template.HTMLEscapeString(message), template.HTMLEscapeString(policyURL), template.HTMLEscapeString(policyText))
+	fmt.Fprintf(&body, `<div id="cookie-consent" class="cookie-banner cookie-banner-bottom" data-sold="%t" role="region" aria-label="%s"><div class="cookie-banner-content"><span class="cookie-message">%s - <a href="%s" class="policy-link">%s</a></span><div class="cookie-buttons">`, config.Get().Server.Privacy.Data.Sold, aria, template.HTMLEscapeString(message), template.HTMLEscapeString(policyURL), template.HTMLEscapeString(policyText))
 	for _, choice := range []struct{ name, class, label string }{{"decline", "btn-decline", consent.Buttons.Decline}, {"accept", "btn-accept", consent.Buttons.Accept}} {
 		fmt.Fprintf(&body, `<form method="post" action="/server/consent"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="choice" value="%s"><input type="hidden" name="redirect" value="%s"><button type="submit" class="%s">%s</button></form>`, template.HTMLEscapeString(csrf), choice.name, template.HTMLEscapeString(redirect), choice.class, template.HTMLEscapeString(choice.label))
 	}

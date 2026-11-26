@@ -151,7 +151,8 @@ func TestUpdateBlocklistsPublishesValidatedFeedsAndPreservesLastGoodCopy(t *test
 		t.Errorf("domain result = %+v; want two valid entries and one skipped", got)
 	}
 	blocklistPath := filepath.Join(manager.Dir, "blocklists", "domain_feed.txt")
-	if err := os.Chtimes(blocklistPath, now, now); err != nil {
+	markerPath := filepath.Join(manager.Dir, "blocklists", "domain_feed.last_updated")
+	if err := os.Chtimes(blocklistPath, now.Add(-24*time.Hour), now.Add(-24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	contents, err := os.ReadFile(blocklistPath)
@@ -160,6 +161,9 @@ func TestUpdateBlocklistsPublishesValidatedFeedsAndPreservesLastGoodCopy(t *test
 	}
 	if status, updated := manager.CheckBlocklist("domain_feed", time.Hour); status != "ok" || !updated.Equal(now) {
 		t.Errorf("fresh blocklist status = %q, %v", status, updated)
+	}
+	if _, err := os.Stat(filepath.Join(manager.Dir, "blocklists", ".last_updated")); !os.IsNotExist(err) {
+		t.Errorf("shared blocklist timestamp exists, stat error = %v", err)
 	}
 	if status, _ := manager.CheckBlocklist("domain_feed", 0); status != "ok" {
 		t.Errorf("unaged blocklist status = %q, want ok", status)
@@ -180,6 +184,15 @@ func TestUpdateBlocklistsPublishesValidatedFeedsAndPreservesLastGoodCopy(t *test
 	contents, err = os.ReadFile(blocklistPath)
 	if err != nil || string(contents) != "*.bad.example\nexample.com\n" {
 		t.Fatalf("last good domain feed changed after invalid update: %q, %v", contents, err)
+	}
+	if status, updated := manager.CheckBlocklist("firehol_level1", 72*time.Hour); status != "ok" || !updated.Equal(now) {
+		t.Errorf("successful source freshness was not independent: status=%q updated=%s", status, updated)
+	}
+	if status, updated := manager.CheckBlocklist("domain_feed", 72*time.Hour); status != "degraded" || !updated.Equal(now.Add(-73*time.Hour)) {
+		t.Errorf("failed source did not retain its old freshness: status=%q updated=%s", status, updated)
+	}
+	if marker, err := os.ReadFile(markerPath); err != nil || string(marker) != now.Add(-73*time.Hour).Format(time.RFC3339)+"\n" {
+		t.Errorf("failed source timestamp changed: %q, %v", marker, err)
 	}
 	if status, _ := manager.CheckBlocklist("invalid/id", 0); status != "error" {
 		t.Errorf("invalid blocklist ID status = %q, want error", status)
@@ -383,6 +396,13 @@ func TestSecurityDataFreshnessReportsMissingCurrentAndStaleDatasets(t *testing.T
 	if err := os.WriteFile(blocklist, []byte("203.0.113.1/32\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if status, _ := manager.CheckBlocklist("sample", time.Hour); status != "error" {
+		t.Fatalf("blocklist without a freshness marker status = %q, want error", status)
+	}
+	blocklistMarker := filepath.Join(filepath.Dir(blocklist), "sample.last_updated")
+	if err := os.WriteFile(blocklistMarker, []byte(now.Format(time.RFC3339)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if status, updated := manager.CheckBlocklist("sample", time.Hour); status != "ok" || updated.IsZero() {
 		t.Fatalf("fresh blocklist status = %q at %s", status, updated)
 	}
@@ -390,7 +410,7 @@ func TestSecurityDataFreshnessReportsMissingCurrentAndStaleDatasets(t *testing.T
 		t.Fatalf("invalid blocklist ID status = %q, want error", status)
 	}
 	old := now.Add(-2 * time.Hour)
-	if err := os.Chtimes(blocklist, old, old); err != nil {
+	if err := os.WriteFile(blocklistMarker, []byte(old.Format(time.RFC3339)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if status, _ := manager.CheckBlocklist("sample", time.Hour); status != "degraded" {

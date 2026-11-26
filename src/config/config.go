@@ -50,6 +50,7 @@ type ServerConfig struct {
 	Update         UpdateConfig         `yaml:"update"`
 	CLI            CLIConfig            `yaml:"cli"`
 	CORS           CORSConfig           `yaml:"cors"`
+	CSRF           CSRFConfig           `yaml:"csrf"`
 	Metrics        MetricsConfig        `yaml:"metrics"`
 	Logging        LoggingConfig        `yaml:"logs"`
 	Tor            TorConfig            `yaml:"tor"`
@@ -371,7 +372,6 @@ type PrivacyConsentConfig struct {
 		Decline string `yaml:"decline"`
 		Accept  string `yaml:"accept"`
 	} `yaml:"buttons"`
-	Position        string `yaml:"position"`
 	ShowPreferences bool   `yaml:"show_preferences"`
 	PreferencesText string `yaml:"preferences_text"`
 }
@@ -593,8 +593,8 @@ type AllowlistEntry struct {
 }
 
 type BlockedIPEntry struct {
-	CIDR   string `yaml:"cidr" json:"cidr"`
-	Reason string `yaml:"reason" json:"reason"`
+	CIDR        string `yaml:"cidr" json:"cidr"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
 type BlocklistsConfig struct {
@@ -852,14 +852,24 @@ type WebRobotsConfig struct {
 
 // WebSecurityConfig contains security settings
 type WebSecurityConfig struct {
-	Contact       string `yaml:"contact"`
-	Policy        string `yaml:"policy"`
-	ReportURL     string `yaml:"report_url"`
-	PublishPGPKey bool   `yaml:"publish_pgp_key"`
+	Contact       string   `yaml:"contact"`
+	Policy        string   `yaml:"policy"`
+	ReportURL     string   `yaml:"report_url"`
+	PublishPGPKey bool     `yaml:"publish_pgp_key"`
+	Keyservers    []string `yaml:"keyservers"`
 }
 
 type CORSConfig struct {
 	AllowedOrigins []string `yaml:"allowed_origins"`
+}
+
+type CSRFConfig struct {
+	Enabled     bool     `yaml:"enabled"`
+	TokenLength int      `yaml:"token_length"`
+	CookieName  string   `yaml:"cookie_name"`
+	HeaderName  string   `yaml:"header_name"`
+	Secure      string   `yaml:"secure"`
+	ExemptPaths []string `yaml:"exempt_paths"`
 }
 
 var (
@@ -883,8 +893,12 @@ func DefaultConfig() *Config {
 			Address:    initialAddress(),
 			Mode:       "production",
 			Debug:      DebugConfig{Pprof: true, LogQueries: true, LogCache: true, MaxBodyLogSize: "10KB", BlockProfileRate: 1, MutexProfileFraction: 1, RuntimeEndpoints: true},
-			Branding:   BrandingConfig{Title: "Git Messages"},
-			I18N:       I18NConfig{DefaultLanguage: "en", AvailableLanguages: []string{"en", "es", "fr", "de", "it", "ar"}},
+			Branding: BrandingConfig{
+				Title:       "Git Messages",
+				Tagline:     "A curated reference for git commit message conventions.",
+				Description: "Gitmessages is a full-stack Go web application serving a curated reference for git commit message conventions, with an interactive message builder, REST and GraphQL APIs, and a companion CLI.",
+			},
+			I18N: I18NConfig{DefaultLanguage: "en", AvailableLanguages: []string{"en", "es", "fr", "de", "it", "ar"}},
 			SEO: SEOConfig{
 				TitleSeparator: " - ",
 				OpenGraph:      SEOOpenGraphConfig{Enabled: true, Type: "website"},
@@ -912,6 +926,7 @@ func DefaultConfig() *Config {
 			URLDetection: URLDetectionConfig{Learning: true, MinSamples: 3, SampleWindow: "5m", LogChanges: true, LiveReload: true},
 			Update:       UpdateConfig{Branch: "stable", AutoInstall: false, DeferDays: 0},
 			CORS:         CORSConfig{AllowedOrigins: []string{"*"}},
+			CSRF:         CSRFConfig{Enabled: true, TokenLength: 32, CookieName: "csrf_token", HeaderName: "X-CSRF-Token", Secure: "auto", ExemptPaths: []string{}},
 			Metrics: MetricsConfig{
 				Enabled:         false,
 				Root:            MetricsRootConfig{Enabled: true},
@@ -984,7 +999,7 @@ func DefaultConfig() *Config {
 				Allow: []string{"/", "/api"},
 				Deny:  []string{"/debug"},
 			},
-			Security: WebSecurityConfig{Contact: ""},
+			Security: WebSecurityConfig{Contact: "", PublishPGPKey: true, Keyservers: []string{}},
 		},
 	}
 }
@@ -997,6 +1012,7 @@ func defaultSchedulerConfig() SchedulerConfig {
 			"geoip_update":     {Enabled: true, Schedule: "0 3 * * 0"},
 			"blocklist_update": {Enabled: true, Schedule: "0 4 * * *", RetryOnFail: true, RetryDelay: "1h"},
 			"security_cleanup": {Enabled: true, Schedule: "30 3 * * *"},
+			"keyserver_retry":  {Enabled: true, Schedule: "@every 15m"},
 			"cve_update":       {Enabled: true, Schedule: "0 5 * * *", RetryOnFail: true, RetryDelay: "1h"},
 			"update_check":     {Enabled: true, Schedule: "0 6 * * *"},
 			"token_cleanup":    {Enabled: true, Schedule: "@every 15m"},
@@ -1033,7 +1049,6 @@ func defaultPrivacyConfig() PrivacyConfig {
 	privacy.Consent.Policy.Version = "1"
 	privacy.Consent.Buttons.Decline = "Decline"
 	privacy.Consent.Buttons.Accept = "I Agree"
-	privacy.Consent.Position = "bottom"
 	privacy.Consent.ShowPreferences = true
 	privacy.Consent.PreferencesText = "Manage Preferences"
 	return privacy
@@ -1490,6 +1505,46 @@ func SaveUpdate() error {
 		return fmt.Errorf("no configuration loaded")
 	}
 	return saveArea(configPath, "maintenance.yml", map[string]any{"server": map[string]any{"update": current.Server.Update}})
+}
+
+// SaveWebSecurity persists the web security area without rewriting unrelated configuration.
+func SaveWebSecurity() error {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil || configPath == "" {
+		return fmt.Errorf("no configuration loaded")
+	}
+	return saveArea(configPath, "web.yml", map[string]any{"web": map[string]any{"security": current.Web.Security}})
+}
+
+// SaveEncryptionKey persists a rotated encryption key and version in secrets.yml.
+func SaveEncryptionKey(value string) error {
+	mu.Lock()
+	defer mu.Unlock()
+	if current == nil || configPath == "" || strings.TrimSpace(value) == "" {
+		return fmt.Errorf("loaded configuration and encryption key are required")
+	}
+	secretPath := filepath.Join(filepath.Dir(configPath), "secrets.yml")
+	secrets, err := readConfigMap(secretPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read secrets configuration: %w", err)
+	}
+	if secrets == nil {
+		secrets = make(map[string]any)
+	}
+	version := current.Server.Security.EncryptionKeyVersion + 1
+	putConfigPath(secrets, []string{"server", "security", "encryption_key"}, value)
+	putConfigPath(secrets, []string{"server", "security", "encryption_key_version"}, version)
+	encoded, err := yaml.Marshal(secrets)
+	if err != nil {
+		return fmt.Errorf("encode secrets configuration: %w", err)
+	}
+	if err := writePrivateAtomic(secretPath, encoded); err != nil {
+		return fmt.Errorf("persist encryption key: %w", err)
+	}
+	current.Server.Security.EncryptionKey = value
+	current.Server.Security.EncryptionKeyVersion = version
+	return nil
 }
 
 // SaveSMTPDetection persists a detected relay in the notifications area.
@@ -2062,6 +2117,25 @@ const configHeader = "# Settings of this node only (listen, identity, database, 
 
 func validate(cfg *Config) error {
 	defaults := DefaultConfig()
+	if cfg.Server.CSRF.TokenLength < 16 || cfg.Server.CSRF.TokenLength > 128 {
+		warnInvalid("server.csrf.token_length")
+		cfg.Server.CSRF.TokenLength = defaults.Server.CSRF.TokenLength
+	}
+	if cfg.Server.CSRF.CookieName == "" || strings.ContainsAny(cfg.Server.CSRF.CookieName, " ;,=\r\n\t") {
+		warnInvalid("server.csrf.cookie_name")
+		cfg.Server.CSRF.CookieName = defaults.Server.CSRF.CookieName
+	}
+	if cfg.Server.CSRF.HeaderName == "" || strings.ContainsAny(cfg.Server.CSRF.HeaderName, " :\r\n\t") {
+		warnInvalid("server.csrf.header_name")
+		cfg.Server.CSRF.HeaderName = defaults.Server.CSRF.HeaderName
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Server.CSRF.Secure)) {
+	case "auto", "true", "false":
+		cfg.Server.CSRF.Secure = strings.ToLower(strings.TrimSpace(cfg.Server.CSRF.Secure))
+	default:
+		warnInvalid("server.csrf.secure")
+		cfg.Server.CSRF.Secure = defaults.Server.CSRF.Secure
+	}
 	if !validAPIVersion(cfg.Server.APIVersion) {
 		warnInvalid("server.api_version")
 		cfg.Server.APIVersion = defaults.Server.APIVersion
@@ -2138,7 +2212,7 @@ func validate(cfg *Config) error {
 	if cfg.Server.Scheduler.Tasks == nil {
 		cfg.Server.Scheduler.Tasks = make(map[string]ScheduledTaskConfig)
 	}
-	for _, taskID := range []string{"ssl_renewal", "security_cleanup", "token_cleanup", "log_rotation", "healthcheck_self"} {
+	for _, taskID := range []string{"ssl_renewal", "security_cleanup", "keyserver_retry", "token_cleanup", "log_rotation", "healthcheck_self"} {
 		task, exists := cfg.Server.Scheduler.Tasks[taskID]
 		if !exists {
 			task = defaults.Server.Scheduler.Tasks[taskID]
@@ -2254,6 +2328,9 @@ func validateSecurityEntries(security *SecurityConfig) {
 			continue
 		}
 		entry.CIDR = prefix.String()
+		if strings.TrimSpace(entry.Description) == "" {
+			entry.Description = "(no description)"
+		}
 		blocked = append(blocked, entry)
 	}
 	security.BlockedIPs = blocked

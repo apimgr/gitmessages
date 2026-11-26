@@ -1033,13 +1033,28 @@ func apiAbout(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
+	name := seoBrandingTitle()
+	tagline, description := aboutCopy(r)
 	content, format, ok := operatorSource(r, "about")
 	if !ok {
-		content = fmt.Sprintf("# %s\n\n%s\n\n%s\n\n## %s\n\n- %s\n- %s\n- %s\n- %s\n- %s\n- %s\n\n## %s\n\n- [GitHub](https://github.com/apimgr/gitmessages)\n- [Documentation](https://apimgr-gitmessages.readthedocs.io/)\n- [REST API](/server/docs/swagger)\n- [GraphQL](/server/docs/graphql)", tr(r, "about.title"), tr(r, "about.body"), tr(r, "about.detail"), tr(r, "about.features"), tr(r, "about.feature.catalog"), tr(r, "about.feature.templates"), tr(r, "about.feature.builder"), tr(r, "about.feature.api"), tr(r, "about.feature.cli"), tr(r, "about.feature.networks"), tr(r, "about.links"))
+		content = fmt.Sprintf("# %s\n\n> %s\n\n%s\n\n## %s\n\n- %s\n- %s\n- %s\n- %s\n- %s\n- %s\n\n## %s\n\n- [GitHub](https://github.com/apimgr/gitmessages)\n- [Documentation](https://apimgr-gitmessages.readthedocs.io/)\n- [REST API](/server/docs/swagger)\n- [GraphQL](/server/docs/graphql)", name, tagline, description, tr(r, "about.features"), tr(r, "about.feature.catalog"), tr(r, "about.feature.templates"), tr(r, "about.feature.builder"), tr(r, "about.feature.api"), tr(r, "about.feature.cli"), tr(r, "about.feature.networks"), tr(r, "about.links"))
 		format = "markdown"
 	}
-	content += "\n\n## " + tr(r, "about.attribution") + "\n\n<a href=\"https://db-ip.com/\">IP Geolocation by DB-IP</a>"
-	writeSuccess(w, r, map[string]string{"title": tr(r, "about.title"), "content": content, "format": format})
+	content += "\n\n## " + tr(r, "about.attribution") + "\n\n" + tr(r, "about.catalog_attribution") + "\n\n<a href=\"https://db-ip.com/\">IP Geolocation by DB-IP</a>"
+	writeSuccess(w, r, map[string]string{"title": name, "content": content, "format": format})
+}
+
+func aboutCopy(r *http.Request) (string, string) {
+	branding := config.Get().Server.Branding
+	tagline := strings.TrimSpace(branding.Tagline)
+	if tagline == "" {
+		tagline = tr(r, "about.body")
+	}
+	description := strings.TrimSpace(branding.Description)
+	if description == "" {
+		description = tr(r, "about.detail")
+	}
+	return tagline, description
 }
 
 func apiHelp(w http.ResponseWriter, r *http.Request) {
@@ -1200,6 +1215,10 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
 	toolStyles := pageToolStylesheets(r)
 	trackingTags, trackingNoscript := trackingMarkup(r)
 	consentBanner := consentBannerMarkup(r, csrf)
+	headerThemeToggle := ""
+	if r.URL.Path != "/server/preferences" {
+		headerThemeToggle = fmt.Sprintf(`<form class="theme-toggle-form" method="post" action="/server/preferences"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="theme" value="%s"><button type="submit" aria-label="%s" title="%s">%s <span>%s</span></button></form>`, template.HTMLEscapeString(csrf), nextTheme, template.HTMLEscapeString(themeLabel), template.HTMLEscapeString(tr(r, "nav.theme")), themeIcon, template.HTMLEscapeString(tr(r, "theme."+nextTheme)))
+	}
 	_, _ = fmt.Fprintf(&output, `<!doctype html>
 <html lang="%s" dir="%s" class="theme-%s" data-theme="%s" data-build="%s" data-base-path="%s">
   <head>
@@ -1225,7 +1244,7 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
     <title>%s</title>
   </head>
 	  <body>%s
-	    <a class="skip-link" href="#main-content">%s</a><a class="skip-link skip-link-secondary" href="#navigation">%s</a>%s<input type="checkbox" id="nav-toggle" class="nav-checkbox" aria-label="%s"><header role="banner"><a class="brand" href="/">%s</a><nav class="nav-links" id="navigation" aria-label="%s">%s</nav><label class="nav-toggle" for="nav-toggle" aria-hidden="true">☰</label><div class="header-actions"><a href="/server/preferences">%s</a><form class="theme-toggle-form" method="post" action="/server/preferences"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="theme" value="%s"><button type="submit" aria-label="%s" title="%s">%s <span>%s</span></button></form></div>%s</header>
+	    <a class="skip-link" href="#main-content">%s</a><a class="skip-link skip-link-secondary" href="#navigation">%s</a>%s<input type="checkbox" id="nav-toggle" class="nav-checkbox" aria-label="%s"><header role="banner"><a class="brand" href="/">%s</a><nav class="nav-links" id="navigation" aria-label="%s">%s</nav><label class="nav-toggle" for="nav-toggle" aria-hidden="true">☰</label><div class="header-actions"><a href="/server/preferences">%s</a>%s</div>%s</header>
     <main id="main-content" role="main" tabindex="-1"><div class="container %s"><header class="page-header">%s<h1 class="page-title">%s</h1>%s</header>%s</div></main>
         <nav class="nav-panel" id="nav-panel" aria-label="%s"><label for="nav-toggle" class="nav-close" aria-label="%s">✕</label>%s</nav><label for="nav-toggle" class="nav-overlay" aria-hidden="true"></label>
         <div id="offline-indicator" class="offline-indicator" role="status" aria-live="polite" hidden>%s</div>
@@ -1235,7 +1254,7 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
     <script src="/static/js/app.js?v=%s" defer></script>
   </body>
 </html>
-	`, locale.Meta.Language, locale.Meta.Direction, theme, theme, template.HTMLEscapeString(stamp), template.HTMLEscapeString(requestBasePath(r)), template.HTMLEscapeString(seoDescription(r)), seoHeadMarkup(r, title), stampURL, stampURL, stampURL, stampURL, template.HTMLEscapeString(seoBrandingTitle()), stampURL, stampURL, robots, stampURL, stampURL, toolStyles, trackingTags, template.HTMLEscapeString(seoPageTitle(title)), trackingNoscript, tr(r, "nav.skip"), tr(r, "nav.skip_navigation"), consentBanner, tr(r, "nav.toggle"), brandingHeaderMarkup(r), tr(r, "nav.main"), nav, tr(r, "preferences.title"), csrf, nextTheme, themeLabel, tr(r, "nav.theme"), themeIcon, tr(r, "theme."+nextTheme), customHeader, containerClass, serverPageBreadcrumb(r), template.HTMLEscapeString(title), pageLead, body, tr(r, "nav.main"), tr(r, "nav.close"), nav, tr(r, "pwa.offline_indicator"), tr(r, "pwa.update_available"), tr(r, "pwa.update_now"), tr(r, "pwa.install_label"), tr(r, "pwa.install_button"), tr(r, "pwa.install_ios_title"), tr(r, "pwa.install_ios_instructions"), customFooter, template.HTMLEscapeString(seoBrandingTitle()), tr(r, "nav.about"), tr(r, "nav.help"), tr(r, "nav.privacy"), tr(r, "nav.terms"), tr(r, "nav.security"), tr(r, "preferences.title"), locale.Meta.Language, template.HTMLEscapeString(locale.Meta.NativeName), tr(r, "api.rest"), tr(r, "graphql.title"), stampURL)
+	`, locale.Meta.Language, locale.Meta.Direction, theme, theme, template.HTMLEscapeString(stamp), template.HTMLEscapeString(requestBasePath(r)), template.HTMLEscapeString(seoDescription(r)), seoHeadMarkup(r, title), stampURL, stampURL, stampURL, stampURL, template.HTMLEscapeString(seoBrandingTitle()), stampURL, stampURL, robots, stampURL, stampURL, toolStyles, trackingTags, template.HTMLEscapeString(seoPageTitle(title)), trackingNoscript, tr(r, "nav.skip"), tr(r, "nav.skip_navigation"), consentBanner, tr(r, "nav.toggle"), brandingHeaderMarkup(r), tr(r, "nav.main"), nav, tr(r, "preferences.title"), headerThemeToggle, customHeader, containerClass, serverPageBreadcrumb(r), template.HTMLEscapeString(title), pageLead, body, tr(r, "nav.main"), tr(r, "nav.close"), nav, tr(r, "pwa.offline_indicator"), tr(r, "pwa.update_available"), tr(r, "pwa.update_now"), tr(r, "pwa.install_label"), tr(r, "pwa.install_button"), tr(r, "pwa.install_ios_title"), tr(r, "pwa.install_ios_instructions"), customFooter, template.HTMLEscapeString(seoBrandingTitle()), tr(r, "nav.about"), tr(r, "nav.help"), tr(r, "nav.privacy"), tr(r, "nav.terms"), tr(r, "nav.security"), tr(r, "preferences.title"), locale.Meta.Language, template.HTMLEscapeString(locale.Meta.NativeName), tr(r, "api.rest"), tr(r, "graphql.title"), stampURL)
 	pageHTML := prefixHTMLPaths(output.String(), requestBasePath(r))
 	if wantsFrontendText(r) {
 		writeText(w, http.StatusOK, formatHTMLText(pageHTML))
@@ -1528,13 +1547,14 @@ func aboutPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body strings.Builder
-	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-description"><h2 id="about-description">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "about.overview")), template.HTMLEscapeString(tr(r, "about.detail")))
+	tagline, description := aboutCopy(r)
+	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-description"><h2 id="about-description">%s</h2><p class="page-lead">%s</p><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "about.overview")), template.HTMLEscapeString(tagline), template.HTMLEscapeString(description))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-features"><h2 id="about-features">%s</h2><ul><li>%s</li><li>%s</li><li>%s</li><li>%s</li><li>%s</li><li>%s</li></ul></section>`, template.HTMLEscapeString(tr(r, "about.features")), template.HTMLEscapeString(tr(r, "about.feature.catalog")), template.HTMLEscapeString(tr(r, "about.feature.templates")), template.HTMLEscapeString(tr(r, "about.feature.builder")), template.HTMLEscapeString(tr(r, "about.feature.api")), template.HTMLEscapeString(tr(r, "about.feature.cli")), template.HTMLEscapeString(tr(r, "about.feature.networks")))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-version"><h2 id="about-version">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "about.version")), template.HTMLEscapeString(serverVersion))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-links"><h2 id="about-links">%s</h2><ul><li><a href="https://github.com/apimgr/gitmessages">%s</a></li><li><a href="https://apimgr-gitmessages.readthedocs.io/">%s</a></li><li><a href="/server/docs/swagger">%s</a></li><li><a href="/server/docs/graphql">%s</a></li></ul></section>`, template.HTMLEscapeString(tr(r, "about.links")), template.HTMLEscapeString(tr(r, "about.github")), template.HTMLEscapeString(tr(r, "about.documentation")), template.HTMLEscapeString(tr(r, "api.rest")), template.HTMLEscapeString(tr(r, "graphql.title")))
-	body.WriteString(`<section class="section-card" aria-labelledby="about-attribution"><h2 id="about-attribution">` + template.HTMLEscapeString(tr(r, "about.attribution")) + `</h2><p><a href="https://db-ip.com/">IP Geolocation by DB-IP</a></p></section>`)
+	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-attribution"><h2 id="about-attribution">%s</h2><p>%s</p><p><a href="https://db-ip.com/">IP Geolocation by DB-IP</a></p></section>`, template.HTMLEscapeString(tr(r, "about.attribution")), template.HTMLEscapeString(tr(r, "about.catalog_attribution")))
 	body.WriteString(string(operatorCard(r, "about", "operator-about")))
-	page(w, r, tr(r, "about.title"), template.HTML(body.String()))
+	page(w, r, seoBrandingTitle(), template.HTML(body.String()))
 }
 
 func helpPage(w http.ResponseWriter, r *http.Request) {

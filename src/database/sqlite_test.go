@@ -51,11 +51,53 @@ func TestOpenSQLiteSchemaPermissionsAndTransactions(t *testing.T) {
 	if err := store.Read().QueryRow("SELECT count(*) FROM app_secrets").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 {
-		t.Fatalf("stored row count = %d, want 1", count)
+	if count != 4 {
+		t.Fatalf("stored row count = %d, want the three generated secrets and one test row", count)
 	}
 	if _, err := store.Read().Exec("INSERT INTO app_secrets(name, value, updated_at) VALUES('readonly', 'value', 'now')"); err == nil {
 		t.Fatal("read handle accepted a write")
+	}
+}
+
+func TestEnsureSchemaMigratesAppSecretVersionAndCreatesRevocations(t *testing.T) {
+	store, err := OpenSQLite(filepath.Join(projectTestDir(t), "server.db"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Write(context.Background(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(context.Background(), `INSERT INTO app_secrets(name,value,updated_at) VALUES('legacy','preserved','2026-01-01T00:00:00Z')`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(context.Background(), `ALTER TABLE app_secrets DROP COLUMN version`)
+		return err
+	}); err != nil {
+		t.Fatalf("prepare legacy app_secrets schema: %v", err)
+	}
+	for range 2 {
+		if err := store.EnsureSchema(context.Background()); err != nil {
+			t.Fatalf("migrate app secret schema: %v", err)
+		}
+	}
+	var value string
+	var version int
+	if err := store.Read().QueryRow(`SELECT value,version FROM app_secrets WHERE name='legacy'`).Scan(&value, &version); err != nil {
+		t.Fatal(err)
+	}
+	if value != "preserved" || version != 1 {
+		t.Fatalf("migrated secret = %q at version %d, want preserved at version 1", value, version)
+	}
+	if err := store.Write(context.Background(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(), `INSERT INTO app_secret_revocations(name,version,node_id,revoked_at) VALUES('legacy',1,'node-a','2026-01-01T00:00:00Z')`)
+		return err
+	}); err != nil {
+		t.Fatalf("insert app secret revocation: %v", err)
+	}
+	if err := store.Write(context.Background(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(context.Background(), `INSERT INTO app_secret_revocations(name,version,node_id,revoked_at) VALUES('legacy',1,'node-a','2026-01-02T00:00:00Z')`)
+		return err
+	}); err == nil {
+		t.Fatal("app secret revocation composite key accepted a duplicate")
 	}
 }
 

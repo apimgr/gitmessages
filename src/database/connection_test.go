@@ -89,8 +89,8 @@ func TestLocalDatabaseCacheRefreshesAndTracksAge(t *testing.T) {
 	if err := cache.Read().QueryRow(`SELECT COUNT(*) FROM app_secrets`).Scan(&cachedRows); err != nil {
 		t.Fatal(err)
 	}
-	if cachedRows != 501 {
-		t.Fatalf("cached row count = %d, want 501", cachedRows)
+	if cachedRows != 504 {
+		t.Fatalf("cached row count = %d, want 504 including the three generated secrets", cachedRows)
 	}
 	if store.cacheLastSync.IsZero() || time.Since(store.cacheLastSync) > time.Minute {
 		t.Fatalf("cache sync timestamp is stale: %v", store.cacheLastSync)

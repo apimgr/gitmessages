@@ -7,8 +7,10 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,9 +28,24 @@ import (
 
 const (
 	manifestName  = "manifest.json"
-	envelopeID    = "GITMESSAGES-BACKUP-1\x00"
+	envelopeID    = "BKUP1"
 	manifestLimit = 1 << 20
+	backupArgonM  = uint32(64 * 1024)
+	backupArgonT  = uint32(3)
+	backupArgonP  = uint32(2)
 )
+
+// EncryptionHeader is the cleartext, authenticated metadata on an encrypted backup.
+type EncryptionHeader struct {
+	Salt       [16]byte
+	MemoryKiB  uint32
+	Iterations uint32
+	Parallel   uint32
+	Nonce      [12]byte
+	KeyID      string
+	BaseBackup string
+	Encoded    []byte
+}
 
 // Manifest describes a complete backup archive and its verified files.
 type Manifest struct {
@@ -39,7 +56,7 @@ type Manifest struct {
 	Contents         []string    `json:"contents"`
 	Encrypted        bool        `json:"encrypted"`
 	EncryptionMethod string      `json:"encryption_method,omitempty"`
-	Checksum         string      `json:"checksum"`
+	SHA256           string      `json:"sha256"`
 	Type             string      `json:"type"`
 	SnapshotAt       time.Time   `json:"snapshot_at"`
 	Files            []FileEntry `json:"files"`
@@ -53,7 +70,7 @@ type FileEntry struct {
 	Path    string    `json:"path"`
 	Size    int64     `json:"size"`
 	SHA256  string    `json:"sha256"`
-	ModTime time.Time `json:"mtime,omitempty"`
+	ModTime int64     `json:"mtime"`
 }
 
 // Input identifies a source file and its normalized archive path.
@@ -179,7 +196,7 @@ func Create(ctx context.Context, options CreateOptions) (Manifest, error) {
 		return Manifest{}, err
 	}
 	if manifest.Encrypted {
-		archive, err = encrypt(archive, options.Password)
+		archive, err = encrypt(archive, options.Password, manifest.BaseBackup)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -231,6 +248,14 @@ func verify(ctx context.Context, archivePath, password string, limits RestoreLim
 	if err != nil {
 		return Manifest{}, err
 	}
+	var header *EncryptionHeader
+	if bytes.HasPrefix(archive, []byte(envelopeID)) {
+		parsed, parseErr := ParseEncryptionHeader(archive)
+		if parseErr != nil {
+			return Manifest{}, parseErr
+		}
+		header = &parsed
+	}
 	archive, encrypted, err := decryptIfNeeded(archive, password)
 	if err != nil {
 		return Manifest{}, err
@@ -253,6 +278,9 @@ func verify(ctx context.Context, archivePath, password string, limits RestoreLim
 	}
 	if manifest.Encrypted != encrypted {
 		return Manifest{}, errors.New("backup encryption metadata does not match its format")
+	}
+	if encrypted && manifest.BaseBackup != header.BaseBackup {
+		return Manifest{}, errors.New("backup header base does not match manifest")
 	}
 	if manifest.Type == "incremental" {
 		if !allowIncremental {
@@ -454,14 +482,14 @@ func createArchive(ctx context.Context, inputs []Input, manifest *Manifest) ([]b
 		if _, err := io.Copy(tarWriter, data); err != nil {
 			return nil, err
 		}
-		entries = append(entries, FileEntry{Path: name, Size: size, SHA256: hex.EncodeToString(hash.Sum(nil)), ModTime: info.ModTime().UTC()})
+		entries = append(entries, FileEntry{Path: name, Size: size, SHA256: hex.EncodeToString(hash.Sum(nil)), ModTime: info.ModTime().Unix()})
 	}
 	manifest.Files = entries
 	manifest.Contents = make([]string, len(entries))
 	for i, entry := range entries {
 		manifest.Contents[i] = entry.Path
 	}
-	manifest.Checksum = manifestChecksum(*manifest)
+	manifest.SHA256 = manifestChecksum(manifest.Files)
 	manifestBytes, err := json.Marshal(manifest)
 	if err != nil {
 		return nil, fmt.Errorf("encode backup manifest: %w", err)
@@ -574,7 +602,7 @@ func extract(ctx context.Context, archive []byte, destination string, limits Res
 	if !manifest.Encrypted && manifest.EncryptionMethod != "" {
 		return Manifest{}, expanded, errors.New("unencrypted backup has unexpected encryption metadata")
 	}
-	if manifestChecksum(manifest) != manifest.Checksum {
+	if !validSHA256(manifest.SHA256) || manifestChecksum(manifest.Files) != manifest.SHA256 {
 		return Manifest{}, expanded, errors.New("backup manifest checksum mismatch")
 	}
 	if err := verifyEntries(manifest, actual); err != nil {
@@ -641,19 +669,25 @@ func manifestExpandedSize(manifest Manifest) int64 {
 	return total + int64(len(data))
 }
 
-func manifestChecksum(manifest Manifest) string {
-	manifest.Checksum = ""
-	data, _ := json.Marshal(manifest)
-	sum := sha256.Sum256(data)
-	return "sha256:" + hex.EncodeToString(sum[:])
+func manifestChecksum(files []FileEntry) string {
+	entries := append([]FileEntry(nil), files...)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	hash := sha256.New()
+	for _, entry := range entries {
+		_, _ = fmt.Fprintf(hash, "%s  %s\n", strings.ToLower(entry.SHA256), entry.Path)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
-func encrypt(plain []byte, password string) ([]byte, error) {
+func encrypt(plain []byte, password, baseBackup string) ([]byte, error) {
+	if len(baseBackup) > 4096 || (baseBackup != "" && filepath.Base(baseBackup) != baseBackup) {
+		return nil, errors.New("invalid encrypted backup base filename")
+	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return nil, fmt.Errorf("generate backup salt: %w", err)
 	}
-	key := argon2.IDKey([]byte(password), salt, 3, 64*1024, 2, 32)
+	key := argon2.IDKey([]byte(password), salt, backupArgonT, backupArgonM, uint8(backupArgonP), 32)
 	defer clear(key)
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -667,11 +701,23 @@ func encrypt(plain []byte, password string) ([]byte, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("generate backup nonce: %w", err)
 	}
-	result := make([]byte, 0, len(envelopeID)+len(salt)+len(nonce)+len(plain)+aead.Overhead())
-	result = append(result, envelopeID...)
-	result = append(result, salt...)
-	result = append(result, nonce...)
-	result = aead.Seal(result, nonce, plain, []byte(envelopeID))
+	keyID := backupKeyID(key)
+	header := make([]byte, 0, 55+len(baseBackup))
+	header = append(header, envelopeID...)
+	header = append(header, salt...)
+	var parameters [12]byte
+	binary.BigEndian.PutUint32(parameters[0:4], backupArgonM)
+	binary.BigEndian.PutUint32(parameters[4:8], backupArgonT)
+	binary.BigEndian.PutUint32(parameters[8:12], backupArgonP)
+	header = append(header, parameters[:]...)
+	header = append(header, nonce...)
+	header = append(header, keyID...)
+	var baseLength [2]byte
+	binary.BigEndian.PutUint16(baseLength[:], uint16(len(baseBackup)))
+	header = append(header, baseLength[:]...)
+	header = append(header, baseBackup...)
+	result := append([]byte(nil), header...)
+	result = aead.Seal(result, nonce, plain, header)
 	return result, nil
 }
 
@@ -679,20 +725,21 @@ func decryptIfNeeded(data []byte, password string) ([]byte, bool, error) {
 	if !bytes.HasPrefix(data, []byte(envelopeID)) {
 		return data, false, nil
 	}
+	header, err := ParseEncryptionHeader(data)
+	if err != nil {
+		return nil, true, err
+	}
 	if password == "" {
 		return nil, true, errors.New("encrypted backup requires a password")
 	}
-	minimum := len(envelopeID) + 16 + 12 + 16
-	if len(data) < minimum {
+	if len(data) < len(header.Encoded)+16 {
 		return nil, true, errors.New("invalid encrypted backup format")
 	}
-	index := len(envelopeID)
-	salt := data[index : index+16]
-	index += 16
-	nonce := data[index : index+12]
-	index += 12
-	key := argon2.IDKey([]byte(password), salt, 3, 64*1024, 2, 32)
+	key := argon2.IDKey([]byte(password), header.Salt[:], header.Iterations, header.MemoryKiB, uint8(header.Parallel), 32)
 	defer clear(key)
+	if !hmac.Equal([]byte(backupKeyID(key)), []byte(header.KeyID)) {
+		return nil, true, errors.New("invalid backup password or corrupted encrypted backup")
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, true, err
@@ -701,11 +748,81 @@ func decryptIfNeeded(data []byte, password string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, true, err
 	}
-	plain, err := aead.Open(nil, nonce, data[index:], []byte(envelopeID))
+	plain, err := aead.Open(nil, header.Nonce[:], data[len(header.Encoded):], header.Encoded)
 	if err != nil {
 		return nil, true, errors.New("invalid backup password or corrupted encrypted backup")
 	}
 	return plain, true, nil
+}
+
+// ParseEncryptionHeader parses authenticated metadata without requiring the password.
+func ParseEncryptionHeader(data []byte) (EncryptionHeader, error) {
+	const fixedLength = 55
+	if len(data) < fixedLength || !bytes.HasPrefix(data, []byte(envelopeID)) {
+		return EncryptionHeader{}, errors.New("invalid encrypted backup format")
+	}
+	var header EncryptionHeader
+	copy(header.Salt[:], data[5:21])
+	header.MemoryKiB = binary.BigEndian.Uint32(data[21:25])
+	header.Iterations = binary.BigEndian.Uint32(data[25:29])
+	header.Parallel = binary.BigEndian.Uint32(data[29:33])
+	copy(header.Nonce[:], data[33:45])
+	header.KeyID = string(data[45:53])
+	baseLength := int(binary.BigEndian.Uint16(data[53:55]))
+	if header.MemoryKiB < 8*1024 || header.MemoryKiB > 256*1024 || header.Iterations == 0 || header.Iterations > 10 || header.Parallel == 0 || header.Parallel > 8 {
+		return EncryptionHeader{}, errors.New("invalid encrypted backup Argon2 parameters")
+	}
+	if baseLength > 4096 || len(data) < fixedLength+baseLength {
+		return EncryptionHeader{}, errors.New("invalid encrypted backup format")
+	}
+	if _, err := hex.DecodeString(header.KeyID); err != nil || len(header.KeyID) != 8 {
+		return EncryptionHeader{}, errors.New("invalid encrypted backup key identifier")
+	}
+	header.BaseBackup = string(data[fixedLength : fixedLength+baseLength])
+	if header.BaseBackup != "" && (filepath.Base(header.BaseBackup) != header.BaseBackup || header.BaseBackup == "." || header.BaseBackup == "..") {
+		return EncryptionHeader{}, errors.New("invalid encrypted backup base filename")
+	}
+	header.Encoded = append([]byte(nil), data[:fixedLength+baseLength]...)
+	return header, nil
+}
+
+// ReadEncryptionHeader reads cleartext encrypted-archive metadata without a password.
+func ReadEncryptionHeader(path string) (EncryptionHeader, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return EncryptionHeader{}, err
+	}
+	defer func() { _ = file.Close() }()
+	fixed := make([]byte, 55)
+	if _, err := io.ReadFull(file, fixed); err != nil {
+		return EncryptionHeader{}, errors.New("invalid encrypted backup format")
+	}
+	baseLength := int(binary.BigEndian.Uint16(fixed[53:55]))
+	if baseLength > 4096 {
+		return EncryptionHeader{}, errors.New("invalid encrypted backup format")
+	}
+	data := append([]byte(nil), fixed...)
+	if baseLength > 0 {
+		base := make([]byte, baseLength)
+		if _, err := io.ReadFull(file, base); err != nil {
+			return EncryptionHeader{}, errors.New("invalid encrypted backup format")
+		}
+		data = append(data, base...)
+	}
+	return ParseEncryptionHeader(data)
+}
+
+// MatchesPassword reports whether password derives the key identifier in header.
+func (header EncryptionHeader) MatchesPassword(password string) bool {
+	key := argon2.IDKey([]byte(password), header.Salt[:], header.Iterations, header.MemoryKiB, uint8(header.Parallel), 32)
+	defer clear(key)
+	return hmac.Equal([]byte(backupKeyID(key)), []byte(header.KeyID))
+}
+
+func backupKeyID(key []byte) string {
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte("key-id"))
+	return hex.EncodeToString(mac.Sum(nil))[:8]
 }
 
 func readArchiveFile(path string, maxSize int64) ([]byte, error) {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
 	"github.com/apimgr/gitmessages/src/paths"
+	"github.com/apimgr/gitmessages/src/pgp"
 )
 
 func createApplicationBackup(ctx context.Context, store *database.Store, configuration *config.Config, configDir, dataDir, backupDir, destination string, includeSSL, includeData bool) (backuppkg.Manifest, error) {
@@ -198,7 +200,52 @@ func verifyApplicationBackup(ctx context.Context, backupFile, backupDir, passwor
 	if err := verifySQLiteBackup(databasePath); err != nil {
 		return backuppkg.Manifest{}, fmt.Errorf("verify backup database: %w", err)
 	}
+	if err := verifyBackupPGPKeypair(databasePath, extracted); err != nil {
+		return backuppkg.Manifest{}, fmt.Errorf("verify backup PGP keypair: %w", err)
+	}
 	return manifest, nil
+}
+
+func verifyBackupPGPKeypair(databasePath, extracted string) error {
+	publicPath := filepath.Join(extracted, "security", "pgp.pub.asc")
+	privatePath := filepath.Join(extracted, "security", "pgp.priv.asc.enc")
+	public, publicErr := os.ReadFile(publicPath)
+	private, privateErr := os.ReadFile(privatePath)
+	if errors.Is(publicErr, os.ErrNotExist) && errors.Is(privateErr, os.ErrNotExist) {
+		return nil
+	}
+	if publicErr != nil || privateErr != nil {
+		return errors.Join(publicErr, privateErr, errors.New("backup must contain both PGP key files"))
+	}
+	store, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		return fmt.Errorf("open backup secrets database: %w", err)
+	}
+	defer func() { _ = store.Close() }()
+	var encoded string
+	if err := store.QueryRow(`SELECT value FROM app_secrets WHERE name='installation_secret'`).Scan(&encoded); err != nil {
+		return fmt.Errorf("read backup installation secret: %w", err)
+	}
+	secret, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(secret) != 32 {
+		return errors.New("backup installation secret is invalid")
+	}
+	decrypted, err := pgp.DecryptPrivate(private, secret)
+	if err != nil {
+		return fmt.Errorf("decrypt backup PGP private key: %w", err)
+	}
+	privateMetadata, err := pgp.Import(decrypted, secret)
+	if err != nil {
+		return fmt.Errorf("validate backup PGP private key: %w", err)
+	}
+	publicMetadata, err := pgp.MetadataForPublic(public)
+	if err != nil {
+		return fmt.Errorf("validate backup PGP public key: %w", err)
+	}
+	if privateMetadata.Metadata.Fingerprint != publicMetadata.Fingerprint {
+		return errors.New("backup PGP public and private fingerprints do not match")
+	}
+	return nil
 }
 
 func newestBackupFile(backupDir string) (string, error) {

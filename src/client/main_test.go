@@ -287,12 +287,22 @@ func TestTerminalSetupAndDisplaySelection(t *testing.T) {
 
 func TestSelectLanguage(t *testing.T) {
 	t.Setenv("GITMESSAGES_LANG", "fr-CA")
-	if got := selectLanguage("", "de"); got != "fr" {
-		t.Fatalf("environment language priority = %q, want fr", got)
+	t.Setenv("LC_ALL", "it_IT.UTF-8")
+	t.Setenv("LANG", "es_ES.UTF-8")
+	if got := selectLanguage("", "de"); got != "de" {
+		t.Fatalf("config language priority = %q, want de", got)
 	}
 	if got := selectLanguage("ja", "de"); got != "ja" {
 		t.Fatalf("flag language priority = %q, want ja", got)
 	}
+	if got := selectLanguage("", "auto"); got != "it" {
+		t.Fatalf("LC_ALL priority = %q, want it", got)
+	}
+	t.Setenv("LC_ALL", "")
+	if got := selectLanguage("", ""); got != "es" {
+		t.Fatalf("LANG fallback = %q, want es", got)
+	}
+	t.Setenv("LANG", "")
 	t.Setenv("GITMESSAGES_LANG", "")
 	if got := selectLanguage("unsupported", "unsupported"); got != "en" {
 		t.Fatalf("unsupported language fallback = %q, want en", got)

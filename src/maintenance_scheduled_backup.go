@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,8 +23,9 @@ import (
 )
 
 type scheduledFull struct {
-	path     string
-	manifest backuppkg.Manifest
+	path       string
+	manifest   backuppkg.Manifest
+	forceDaily bool
 }
 
 func runScheduledBackup(ctx context.Context, store *database.Store, configuration *config.Config, directories paths.Directories, hourly bool) error {
@@ -70,6 +72,13 @@ func runScheduledBackup(ctx context.Context, store *database.Store, configuratio
 			return fmt.Errorf("create scheduled incremental backup: %w", err)
 		}
 		incrementPath := filepath.Join(directories.Backup, name)
+		previousName := strings.TrimSuffix(name, ".enc")
+		if !strings.HasSuffix(name, ".enc") {
+			previousName += ".enc"
+		}
+		if err := os.Remove(filepath.Join(directories.Backup, previousName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove superseded incremental backup: %w", err)
+		}
 		if info, statErr := os.Stat(incrementPath); statErr == nil {
 			action := "backup.created"
 			if !hourly {
@@ -131,24 +140,58 @@ func newestFullBackup(ctx context.Context, directory, password string, before ti
 	if err != nil {
 		return scheduledFull{}, err
 	}
-	var newest scheduledFull
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() > entries[j].Name() })
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), paths.ProjectName+"_backup_") || !strings.Contains(entry.Name(), ".tar.gz") {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), paths.ProjectName+"_backup_") || !strings.HasSuffix(entry.Name(), ".tar.gz") && !strings.HasSuffix(entry.Name(), ".tar.gz.enc") {
 			continue
 		}
 		path := filepath.Join(directory, entry.Name())
+		if encryptedArchiveName(entry.Name()) {
+			header, headerErr := backuppkg.ReadEncryptionHeader(path)
+			if headerErr != nil {
+				slog.Warn("backup.base_corrupt", "backup", entry.Name(), "reason", "invalid encryption header")
+				return scheduledFull{}, os.ErrNotExist
+			}
+			if !header.MatchesPassword(password) {
+				slog.Info("backup.password_changed", "base_backup", entry.Name())
+				return scheduledFull{}, os.ErrNotExist
+			}
+		} else if password != "" {
+			slog.Info("backup.password_changed", "base_backup", entry.Name())
+			return scheduledFull{}, os.ErrNotExist
+		}
 		manifest, verifyErr := backuppkg.Verify(ctx, path, password, backuppkg.DefaultRestoreLimits())
-		if verifyErr != nil || manifest.Type != "full" || !before.IsZero() && !manifest.SnapshotAt.Before(before) {
+		if verifyErr != nil || manifest.Type != "full" {
+			slog.Warn("backup.base_corrupt", "backup", entry.Name(), "reason", "verification failed")
+			return scheduledFull{}, os.ErrNotExist
+		}
+		if !before.IsZero() && !manifest.SnapshotAt.Before(before) {
 			continue
 		}
-		if newest.path == "" || manifest.SnapshotAt.After(newest.manifest.SnapshotAt) {
-			newest = scheduledFull{path: path, manifest: manifest}
+		return scheduledFull{path: path, manifest: manifest}, nil
+	}
+	return scheduledFull{}, os.ErrNotExist
+}
+
+func encryptedArchiveName(name string) bool { return strings.HasSuffix(name, ".tar.gz.enc") }
+
+func isBackupArchive(name string) bool {
+	return strings.HasSuffix(name, ".tar.gz") || encryptedArchiveName(name)
+}
+
+func archiveBaseBackup(ctx context.Context, path, password string) (string, bool) {
+	if encryptedArchiveName(path) {
+		header, err := backuppkg.ReadEncryptionHeader(path)
+		if err != nil {
+			return "", false
 		}
+		return header.BaseBackup, true
 	}
-	if newest.path == "" {
-		return scheduledFull{}, os.ErrNotExist
+	manifest, err := backuppkg.Verify(ctx, path, password, backuppkg.DefaultRestoreLimits())
+	if err != nil || manifest.Type != "incremental" {
+		return "", false
 	}
-	return newest, nil
+	return manifest.BaseBackup, true
 }
 
 func createIncrementalFromSnapshot(ctx context.Context, snapshotPath string, snapshot backuppkg.Manifest, base scheduledFull, destination string, configuration *config.Config) (backuppkg.Manifest, error) {
@@ -174,7 +217,7 @@ func createIncrementalFromSnapshot(ctx context.Context, snapshotPath string, sna
 	for _, file := range snapshot.Files {
 		currentFiles[file.Path] = file
 		previous, exists := baseFiles[file.Path]
-		if exists && previous.Size == file.Size && previous.ModTime.Equal(file.ModTime) && strings.EqualFold(previous.SHA256, file.SHA256) {
+		if exists && previous.Size == file.Size && previous.ModTime == file.ModTime && strings.EqualFold(previous.SHA256, file.SHA256) {
 			continue
 		}
 		inputs = append(inputs, backuppkg.Input{Path: filepath.Join(currentDir, filepath.FromSlash(file.Path)), ArchivePath: file.Path})
@@ -234,7 +277,7 @@ func checkBackupDisk(directory string, threshold int) error {
 	}
 	var latest time.Time
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.Contains(entry.Name(), ".tar.gz") {
+		if entry.IsDir() || !isBackupArchive(entry.Name()) {
 			continue
 		}
 		info, err := entry.Info()
@@ -265,48 +308,21 @@ func applyBackupRetention(ctx context.Context, store *database.Store, directory 
 	}
 	fulls := make([]scheduledFull, 0)
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), paths.ProjectName+"_backup_") || !strings.Contains(entry.Name(), ".tar.gz") {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), paths.ProjectName+"_backup_") || !isBackupArchive(entry.Name()) {
 			continue
 		}
 		path := filepath.Join(directory, entry.Name())
-		manifest, verifyErr := backuppkg.Verify(ctx, path, configuration.Server.Backup.EncryptionPassword, backuppkg.DefaultRestoreLimits())
-		if verifyErr == nil && manifest.Type == "full" {
-			fulls = append(fulls, scheduledFull{path: path, manifest: manifest})
+		if snapshotAt, ok := backupFilenameTime(entry.Name()); ok {
+			fulls = append(fulls, scheduledFull{path: path, manifest: backuppkg.Manifest{Type: "full", SnapshotAt: snapshotAt}})
+		} else if info, statErr := entry.Info(); statErr == nil {
+			fulls = append(fulls, scheduledFull{path: path, manifest: backuppkg.Manifest{Type: "full", SnapshotAt: info.ModTime().UTC()}, forceDaily: true})
 		}
 	}
-	sort.Slice(fulls, func(i, j int) bool { return fulls[i].manifest.SnapshotAt.After(fulls[j].manifest.SnapshotAt) })
-	keep := make(map[string]struct{})
-	daily, weekly, monthly, yearly := 0, 0, 0, 0
-	for _, full := range fulls {
-		date := full.manifest.SnapshotAt
-		marked := false
-		if date.Month() == time.January && date.Day() == 1 && yearly < policy.KeepYearly {
-			yearly++
-			marked = true
-		}
-		if date.Day() == 1 && monthly < policy.KeepMonthly {
-			monthly++
-			marked = true
-		}
-		if date.Weekday() == time.Sunday && weekly < policy.KeepWeekly {
-			weekly++
-			marked = true
-		}
-		if marked || daily < policy.MaxBackups {
-			keep[full.path] = struct{}{}
-			if !marked {
-				daily++
-			}
-		}
-	}
-	for _, name := range []string{paths.ProjectName + "-daily.tar.gz", paths.ProjectName + "-hourly.tar.gz"} {
-		if configuration.Server.Backup.EncryptionPassword != "" {
-			name += ".enc"
-		}
+	keep := backupRetentionSet(fulls, policy)
+	for _, name := range []string{paths.ProjectName + "-daily.tar.gz", paths.ProjectName + "-daily.tar.gz.enc", paths.ProjectName + "-hourly.tar.gz", paths.ProjectName + "-hourly.tar.gz.enc"} {
 		incrementPath := filepath.Join(directory, name)
-		manifest, verifyErr := backuppkg.Verify(ctx, incrementPath, configuration.Server.Backup.EncryptionPassword, backuppkg.DefaultRestoreLimits())
-		if verifyErr == nil && manifest.Type == "incremental" {
-			keep[filepath.Join(directory, manifest.BaseBackup)] = struct{}{}
+		if base, ok := archiveBaseBackup(ctx, incrementPath, configuration.Server.Backup.EncryptionPassword); ok && base != "" {
+			keep[filepath.Join(directory, base)] = struct{}{}
 		}
 	}
 	deleted := make([]string, 0)
@@ -330,6 +346,52 @@ func applyBackupRetention(ctx context.Context, store *database.Store, directory 
 		}
 	}
 	return nil
+}
+
+func backupFilenameTime(name string) (time.Time, bool) {
+	name = strings.TrimPrefix(name, paths.ProjectName+"_backup_")
+	name = strings.TrimSuffix(name, ".tar.gz.enc")
+	name = strings.TrimSuffix(name, ".tar.gz")
+	for _, layout := range []string{"2006-01-02_150405", "2006-01-02"} {
+		if parsed, err := time.ParseInLocation(layout, name, time.UTC); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func backupRetentionSet(fulls []scheduledFull, policy config.BackupRetentionConfig) map[string]struct{} {
+	ordered := append([]scheduledFull(nil), fulls...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].manifest.SnapshotAt.After(ordered[j].manifest.SnapshotAt) })
+	keep := make(map[string]struct{})
+	daily, weekly, monthly, yearly := 0, 0, 0, 0
+	for _, full := range ordered {
+		date := full.manifest.SnapshotAt
+		keepIt := false
+		if full.forceDaily {
+			keepIt = daily < policy.MaxBackups
+			daily++
+		} else {
+			switch {
+			case date.Month() == time.January && date.Day() == 1:
+				keepIt = yearly < policy.KeepYearly
+				yearly++
+			case date.Day() == 1:
+				keepIt = monthly < policy.KeepMonthly
+				monthly++
+			case date.Weekday() == time.Sunday:
+				keepIt = weekly < policy.KeepWeekly
+				weekly++
+			default:
+				keepIt = daily < policy.MaxBackups
+				daily++
+			}
+		}
+		if keepIt {
+			keep[full.path] = struct{}{}
+		}
+	}
+	return keep
 }
 
 func enforceBackupSizeLimit(ctx context.Context, directory, configured string, configuration *config.Config) ([]string, error) {
@@ -366,7 +428,7 @@ func enforceBackupSizeLimit(ctx context.Context, directory, configured string, c
 	archives := make([]archiveFile, 0)
 	var total int64
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), paths.ProjectName+"_") && !strings.HasPrefix(entry.Name(), paths.ProjectName+"-") || !strings.Contains(entry.Name(), ".tar.gz") {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), paths.ProjectName+"_") && !strings.HasPrefix(entry.Name(), paths.ProjectName+"-") || !isBackupArchive(entry.Name()) {
 			continue
 		}
 		info, err := entry.Info()
@@ -382,10 +444,13 @@ func enforceBackupSizeLimit(ctx context.Context, directory, configured string, c
 	}
 	sort.Slice(archives, func(i, j int) bool { return archives[i].modTime.Before(archives[j].modTime) })
 	protected := make(map[string]struct{})
+	protectedBases := make(map[string]struct{})
 	for _, archive := range archives {
-		manifest, verifyErr := backuppkg.Verify(ctx, archive.path, configuration.Server.Backup.EncryptionPassword, backuppkg.DefaultRestoreLimits())
-		if verifyErr == nil && manifest.Type == "incremental" {
-			protected[filepath.Join(directory, manifest.BaseBackup)] = struct{}{}
+		if base, ok := archiveBaseBackup(ctx, archive.path, configuration.Server.Backup.EncryptionPassword); ok && base != "" {
+			protected[archive.path] = struct{}{}
+			basePath := filepath.Join(directory, base)
+			protected[basePath] = struct{}{}
+			protectedBases[basePath] = struct{}{}
 		}
 	}
 	deleted := make([]string, 0)
@@ -405,8 +470,8 @@ func enforceBackupSizeLimit(ctx context.Context, directory, configured string, c
 			if incremental.path == archive.path {
 				continue
 			}
-			manifest, verifyErr := backuppkg.Verify(ctx, incremental.path, configuration.Server.Backup.EncryptionPassword, backuppkg.DefaultRestoreLimits())
-			if verifyErr == nil && manifest.Type == "incremental" && filepath.Join(directory, manifest.BaseBackup) == archive.path {
+			base, ok := archiveBaseBackup(ctx, incremental.path, configuration.Server.Backup.EncryptionPassword)
+			if ok && base != "" && filepath.Join(directory, base) == archive.path {
 				if err := os.Remove(incremental.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 					return nil, fmt.Errorf("remove incremental whose base exceeded size limit %s: %w", filepath.Base(incremental.path), err)
 				}
@@ -425,7 +490,7 @@ func enforceBackupSizeLimit(ctx context.Context, directory, configured string, c
 			if total <= limit {
 				break
 			}
-			if _, wasBase := protected[archive.path]; !wasBase {
+			if _, wasBase := protectedBases[archive.path]; !wasBase {
 				continue
 			}
 			stillReferenced := false
@@ -433,8 +498,8 @@ func enforceBackupSizeLimit(ctx context.Context, directory, configured string, c
 				if _, statErr := os.Stat(candidate.path); statErr != nil {
 					continue
 				}
-				manifest, verifyErr := backuppkg.Verify(ctx, candidate.path, configuration.Server.Backup.EncryptionPassword, backuppkg.DefaultRestoreLimits())
-				if verifyErr == nil && manifest.Type == "incremental" && filepath.Join(directory, manifest.BaseBackup) == archive.path {
+				base, ok := archiveBaseBackup(ctx, candidate.path, configuration.Server.Backup.EncryptionPassword)
+				if ok && base != "" && filepath.Join(directory, base) == archive.path {
 					stillReferenced = true
 					break
 				}
@@ -448,6 +513,9 @@ func enforceBackupSizeLimit(ctx context.Context, directory, configured string, c
 			deleted = append(deleted, filepath.Base(archive.path))
 			total -= archive.size
 		}
+	}
+	if total > limit {
+		slog.Warn("backup.cap_exceeded_protected_base", "backup_dir", directory, "total_bytes", total, "limit_bytes", limit)
 	}
 	return deleted, nil
 }

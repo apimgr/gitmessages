@@ -9,9 +9,19 @@ import (
 	"testing"
 
 	"github.com/apimgr/gitmessages/src/config"
+	"github.com/apimgr/gitmessages/src/database"
 )
 
 func TestConsentBannerAndServerSideChoices(t *testing.T) {
+	store, err := database.OpenSQLite(projectTestDir(t)+"/consent.db", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ConfigureContact(store)
+	t.Cleanup(func() {
+		ConfigureContact(nil)
+		_ = store.Close()
+	})
 	cfg := config.Get()
 	previous := cfg.Server.Privacy.Consent
 	cfg.Server.Privacy.Consent = config.DefaultConfig().Server.Privacy.Consent
@@ -23,6 +33,15 @@ func TestConsentBannerAndServerSideChoices(t *testing.T) {
 	if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), `id="cookie-consent"`) || !strings.Contains(first.Body.String(), `action="/server/consent"`) {
 		t.Fatalf("first-visit consent banner missing: %d %s", first.Code, first.Body.String())
 	}
+	var csrf *http.Cookie
+	for _, cookie := range first.Result().Cookies() {
+		if cookie.Name == csrfCookieName {
+			csrf = cookie
+		}
+	}
+	if csrf == nil {
+		t.Fatal("first page did not issue the CSRF cookie")
+	}
 	acceptedCookie := &http.Cookie{Name: "cookie_consent", Value: url.PathEscape(`{"essential":true,"preferences":true,"analytics":true,"timestamp":1}`)}
 	withConsent := webTestRequest(http.MethodGet, "/server/help", nil)
 	withConsent.AddCookie(acceptedCookie)
@@ -33,10 +52,10 @@ func TestConsentBannerAndServerSideChoices(t *testing.T) {
 	}
 
 	for _, choice := range []string{"accept", "decline"} {
-		form := url.Values{"csrf_token": {"csrf-consent"}, "choice": {choice}, "redirect": {"/server/help?from=consent"}}
+		form := url.Values{"csrf_token": {csrf.Value}, "choice": {choice}, "redirect": {"/server/help?from=consent"}}
 		request := webTestRequest(http.MethodPost, "/server/consent", strings.NewReader(form.Encode()))
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		request.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "csrf-consent"})
+		request.AddCookie(csrf)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
 		if response.Code != http.StatusSeeOther || response.Header().Get("Location") != "/server/help?from=consent" {

@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -43,8 +45,40 @@ func TestCreateVerifyAndRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Verify() error: %v", err)
 	}
-	if len(verified.Files) != 2 || verified.Checksum == "" {
+	if len(verified.Files) != 2 || verified.SHA256 == "" {
 		t.Fatalf("Verify() manifest = %#v", verified)
+	}
+	entries := append([]FileEntry(nil), verified.Files...)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		lines = append(lines, entry.SHA256+"  "+entry.Path)
+	}
+	expectedDigest := sha256.Sum256([]byte(strings.Join(lines, "\n") + "\n"))
+	if verified.SHA256 != hex.EncodeToString(expectedDigest[:]) {
+		t.Fatalf("manifest sha256 = %q, want hash of sorted file checksum lines", verified.SHA256)
+	}
+	manifestJSON, err := json.Marshal(verified)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifestFields map[string]json.RawMessage
+	if err := json.Unmarshal(manifestJSON, &manifestFields); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := manifestFields["checksum"]; ok {
+		t.Fatal("manifest contains the deprecated checksum field")
+	}
+	if _, ok := manifestFields["sha256"]; !ok {
+		t.Fatal("manifest is missing its canonical sha256 field")
+	}
+	var fileEntries []map[string]json.RawMessage
+	if err := json.Unmarshal(manifestFields["files"], &fileEntries); err != nil || len(fileEntries) == 0 {
+		t.Fatalf("manifest files = %s, %v", manifestFields["files"], err)
+	}
+	var modifiedAt int64
+	if err := json.Unmarshal(fileEntries[0]["mtime"], &modifiedAt); err != nil || modifiedAt <= 0 {
+		t.Fatalf("manifest mtime = %s, %v; want Unix seconds", fileEntries[0]["mtime"], err)
 	}
 	destination := filepath.Join(root, "restored")
 	if _, err := Restore(context.Background(), archivePath, "", destination, DefaultRestoreLimits()); err != nil {
@@ -86,6 +120,70 @@ func TestEncryptedBackupRequiresPasswordAndRejectsWrongPassword(t *testing.T) {
 	verified, err := Verify(context.Background(), archivePath, "correct horse battery staple", DefaultRestoreLimits())
 	if err != nil || !verified.Encrypted || verified.EncryptionMethod != "AES-256-GCM" {
 		t.Fatalf("Verify() encrypted manifest = %#v, %v", verified, err)
+	}
+	header, err := ReadEncryptionHeader(archivePath)
+	if err != nil {
+		t.Fatalf("ReadEncryptionHeader() error: %v", err)
+	}
+	if header.KeyID == "" || header.BaseBackup != "" || !header.MatchesPassword("correct horse battery staple") || header.MatchesPassword("incorrect password value") {
+		t.Fatalf("encrypted backup header = %#v; key id or password check failed", header)
+	}
+	archive, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := append([]byte(nil), archive...)
+	tampered[33] ^= 0x01
+	if err := os.WriteFile(archivePath, tampered, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(context.Background(), archivePath, "correct horse battery staple", DefaultRestoreLimits()); err == nil || !strings.Contains(err.Error(), "invalid backup password") {
+		t.Fatalf("Verify() accepted a modified authenticated header: %v", err)
+	}
+	tampered[21] = 0
+	tampered[22] = 0
+	tampered[23] = 0
+	tampered[24] = 1
+	if _, err := ParseEncryptionHeader(tampered); err == nil || !strings.Contains(err.Error(), "Argon2 parameters") {
+		t.Fatalf("ParseEncryptionHeader() accepted invalid parameters: %v", err)
+	}
+}
+
+func TestEncryptedIncrementalHeaderExposesBaseWithoutPassword(t *testing.T) {
+	root := backupTestDir(t)
+	baseSource := filepath.Join(root, "base.txt")
+	if err := os.WriteFile(baseSource, []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	basePath := filepath.Join(root, "full-2026.tar.gz.enc")
+	if _, err := Create(context.Background(), CreateOptions{Destination: basePath, Inputs: []Input{{Path: baseSource, ArchivePath: "base.txt"}}, Password: "correct horse battery staple"}); err != nil {
+		t.Fatalf("create encrypted base: %v", err)
+	}
+	baseDigest, err := fileSHA256(basePath, DefaultRestoreLimits().MaxArchiveSize)
+	if err != nil {
+		t.Fatalf("hash encrypted base: %v", err)
+	}
+	source := filepath.Join(root, "increment.txt")
+	if err := os.WriteFile(source, []byte("changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(root, "daily.tar.gz.enc")
+	if _, err := Create(context.Background(), CreateOptions{
+		Destination: archivePath,
+		Inputs:      []Input{{Path: source, ArchivePath: "increment.txt"}},
+		Type:        "incremental",
+		BaseBackup:  "full-2026.tar.gz.enc",
+		BaseSHA256:  baseDigest,
+		Password:    "correct horse battery staple",
+	}); err != nil {
+		t.Fatalf("Create() encrypted incremental error: %v", err)
+	}
+	header, err := ReadEncryptionHeader(archivePath)
+	if err != nil {
+		t.Fatalf("ReadEncryptionHeader() error: %v", err)
+	}
+	if header.BaseBackup != "full-2026.tar.gz.enc" || !header.MatchesPassword("correct horse battery staple") {
+		t.Fatalf("encrypted incremental header = %#v", header)
 	}
 }
 

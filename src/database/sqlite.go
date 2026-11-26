@@ -349,7 +349,16 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	if err := s.migrateSchedulerTasks(ctx); err != nil {
 		return err
 	}
+	if err := s.migrateAppSecrets(ctx); err != nil {
+		return err
+	}
+	if err := s.initializeAppSecrets(ctx); err != nil {
+		return err
+	}
 	if err := s.migrateAPITokens(ctx); err != nil {
+		return err
+	}
+	if err := s.migrateSecurityReports(ctx); err != nil {
 		return err
 	}
 	for _, statement := range []string{
@@ -362,6 +371,23 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		}); err != nil {
 			return fmt.Errorf("ensure scheduler history indexes: %w", err)
 		}
+	}
+	return nil
+}
+
+func (s *Store) migrateAppSecrets(ctx context.Context) error {
+	columns, err := tableColumns(ctx, s.read, "app_secrets")
+	if err != nil {
+		return fmt.Errorf("inspect app secret schema: %w", err)
+	}
+	if columns["version"] {
+		return nil
+	}
+	if err := s.Write(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `ALTER TABLE app_secrets ADD COLUMN version INTEGER NOT NULL DEFAULT 1`)
+		return err
+	}); err != nil {
+		return fmt.Errorf("add app_secrets.version: %w", err)
 	}
 	return nil
 }
@@ -381,6 +407,32 @@ func (s *Store) migrateAPITokens(ctx context.Context) error {
 		return fmt.Errorf("add api_tokens.token_last4: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) migrateSecurityReports(ctx context.Context) error {
+	columns, err := tableColumns(ctx, s.read, "security_reports")
+	if err != nil {
+		return fmt.Errorf("inspect security report schema: %w", err)
+	}
+	if columns["id_window"] {
+		return nil
+	}
+	return s.Write(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE security_reports ADD COLUMN id_window INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("add security_reports.id_window: %w", err)
+		}
+		if columns["created_at"] {
+			if _, err := tx.ExecContext(ctx, `UPDATE security_reports SET id_window=CAST(strftime('%s',created_at) AS INTEGER)/172800 WHERE id_window=0`); err != nil {
+				return fmt.Errorf("backfill security report id windows: %w", err)
+			}
+		}
+		if columns["security_id"] {
+			if _, err := tx.ExecContext(ctx, `UPDATE security_reports SET security_id=''`); err != nil {
+				return fmt.Errorf("remove legacy stored security IDs: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 func (s *Store) migrateSchedulerTasks(ctx context.Context) error {
@@ -452,7 +504,7 @@ func (s *Store) migrateSchedulerTasks(ctx context.Context) error {
 }
 
 func tableColumns(ctx context.Context, db *sql.DB, table string) (map[string]bool, error) {
-	if table != "scheduler_tasks" && table != "scheduler_history" && table != "api_tokens" {
+	if table != "scheduler_tasks" && table != "scheduler_history" && table != "api_tokens" && table != "app_secrets" && table != "security_reports" {
 		return nil, fmt.Errorf("unsupported schema table %q", table)
 	}
 	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
@@ -480,6 +532,18 @@ func tableColumns(ctx context.Context, db *sql.DB, table string) (map[string]boo
 		return nil, fmt.Errorf("table %s does not exist", table)
 	}
 	return columns, nil
+}
+
+// HasColumn reports whether an application table currently has a named column.
+func (s *Store) HasColumn(ctx context.Context, table, column string) (bool, error) {
+	if s == nil || s.read == nil {
+		return false, errors.New("database store is unavailable")
+	}
+	columns, err := tableColumns(ctx, s.read, table)
+	if err != nil {
+		return false, err
+	}
+	return columns[column], nil
 }
 
 // Close checkpoints the WAL and closes the read handle before the writer.

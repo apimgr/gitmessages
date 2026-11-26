@@ -101,6 +101,7 @@ type prefixName string
 
 const (
 	prefixTableAppSecrets       prefixName = "app_secrets"
+	prefixTableAppSecretRevocations prefixName = "app_secret_revocations"
 	prefixTableRateLimits       prefixName = "rate_limits"
 	prefixTableAuditLog         prefixName = "audit_log"
 	prefixTableOwners           prefixName = "owners"
@@ -110,6 +111,7 @@ const (
 	prefixTableSchedulerTasks   prefixName = "scheduler_tasks"
 	prefixTableSchedulerHistory prefixName = "scheduler_history"
 	prefixTableSecurityThanks   prefixName = "security_thanks"
+	prefixTablePGPKeyMetadata   prefixName = "pgp_key_metadata"
 	prefixTableBackups          prefixName = "backups"
 	prefixIndexRateLimits       prefixName = "idx_rate_limits_window"
 	prefixIndexAuditTimestamp   prefixName = "idx_audit_timestamp"
@@ -127,10 +129,12 @@ const (
 
 var libSQLNames = map[string]prefixName{
 	string(prefixTableAppSecrets): prefixTableAppSecrets, string(prefixTableRateLimits): prefixTableRateLimits,
+	string(prefixTableAppSecretRevocations): prefixTableAppSecretRevocations,
 	string(prefixTableAuditLog): prefixTableAuditLog, string(prefixTableOwners): prefixTableOwners,
 	string(prefixTableAPITokens): prefixTableAPITokens, string(prefixTableCaptcha): prefixTableCaptcha,
 	string(prefixTableSecurityReports): prefixTableSecurityReports, string(prefixTableSchedulerTasks): prefixTableSchedulerTasks,
 	string(prefixTableSchedulerHistory): prefixTableSchedulerHistory, string(prefixTableSecurityThanks): prefixTableSecurityThanks,
+	string(prefixTablePGPKeyMetadata): prefixTablePGPKeyMetadata,
 	string(prefixTableBackups):    prefixTableBackups,
 	string(prefixIndexRateLimits): prefixIndexRateLimits, string(prefixIndexAuditTimestamp): prefixIndexAuditTimestamp,
 	string(prefixIndexAuditCategory): prefixIndexAuditCategory, string(prefixIndexTokenPrimary): prefixIndexTokenPrimary,

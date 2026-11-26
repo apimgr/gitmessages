@@ -540,10 +540,6 @@ body:has(#nav-toggle:checked) {
   bottom: 0;
 }
 
-.cookie-banner-top {
-  top: 0;
-}
-
 .cookie-banner-content {
   display: flex;
   width: min(100%, 80rem);

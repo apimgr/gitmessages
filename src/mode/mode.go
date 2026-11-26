@@ -130,7 +130,7 @@ func Initialize(flagMode string) {
 	}
 
 	Set(m)
-	if value, exists := os.LookupEnv("DEBUG"); exists {
+	if value, exists := os.LookupEnv("DEBUG"); exists && value != "" {
 		SetDebugEnabled(isTruthy(value))
 	} else {
 		SetDebugEnabled(m == Debug)
@@ -155,7 +155,7 @@ func InitializeWithConfig(flagMode, configMode string, debugFlag *bool) {
 		SetDebugEnabled(*debugFlag)
 		return
 	}
-	if value, exists := os.LookupEnv("DEBUG"); exists {
+	if value, exists := os.LookupEnv("DEBUG"); exists && value != "" {
 		SetDebugEnabled(isTruthy(value))
 		return
 	}

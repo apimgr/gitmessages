@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +86,45 @@ func TestChecksumMatchesSHA256(t *testing.T) {
 	sum := sha256.Sum256(data)
 	if hex.EncodeToString(sum[:]) == "" {
 		t.Fatal("SHA-256 result is empty")
+	}
+}
+
+func TestApplyStagedIgnoresNonElevatedProcess(t *testing.T) {
+	root := t.TempDir()
+	stageDir := filepath.Join(root, "update")
+	if err := os.Mkdir(stageDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyStaged(context.Background(), root, "gitmessages", "", "1.0.0", 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stageDir); err != nil {
+		t.Fatalf("non-elevated process touched staged files: %v", err)
+	}
+}
+
+func TestApplyStagedRemovesIncompleteStage(t *testing.T) {
+	root := t.TempDir()
+	stageDir := filepath.Join(root, "update")
+	if err := os.Mkdir(stageDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyStaged(context.Background(), root, "gitmessages", "", "1.0.0", 0, true); err == nil {
+		t.Fatal("incomplete stage was accepted")
+	}
+	if _, err := os.Stat(stageDir); !os.IsNotExist(err) {
+		t.Fatalf("failed stage directory remains: %v", err)
+	}
+}
+
+func TestHTTPSURL(t *testing.T) {
+	for _, test := range []struct {
+		address string
+		want    bool
+	}{{"https://example.com/file", true}, {"http://example.com/file", false}, {"https:///file", false}, {"not a url", false}} {
+		if got := httpsURL(test.address); got != test.want {
+			t.Errorf("httpsURL(%q) = %v, want %v", test.address, got, test.want)
+		}
 	}
 }
 

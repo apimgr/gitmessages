@@ -12,12 +12,21 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/apimgr/gitmessages/src/database"
 )
 
 const installationSecretName = "installation_secret"
+
+var securityReportMu sync.Mutex
+
+// LockSecurityReportPipeline serializes key operations with security-report storage.
+func LockSecurityReportPipeline() func() {
+	securityReportMu.Lock()
+	return securityReportMu.Unlock
+}
 
 // InstallationSecret returns the stable HMAC key stored in the shared database.
 func InstallationSecret(ctx context.Context, store *database.Store) ([]byte, error) {
@@ -59,6 +68,37 @@ func InstallationSecret(ctx context.Context, store *database.Store) ([]byte, err
 		return nil, fmt.Errorf("load installation secret: %w", err)
 	}
 	return secret, nil
+}
+
+// InstallationSecretValues returns the current secret and any unexpired grace secret.
+func InstallationSecretValues(ctx context.Context, store *database.Store, now time.Time) ([]byte, [][]byte, error) {
+	current, err := InstallationSecret(ctx, store)
+	if err != nil {
+		return nil, nil, err
+	}
+	var previous, until string
+	err = store.Read().QueryRowContext(ctx, `SELECT value FROM app_secrets WHERE name=?`, installationSecretName+"_previous").Scan(&previous)
+	if errors.Is(err, sql.ErrNoRows) {
+		return current, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := store.Read().QueryRowContext(ctx, `SELECT value FROM app_secrets WHERE name=?`, installationSecretName+"_previous_until").Scan(&until); err != nil {
+		return nil, nil, err
+	}
+	deadline, err := time.Parse(time.RFC3339Nano, until)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse previous installation secret deadline: %w", err)
+	}
+	if !now.Before(deadline) {
+		return current, nil, nil
+	}
+	decoded, _, err := decodeInstallationSecret(previous)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode previous installation secret: %w", err)
+	}
+	return current, [][]byte{decoded}, nil
 }
 
 func decodeInstallationSecret(value string) ([]byte, bool, error) {

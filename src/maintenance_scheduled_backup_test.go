@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	backuppkg "github.com/apimgr/gitmessages/src/backup"
 	"github.com/apimgr/gitmessages/src/config"
@@ -113,5 +114,91 @@ func TestBackupSizeParsingAndHardRetentionLimit(t *testing.T) {
 	}
 	if _, err := enforceBackupSizeLimit(context.Background(), root, "invalid", configuration); err == nil {
 		t.Fatal("invalid retention size limit was accepted")
+	}
+}
+
+func TestBackupRetentionCategoriesAreExclusive(t *testing.T) {
+	fulls := []scheduledFull{
+		{path: "yearly", manifest: backuppkg.Manifest{SnapshotAt: time.Date(2023, time.January, 1, 2, 0, 0, 0, time.UTC)}},
+		{path: "monthly", manifest: backuppkg.Manifest{SnapshotAt: time.Date(2023, time.February, 1, 2, 0, 0, 0, time.UTC)}},
+		{path: "weekly", manifest: backuppkg.Manifest{SnapshotAt: time.Date(2023, time.January, 8, 2, 0, 0, 0, time.UTC)}},
+		{path: "daily", manifest: backuppkg.Manifest{SnapshotAt: time.Date(2023, time.January, 2, 2, 0, 0, 0, time.UTC)}},
+	}
+	policy := config.BackupRetentionConfig{MaxBackups: 1, KeepWeekly: 1, KeepMonthly: 1, KeepYearly: 1}
+	kept := backupRetentionSet(fulls, policy)
+	if len(kept) != 4 {
+		t.Fatalf("retained paths = %#v, want one backup per exclusive category", kept)
+	}
+	for _, path := range []string{"yearly", "monthly", "weekly", "daily"} {
+		if _, ok := kept[path]; !ok {
+			t.Errorf("retention did not keep %q", path)
+		}
+	}
+	fulls = append(fulls, scheduledFull{path: "older-yearly", manifest: backuppkg.Manifest{SnapshotAt: time.Date(2022, time.January, 1, 2, 0, 0, 0, time.UTC)}})
+	kept = backupRetentionSet(fulls, policy)
+	if _, ok := kept["older-yearly"]; ok {
+		t.Fatal("older January 1 backup exceeded the yearly retention count")
+	}
+}
+
+func TestBackupSizeLimitPreservesIncrementalBasePair(t *testing.T) {
+	root := maintenanceTestDir(t)
+	source := filepath.Join(root, "source.txt")
+	if err := os.WriteFile(source, []byte("snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	basePath := filepath.Join(root, paths.ProjectName+"_backup_2026-01-01.tar.gz")
+	if _, err := backuppkg.Create(context.Background(), backuppkg.CreateOptions{
+		Destination: basePath,
+		Inputs:      []backuppkg.Input{{Path: source, ArchivePath: "snapshot.txt"}},
+	}); err != nil {
+		t.Fatalf("create base backup: %v", err)
+	}
+	baseHash, err := hashBackupFile(basePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	incrementPath := filepath.Join(root, paths.ProjectName+"-daily.tar.gz")
+	if _, err := backuppkg.Create(context.Background(), backuppkg.CreateOptions{
+		Destination: incrementPath,
+		Inputs:      []backuppkg.Input{{Path: source, ArchivePath: "changed.txt"}},
+		Type:        "incremental",
+		BaseBackup:  filepath.Base(basePath),
+		BaseSHA256:  baseHash,
+	}); err != nil {
+		t.Fatalf("create incremental backup: %v", err)
+	}
+	extraPath := filepath.Join(root, paths.ProjectName+"_unrelated.tar.gz")
+	if err := os.WriteFile(extraPath, []byte("unverified archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Unix(1, 0)
+	if err := os.Chtimes(extraPath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := enforceBackupSizeLimit(context.Background(), root, "1B", config.DefaultConfig())
+	if err != nil {
+		t.Fatalf("enforce backup size cap: %v", err)
+	}
+	if len(removed) != 1 || removed[0] != filepath.Base(extraPath) {
+		t.Fatalf("size-cap removals = %#v, want only the unrelated archive", removed)
+	}
+	for _, path := range []string{basePath, incrementPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("retained backup pair member %s is missing: %v", filepath.Base(path), err)
+		}
+	}
+}
+
+func TestBackupArchiveSuffixIsExact(t *testing.T) {
+	for _, name := range []string{"gitmessages_backup_2026-11-26.tar.gz", "gitmessages_backup_2026-11-26.tar.gz.enc"} {
+		if !isBackupArchive(name) {
+			t.Errorf("expected valid backup archive suffix for %q", name)
+		}
+	}
+	for _, name := range []string{"gitmessages_backup_2026-11-26.tar.gz.tmp", "gitmessages.tar.gz.notes", "other_backup.tar.gz.enc.old"} {
+		if isBackupArchive(name) {
+			t.Errorf("accepted invalid backup archive suffix for %q", name)
+		}
 	}
 }

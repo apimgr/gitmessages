@@ -7,6 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
@@ -37,6 +38,7 @@ type Settings struct {
 	RejectMarkup, Honeypot                      bool
 	BlockedWords, BlockedEmailDomains           []string
 	ProjectPGPKey                               []byte
+	PreviousSecrets                             [][]byte
 	CaptchaProvider, CaptchaSecretKey           string
 }
 
@@ -99,7 +101,35 @@ func New(store *database.Store, secret, encryptionKey []byte, settings Settings,
 	if settings.Window <= 0 {
 		settings.Window = time.Hour
 	}
+	settings.PreviousSecrets = cloneSecrets(settings.PreviousSecrets)
 	return &Service{store: store, secret: append([]byte(nil), secret...), encryptionKey: append([]byte(nil), encryptionKey...), settings: settings, sender: sender, used: map[string]time.Time{}, counts: map[string][]time.Time{}, strikes: map[string][]time.Time{}, bans: map[string]time.Time{}, duplicates: map[string]time.Time{}}, nil
+}
+
+func cloneSecrets(values [][]byte) [][]byte {
+	result := make([][]byte, 0, len(values))
+	for _, value := range values {
+		result = append(result, append([]byte(nil), value...))
+	}
+	return result
+}
+
+func (s *Service) installationSecrets() [][]byte {
+	return append([][]byte{s.secret}, s.settings.PreviousSecrets...)
+}
+
+func (s *Service) validSecurityID(value string, now time.Time) bool {
+	valid := 0
+	for _, secret := range s.installationSecrets() {
+		if ValidSecurityID(secret, value, now) {
+			valid = 1
+		}
+	}
+	return valid == 1
+}
+
+// ValidSecurityID validates the active or still-graceful security-report link token.
+func (s *Service) ValidSecurityID(value string, now time.Time) bool {
+	return s.validSecurityID(value, now)
 }
 
 type FieldDescriptor struct {
@@ -266,7 +296,7 @@ func (s *Service) Prepare(ctx context.Context, input Message, ip string, now tim
 	if err := s.checkRate(rateIP(input, ip), input.Email, now, false); err != nil {
 		return Review{}, err
 	}
-	if input.Type == "security" && !ValidSecurityID(s.secret, input.SecurityID, now) {
+	if input.Type == "security" && !s.validSecurityID(input.SecurityID, now) {
 		return Review{}, errors.New("invalid security mode")
 	}
 	bot := s.settings.Honeypot && input.Website != ""
@@ -424,10 +454,13 @@ func (s *Service) consumeFormToken(token string, now time.Time) error {
 	if age < time.Duration(s.settings.MinFill)*time.Second || s.settings.MaxAge > 0 && age > time.Duration(s.settings.MaxAge)*time.Second {
 		return errors.New("invalid form token")
 	}
-	mac := hmac.New(sha256.New, s.secret)
-	_, _ = fmt.Fprintf(mac, "contact-form|%s|%s", parts[0], parts[1])
-	want := hex.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(want), []byte(parts[2])) {
+	valid := 0
+	for _, secret := range s.installationSecrets() {
+		mac := hmac.New(sha256.New, secret)
+		_, _ = fmt.Fprintf(mac, "contact-form|%s|%s", parts[0], parts[1])
+		valid |= subtle.ConstantTimeCompare([]byte(hex.EncodeToString(mac.Sum(nil))), []byte(parts[2]))
+	}
+	if valid != 1 {
 		return errors.New("invalid form token")
 	}
 	key := parts[0] + "." + parts[1]
@@ -607,7 +640,7 @@ func (s *Service) Confirm(ctx context.Context, input Message, ip string, now tim
 	if err != nil {
 		return Outcome{}, err
 	}
-	if input.Type == "security" && !ValidSecurityID(s.secret, input.SecurityID, now) {
+	if input.Type == "security" && !s.validSecurityID(input.SecurityID, now) {
 		return Outcome{}, errors.New("invalid security mode")
 	}
 	if err := s.checkRate(rateIP(input, ip), input.Email, now, true); err != nil {
@@ -666,9 +699,13 @@ func (s *Service) verifyReviewToken(token string, normalized any, now time.Time)
 	}
 	payload, _ := json.Marshal(normalized)
 	digest := sha256.Sum256(payload)
-	mac := hmac.New(sha256.New, s.secret)
-	_, _ = fmt.Fprintf(mac, "contact-review|%s|%s|%s|%s", parts[0], parts[1], parts[2], hex.EncodeToString(digest[:]))
-	if !hmac.Equal([]byte(hex.EncodeToString(mac.Sum(nil))), []byte(parts[3])) {
+	valid := 0
+	for _, secret := range s.installationSecrets() {
+		mac := hmac.New(sha256.New, secret)
+		_, _ = fmt.Fprintf(mac, "contact-review|%s|%s|%s|%s", parts[0], parts[1], parts[2], hex.EncodeToString(digest[:]))
+		valid |= subtle.ConstantTimeCompare([]byte(hex.EncodeToString(mac.Sum(nil))), []byte(parts[3]))
+	}
+	if valid != 1 {
 		return false, errors.New("invalid review token")
 	}
 	key := parts[0] + "." + parts[1]
@@ -704,6 +741,8 @@ func contactBody(in Message) string {
 }
 
 func (s *Service) storeSecurity(ctx context.Context, in Message, now time.Time) (Outcome, error) {
+	unlock := LockSecurityReportPipeline()
+	defer unlock()
 	tracking := make([]byte, 8)
 	if _, err := rand.Read(tracking); err != nil {
 		return Outcome{}, err
@@ -784,8 +823,17 @@ func (s *Service) storeSecurity(ctx context.Context, in Message, now time.Time) 
 	statusToken := base64.RawURLEncoding.EncodeToString(statusTokenRaw)
 	hash := sha256.Sum256([]byte(statusToken))
 	tokenHash := hex.EncodeToString(hash[:])
+	legacySecurityID, err := s.store.HasColumn(ctx, "security_reports", "security_id")
+	if err != nil {
+		return Outcome{}, fmt.Errorf("inspect security report schema: %w", err)
+	}
 	err = s.store.Write(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO security_reports(tracking_id,security_id,severity,component,status,body_enc,body_alg,contact_enc,credit_pref,credit_name,cve_requested,token_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, id, in.SecurityID, severity, component, "received", encrypted, bodyAlg, contactEncrypted, credit, nullable(creditName), in.Fields["cve_requested"] == "true", tokenHash)
+		var err error
+		if legacySecurityID {
+			_, err = tx.ExecContext(ctx, `INSERT INTO security_reports(tracking_id,security_id,id_window,severity,component,status,body_enc,body_alg,contact_enc,credit_pref,credit_name,cve_requested,token_hash) VALUES(?,'',?,?,?,?,?,?,?,?,?,?,?)`, id, now.Unix()/172800, severity, component, "received", encrypted, bodyAlg, contactEncrypted, credit, nullable(creditName), in.Fields["cve_requested"] == "true", tokenHash)
+		} else {
+			_, err = tx.ExecContext(ctx, `INSERT INTO security_reports(tracking_id,id_window,severity,component,status,body_enc,body_alg,contact_enc,credit_pref,credit_name,cve_requested,token_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, id, now.Unix()/172800, severity, component, "received", encrypted, bodyAlg, contactEncrypted, credit, nullable(creditName), in.Fields["cve_requested"] == "true", tokenHash)
+		}
 		return err
 	})
 	if err != nil {
