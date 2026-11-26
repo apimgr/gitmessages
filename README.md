@@ -9,6 +9,8 @@
 
 Git Messages is a curated reference and builder for git commit message conventions. Browse commit types, emoji mappings, templates, and examples, or build a message using Conventional Commits or Angular formatting. The catalog is embedded in the Go binaries. There are no user accounts or submitted catalog content. Anonymous owner tokens support protected API operations, and configured contact/security forms accept reports required by the server specification. The service can provide alternate access through Tor and optional I2P when configured and available.
 
+The commit message examples and templates are project-authored and released under the MIT License; the About page and [license notices](LICENSE.md) record this attribution.
+
 ## Features
 
 - Commit types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `chore`, `ci`, `build`, and `revert`

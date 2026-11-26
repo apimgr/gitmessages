@@ -208,7 +208,7 @@ All standards are disabled by default and configured independently. If any is en
 | `web.security.contact` | Optional security contact value. |
 | `web.security.policy` | Security policy text/configuration value. |
 | `web.security.report_url` | External security report destination. |
-| `web.security.publish_pgp_key` | Whether the configured public PGP key is published at `/.well-known/pgp-key.asc`. |
+| `web.security.publish_pgp_key` | Defaults to `true`; publishes a valid configured public PGP key at `/.well-known/pgp-key.asc`, adds its `Encryption:` URL and fingerprint comment to `security.txt`, and exposes its URL in security metadata. `false` disables public publication while retaining the local key. |
 
 `robots.txt` rules must start with `/`; invalid and duplicate rules are ignored. When no valid allow rule remains, `/` is allowed. Deny rules take precedence over allow rules, and the sitemap uses the same rules when selecting pages. Defaults allow `/` and `/api`, and deny `/debug`.
 
@@ -411,7 +411,7 @@ I2P settings are under `server.i2p`:
 
 The CLI stores `cli.yml` and profile files in the platform user configuration directory under `apimgr/gitmessages`. Select a profile with `--config`. Files are created with owner-only permissions. The server selection order is `--server`, `GITMESSAGES_SERVER_PRIMARY`, then `server.primary`. A valid `--server` argument is saved only when no valid server is already configured.
 
-The CLI config supports `language`, `display.mode` (`auto`, `gui`, or `tui`), `server.primary`, and the discovered `server.api_version`. The CLI queries `/api/autodiscover` on startup and records the server's active API version before using versioned routes. An explicit `--lang` applies to the current invocation; otherwise language selection uses the config and system locale. The default static CLI uses the TUI; optional `gitmessages-cli-gui-{os}-{arch}` builds enable GUI mode on Linux, macOS, and Windows. BSD builds use the terminal interface.
+The CLI config supports `language`, `display.mode` (`auto`, `gui`, or `tui`), `server.primary`, and the discovered `server.api_version`. The CLI queries `/api/autodiscover` on startup and records the server's active API version before using versioned routes. Language precedence is `--lang`, CLI config `language`, `LC_ALL`, `LANG`, then English (`en`); `language: auto` uses the environment. The default static CLI uses the TUI; optional `gitmessages-cli-gui-{os}-{arch}` builds enable GUI mode on Linux, macOS, and Windows. BSD builds use the terminal interface.
 
 The server's CLI binary distribution settings are `server.cli.binary_download.dir` (defaults to `{data_dir}/cli`) and `server.cli.binary_download.require_auth` (defaults to `false`). Release binaries are provisioned by the operator, image, or package; the server does not build or download them. Downloads are public by default and require a valid Bearer token when `require_auth` is enabled. See [Integrations](integrations.md) for autodiscovery and download behavior.
 

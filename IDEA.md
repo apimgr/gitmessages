@@ -2,6 +2,8 @@
 
 Gitmessages is a full-stack Go web application serving a curated reference for git commit message conventions. It provides commit type definitions (feat, fix, docs, style, refactor, perf, test, chore, ci, build, revert), emoji mappings, usage guidelines, and example commit messages through a versioned REST API, GraphQL endpoint, and a server-side rendered web UI with an interactive commit message builder. All convention data is embedded in the binary at build time. A companion CLI tool lets developers browse types and build valid commit messages directly in the terminal. Deployed as a single self-contained static binary.
 
+**Tagline:** A curated reference for git commit message conventions.
+
 ## Project variables
 
 project_name: gitmessages
