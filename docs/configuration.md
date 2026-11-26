@@ -269,9 +269,11 @@ Privacy settings fill the deployment-specific sections of `/server/privacy` and 
 | `server.privacy.retention.period` | Retention description shown on the privacy page; may be a string or language map. Empty uses the built-in localized text. |
 | `server.privacy.retention.export_available` | `true`; shows the owner data export right. Operators export an owner's data with `--maintenance data export --owner <prefix>`. |
 | `server.privacy.retention.deletion_available` | `true`; shows the owner data deletion right. Operators delete an owner's data with `--maintenance data delete --owner <prefix>`; privacy requests can also be sent through the configured contact flow. |
+| `server.tracking.{type,id,url}` | Optional analytics provider. Supported types: `none`, `google`, `matomo`/`piwik`, `owa`, `fathom`, `plausible`, `umami`, `simple`, and `cloudflare`; provider-specific IDs and URLs are validated at load time. Tags and CSP hosts are added only after analytics consent, and are never sent on Tor/I2P or when a privacy signal applies. |
+| `web.headers.honor_dnt` | `false`; when enabled, `DNT: 1` is treated like `Sec-GPC: 1` and disables analytics and nonessential preference writes. |
 | `server.privacy.consent.show_until_acknowledged` | `true`; keeps the banner visible until the visitor records a consent choice. |
 | `server.privacy.consent.message`, `message_if_sold` | Banner text selected according to `server.privacy.data.sold`. |
-| `server.privacy.consent.policy.{text,url}` | Privacy-policy link shown in the banner. |
+| `server.privacy.consent.policy.{text,url,version}` | Privacy-policy link and version used for consent records; default version is `1`. |
 | `server.privacy.consent.buttons.{decline,accept}` | Labels for the consent actions. |
 | `server.privacy.consent.position` | Banner position, `top` or `bottom`. |
 | `server.privacy.consent.show_preferences`, `preferences_text` | Controls the manage-preferences link and its label. |
