@@ -552,3 +552,7 @@ limitations under the License.
 | City | [DB-IP](https://db-ip.com/) | CC BY 4.0 |
 
 City data attribution: <a href="https://db-ip.com/">IP Geolocation by DB-IP</a>
+
+## Project-Authored Catalog
+
+The commit message examples and templates in `src/messages/data/messages.json` are project-authored content released by apimgr under this repository's MIT License. No third-party message collection is embedded in that file.
