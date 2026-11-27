@@ -171,7 +171,7 @@ func encodeMessage(sender Sender, message Message) ([]byte, error) {
 	}
 	fqdn := strings.TrimSpace(sender.FQDN)
 	if fqdn == "" {
-		fqdn = "localhost"
+		fqdn = "gitmessages.invalid"
 	}
 	from := (&mail.Address{Name: sender.Name, Address: sender.Address}).String()
 	subject := mime.QEncoding.Encode("UTF-8", message.Subject)

@@ -9,11 +9,11 @@ import (
 
 func TestEmbeddedEmailTemplatesRenderTranslatedMessage(t *testing.T) {
 	manager := NewTemplateManager("")
-	if got := len(manager.Names()); got != 16 {
-		t.Fatalf("template count = %d, want 16", got)
+	if got := len(manager.Names()); got != 19 {
+		t.Fatalf("template count = %d, want 19", got)
 	}
 	message, err := manager.Render("disk_low", "es", map[string]string{
-		"app_name": "Git Messages", "fqdn": "messages.example.test", "path": "/data", "used_percent": "92",
+		"app_name": "Git Messages", "fqdn": "messages.example.test", "app_url": "https://messages.example.test", "path": "/data", "used_percent": "92",
 		"free": "8 GiB", "threshold_percent": "85", "timestamp": "2026-11-22T12:00:00Z", "details": "Path: /data\n<script>alert(1)</script>",
 	})
 	if err != nil {
@@ -29,6 +29,22 @@ func TestEmbeddedEmailTemplatesRenderTranslatedMessage(t *testing.T) {
 	}
 	if strings.Contains(message.HTML, "<script>") || !strings.Contains(message.HTML, "&lt;script&gt;") {
 		t.Fatalf("HTML alternative did not escape template data: %s", message.HTML)
+	}
+}
+
+func TestMaintenanceNotificationTemplatesRender(t *testing.T) {
+	manager := NewTemplateManager("")
+	for _, name := range []string{"maintenance_entered", "maintenance_exited", "self_healing_exhausted"} {
+		message, err := manager.Render(name, "en", map[string]string{
+			"app_name": "Git Messages", "reason": "database_write", "details": "Operator action is required.",
+			"since": "2026-11-26T12:00:00Z", "attempts": "3",
+		})
+		if err != nil {
+			t.Fatalf("Render(%q) error: %v", name, err)
+		}
+		if strings.Contains(message.Text, "localhost") {
+			t.Errorf("%s template contains a guessed localhost URL", name)
+		}
 	}
 }
 

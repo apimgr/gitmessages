@@ -1,6 +1,7 @@
 package web
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,6 +16,35 @@ func TestBuildURLDoesNotInventLocalHost(t *testing.T) {
 	}
 	if got := fallbackHostname(); strings.EqualFold(got, "localhost") || strings.HasSuffix(strings.ToLower(got), ".local") || strings.HasSuffix(strings.ToLower(got), ".localdomain") {
 		t.Fatalf("fallback hostname uses a reserved local name: %q", got)
+	}
+}
+
+func TestResolveStartupFQDNUsesConfiguredResolutionOrder(t *testing.T) {
+	addresses := []net.IP{
+		net.ParseIP("8.8.8.8"),
+		net.ParseIP("2001:4860:4860::8888"),
+	}
+	tests := []struct {
+		name        string
+		domain      string
+		osHostname  string
+		envHostname string
+		addresses   []net.IP
+		want        string
+	}{
+		{name: "domain list primary", domain: "primary.example.test,secondary.example.test", osHostname: "host.example.test", want: "primary.example.test"},
+		{name: "operating system hostname", osHostname: "host.example.test", envHostname: "env.example.test", addresses: addresses, want: "host.example.test"},
+		{name: "environment hostname", envHostname: "env.example.test", addresses: addresses, want: "env.example.test"},
+		{name: "IPv6 before IPv4", addresses: addresses, want: "2001:4860:4860::8888"},
+		{name: "skip private and loopback addresses", addresses: []net.IP{net.ParseIP("192.168.1.2"), net.ParseIP("127.0.0.1"), net.ParseIP("8.8.4.4")}, want: "8.8.4.4"},
+		{name: "unresolved", want: ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := resolveStartupFQDN(test.domain, test.osHostname, test.envHostname, test.addresses); got != test.want {
+				t.Fatalf("resolveStartupFQDN() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

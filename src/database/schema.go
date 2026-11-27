@@ -135,4 +135,13 @@ var schemaStatements = []string{
 		success INTEGER NOT NULL DEFAULT 1,
 		details TEXT
 	)`,
+	`CREATE TABLE IF NOT EXISTS health_request_stats (
+		id INTEGER PRIMARY KEY CHECK (id = 1),
+		total_count INTEGER NOT NULL DEFAULT 0
+	)`,
+	`INSERT INTO health_request_stats(id, total_count) VALUES (1, 0) ON CONFLICT(id) DO NOTHING`,
+	`CREATE TABLE IF NOT EXISTS health_request_buckets (
+		hour_start INTEGER PRIMARY KEY,
+		count INTEGER NOT NULL DEFAULT 0
+	)`,
 }

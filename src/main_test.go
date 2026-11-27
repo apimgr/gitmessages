@@ -23,9 +23,11 @@ import (
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
+	maintenancepkg "github.com/apimgr/gitmessages/src/maintenance"
 	"github.com/apimgr/gitmessages/src/overlay"
 	"github.com/apimgr/gitmessages/src/paths"
 	"github.com/apimgr/gitmessages/src/securitydata"
+	"github.com/apimgr/gitmessages/src/web"
 )
 
 func TestConfigureOutputFallsBackToEnglish(t *testing.T) {
@@ -220,7 +222,8 @@ func TestNewApplicationSchedulerRegistersConfiguredTasks(t *testing.T) {
 	databaseDir := filepath.Join(root, "database")
 	backupDir := filepath.Join(root, "backups")
 	logsDir := filepath.Join(root, "logs")
-	for _, directory := range []string{backupDir, logsDir} {
+	configDir := filepath.Join(root, "config")
+	for _, directory := range []string{backupDir, logsDir, configDir} {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -233,7 +236,11 @@ func TestNewApplicationSchedulerRegistersConfiguredTasks(t *testing.T) {
 	configuration := config.DefaultConfig()
 	configuration.Server.GeoIP.Enabled = false
 	configuration.Server.Security.Blocklists.Enabled = false
-	scheduled, err := newApplicationScheduler(store, nil, nil, configuration, paths.Directories{Backup: backupDir, Logs: logsDir}, log.New(io.Discard, "", 0), nil, nil, nil, func() (*overlay.TorManager, *overlay.I2PManager) { return nil, nil }, func() []string { return nil })
+	maintenanceManager, err := maintenancepkg.New(maintenancepkg.Config{RetryInterval: "30s"}, func(context.Context, string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduled, err := newApplicationScheduler(store, nil, nil, configuration, paths.Directories{Config: configDir, Backup: backupDir, Logs: logsDir}, log.New(io.Discard, "", 0), nil, nil, nil, maintenanceManager, newHealthStatsCache(database.HealthRequestStats{}), func() (*overlay.TorManager, *overlay.I2PManager) { return nil, nil }, func() []string { return nil })
 	if err != nil {
 		t.Fatalf("newApplicationScheduler() error: %v", err)
 	}
@@ -249,6 +256,107 @@ func TestNewApplicationSchedulerRegistersConfiguredTasks(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+func TestHealthStatsCacheIncludesPendingAndRecentBuckets(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Hour)
+	cache := newHealthStatsCache(database.HealthRequestStats{
+		Total: 10, Last24Hour: 34,
+		Hours: []database.HealthRequestHourBucket{{HourStart: now.Add(-25 * time.Hour), Count: 30}, {HourStart: now, Count: 4}},
+	})
+	pending := web.HealthRequestCounterBatch{Total: 3, Hours: []web.HealthRequestHourBucket{{HourStart: now.Add(-25 * time.Hour), Count: 5}, {HourStart: now, Count: 2}}}
+	if got := cache.snapshot(pending); got.RequestsTotal != 13 || got.Requests24Hours != 36 {
+		t.Fatalf("snapshot() = %+v, want total 13 and 24h 36 before cached pruning", got)
+	}
+	cache.add(pending)
+	if got := cache.snapshot(web.HealthRequestCounterBatch{}); got.RequestsTotal != 13 || got.Requests24Hours != 6 {
+		t.Fatalf("snapshot after add = %+v, want total 13 and 24h 6", got)
+	}
+}
+
+func TestCleanupMaintenanceFilesUsesScopedAges(t *testing.T) {
+	root := maintenanceTestDir(t)
+	logsDir := filepath.Join(root, "logs")
+	backupDir := filepath.Join(root, "backups")
+	tempRoot := filepath.Join(root, "tmp")
+	tempParent := filepath.Join(tempRoot, paths.OrgName)
+	for _, directory := range []string{logsDir, backupDir, tempParent} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("TMPDIR", tempRoot)
+	oldLog := filepath.Join(logsDir, "old.log")
+	newLog := filepath.Join(logsDir, "new.log")
+	if err := os.WriteFile(oldLog, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newLog, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldTemp := filepath.Join(tempParent, paths.ProjectName+"-old")
+	newTemp := filepath.Join(tempParent, paths.ProjectName+"-new")
+	for _, directory := range []string{oldTemp, newTemp} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now()
+	oldTime := now.Add(-48 * time.Hour)
+	if err := os.Chtimes(oldLog, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(oldTemp, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	store, err := database.OpenSQLite(filepath.Join(root, "server.db"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	configuration := config.DefaultConfig()
+	configuration.Server.Maintenance.Cleanup.LogRetentionDays = 1
+	if err := cleanupMaintenanceFiles(store, paths.Directories{Logs: logsDir, Backup: backupDir}, configuration, now); err != nil {
+		t.Fatalf("cleanupMaintenanceFiles() error: %v", err)
+	}
+	for _, path := range []string{oldLog, oldTemp} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("expired maintenance artifact still exists: %s", path)
+		}
+	}
+	for _, path := range []string{newLog, newTemp} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("recent maintenance artifact was removed: %s: %v", path, err)
+		}
+	}
+}
+
+func TestRecordMaintenanceEvent(t *testing.T) {
+	store, err := database.OpenSQLite(filepath.Join(maintenanceTestDir(t), "server.db"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	recordMaintenanceEvent(store, "server.maintenance_entered", maintenancepkg.Info{
+		Reason: "database_write", SelfHealing: maintenancepkg.SelfHealingInfo{Attempts: 2},
+	})
+	var action, targetID, details string
+	if err := store.Read().QueryRow(`SELECT action,target_id,details FROM audit_log WHERE category='server' ORDER BY id DESC LIMIT 1`).Scan(&action, &targetID, &details); err != nil {
+		t.Fatal(err)
+	}
+	if action != "server.maintenance_entered" || targetID != "database_write" || !strings.Contains(details, `"attempts":2`) {
+		t.Fatalf("maintenance audit event = %q, %q, %q", action, targetID, details)
+	}
+}
+
+func TestProbeApplicationDirectory(t *testing.T) {
+	directory := maintenanceTestDir(t)
+	if err := probeApplicationDirectory(directory, ".probe-*"); err != nil {
+		t.Fatalf("writable directory probe failed: %v", err)
+	}
+	if err := probeApplicationDirectory(filepath.Join(directory, "missing"), ".probe-*"); err == nil {
+		t.Fatal("unavailable directory probe succeeded")
 	}
 }
 
@@ -1203,7 +1311,11 @@ func TestApplicationSchedulerRegistersAndRunsLocalBuiltIns(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := securitydata.New(filepath.Join(directories.Data, "security"))
-	scheduled, err := newApplicationScheduler(store, manager, authStore, configuration, directories, log.New(io.Discard, "", 0), nil, nil, nil, func() (*overlay.TorManager, *overlay.I2PManager) { return nil, nil }, func() []string { return nil })
+	maintenanceManager, err := maintenancepkg.New(maintenancepkg.Config{RetryInterval: "30s"}, func(context.Context, string) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduled, err := newApplicationScheduler(store, manager, authStore, configuration, directories, log.New(io.Discard, "", 0), nil, nil, nil, maintenanceManager, newHealthStatsCache(database.HealthRequestStats{}), func() (*overlay.TorManager, *overlay.I2PManager) { return nil, nil }, func() []string { return nil })
 	if err != nil {
 		t.Fatalf("newApplicationScheduler() error: %v", err)
 	}
@@ -1211,7 +1323,7 @@ func TestApplicationSchedulerRegistersAndRunsLocalBuiltIns(t *testing.T) {
 	for _, task := range scheduled.GetTasks() {
 		tasks[task.ID] = task.Func
 	}
-	for _, id := range []string{"healthcheck_self", "security_cleanup", "token_cleanup", "geoip_update", "blocklist_update", "log_rotation", "backup_daily", "backup_hourly", "disk_check", "ssl_renewal"} {
+	for _, id := range []string{"healthcheck_self", "database_check", "health_stats_flush", "security_cleanup", "token_cleanup", "geoip_update", "blocklist_update", "log_rotation", "backup_daily", "backup_hourly", "disk_check", "ssl_renewal"} {
 		if tasks[id] == nil {
 			t.Errorf("required built-in task %q was not registered", id)
 		}
@@ -1247,7 +1359,7 @@ func TestOverlayManagersTrackReplacements(t *testing.T) {
 	}
 }
 
-func TestConfiguredTLSHostsPrefersConfiguredFQDN(t *testing.T) {
+func TestConfiguredTLSHostsUsesDomainEnvironmentOnly(t *testing.T) {
 	t.Setenv("DOMAIN", "fallback.example.test,ignored.example.test")
 	if got := configuredTLSHosts(nil); got != nil {
 		t.Fatalf("configuredTLSHosts(nil) = %v, want nil", got)
@@ -1257,10 +1369,9 @@ func TestConfiguredTLSHostsPrefersConfiguredFQDN(t *testing.T) {
 		t.Fatalf("configuredTLSHosts() env fallback = %v", got)
 	}
 	configuration.Server.FQDN = " configured.example.test "
-	if got := configuredTLSHosts(configuration); len(got) != 1 || got[0] != "configured.example.test" {
-		t.Fatalf("configuredTLSHosts() configured host = %v", got)
+	if got := configuredTLSHosts(configuration); len(got) != 1 || got[0] != "fallback.example.test" {
+		t.Fatalf("configuredTLSHosts() used server.fqdn = %v", got)
 	}
-	configuration.Server.FQDN = ""
 	t.Setenv("DOMAIN", ",ignored.example.test")
 	if got := configuredTLSHosts(configuration); got != nil {
 		t.Fatalf("configuredTLSHosts() accepted an empty first DOMAIN: %v", got)

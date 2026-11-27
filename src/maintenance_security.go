@@ -20,6 +20,7 @@ import (
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
 	"github.com/apimgr/gitmessages/src/email"
+	"github.com/apimgr/gitmessages/src/web"
 )
 
 type securityReportRecord struct {
@@ -307,7 +308,11 @@ func notifySecurityReportStatus(ctx context.Context, encrypted []byte, configura
 	if fromName == "" {
 		fromName = configuration.Server.Branding.Title
 	}
-	mailer := email.Mailer{SMTP: email.SMTPConfig{Host: settings.SMTP.Host, Port: settings.SMTP.Port, Username: settings.SMTP.Username, Password: settings.SMTP.Password, TLS: settings.SMTP.TLS}, Sender: email.Sender{Name: fromName, Address: fromAddress, FQDN: configuration.Server.FQDN}}
+	mailHost := web.ResolveStartupFQDN()
+	if mailHost == "" {
+		mailHost = "gitmessages.invalid"
+	}
+	mailer := email.Mailer{SMTP: email.SMTPConfig{Host: settings.SMTP.Host, Port: settings.SMTP.Port, Username: settings.SMTP.Username, Password: settings.SMTP.Password, TLS: settings.SMTP.TLS}, Sender: email.Sender{Name: fromName, Address: fromAddress, FQDN: mailHost}}
 	if !mailer.Configured() || contactInfo.Email == "" {
 		return nil
 	}

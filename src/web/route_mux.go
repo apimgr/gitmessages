@@ -12,8 +12,10 @@ type routeRegistrar interface {
 }
 
 type routeInfo struct {
-	Method string `json:"method"`
-	Path   string `json:"route"`
+	Method    string `json:"method"`
+	Path      string `json:"route"`
+	Internal  bool   `json:"internal,omitempty"`
+	DebugOnly bool   `json:"debug_only,omitempty"`
 }
 
 type routeMux struct {
@@ -36,7 +38,19 @@ func (mux *routeMux) HandleFunc(pattern string, handler func(http.ResponseWriter
 	mux.record(pattern)
 }
 
+func (mux *routeMux) HandleDebugOnly(pattern string, handler http.Handler, enabled bool) {
+	if !enabled {
+		return
+	}
+	mux.ServeMux.Handle(pattern, handler)
+	mux.recordRoute(pattern, true, true)
+}
+
 func (mux *routeMux) record(pattern string) {
+	mux.recordRoute(pattern, false, false)
+}
+
+func (mux *routeMux) recordRoute(pattern string, internal, debugOnly bool) {
 	method := "ANY"
 	path := pattern
 	if separator := strings.IndexByte(pattern, ' '); separator > 0 {
@@ -44,7 +58,7 @@ func (mux *routeMux) record(pattern string) {
 		path = pattern[separator+1:]
 	}
 	mux.mu.Lock()
-	mux.routes = append(mux.routes, routeInfo{Method: method, Path: path})
+	mux.routes = append(mux.routes, routeInfo{Method: method, Path: path, Internal: internal, DebugOnly: debugOnly})
 	mux.mu.Unlock()
 }
 

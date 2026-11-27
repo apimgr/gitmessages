@@ -43,4 +43,7 @@ func TestMapLibSQLNameOnlyMapsKnownNames(t *testing.T) {
 	if got := mapLibSQLName("backups"); got != "srv_backups" {
 		t.Fatalf("backup table name = %q, want srv_backups", got)
 	}
+	if got := mapLibSQLName("health_request_stats"); got != "srv_health_request_stats" {
+		t.Fatalf("health stats table name = %q, want srv_health_request_stats", got)
+	}
 }

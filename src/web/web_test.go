@@ -210,6 +210,23 @@ func TestAutodiscoverAndConfiguredAPIVersion(t *testing.T) {
 	}
 }
 
+func TestDiscoveryOriginsForTorRequestsExcludeClearnet(t *testing.T) {
+	current := config.Get()
+	previousOnion, previousFQDN := current.Server.Tor.OnionAddress, current.Server.FQDN
+	onion := strings.Repeat("a", 56) + ".onion"
+	current.Server.Tor.OnionAddress = onion
+	current.Server.FQDN = "clearnet.example.test"
+	t.Setenv("DOMAIN", "clearnet.example.test,www.example.test")
+	t.Cleanup(func() {
+		current.Server.Tor.OnionAddress = previousOnion
+		current.Server.FQDN = previousFQDN
+	})
+	request := httptest.NewRequest(http.MethodGet, "http://"+onion+"/api/autodiscover", nil)
+	if got := discoveryOrigins(request); len(got) != 1 || got[0] != "http://"+onion {
+		t.Fatalf("Tor discovery origins = %v, want only onion origin", got)
+	}
+}
+
 func TestConfiguredBrandingIsUsedAcrossPublicSurfaces(t *testing.T) {
 	configPath := filepath.Join(projectTestDir(t), "server.yml")
 	contents := "server:\n  branding:\n    title: Example Messages\n    tagline: Curated commit guidance\n"
@@ -1544,8 +1561,8 @@ func TestPagesUseExternalStylesheetAndRestrictiveCSP(t *testing.T) {
 		t.Fatal("page contains inline CSS")
 	}
 	policy := response.Header().Get("Content-Security-Policy")
-	if strings.Contains(policy, "unsafe-inline") || !strings.Contains(policy, "style-src 'self'") {
-		t.Fatalf("CSP does not restrict styles to same-origin assets: %q", policy)
+	if strings.Contains(policy, "unsafe-inline") || !strings.Contains(policy, "style-src 'self'") || !strings.Contains(policy, "font-src 'self' data: https:") {
+		t.Fatalf("CSP does not match the required style and font policy: %q", policy)
 	}
 }
 

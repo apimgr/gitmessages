@@ -94,6 +94,26 @@ func TestMCPRequiresBearerAndDoesNotLeakToken(t *testing.T) {
 	}
 }
 
+func TestAPIOperationVisibilitySeparatesListingFromMounting(t *testing.T) {
+	definitions := apiOperationDefinitions(httptest.NewRequest(http.MethodGet, "/api/v1", nil))
+	if len(definitions) == 0 {
+		t.Fatal("API operation catalog is empty")
+	}
+	for _, definition := range definitions {
+		if !definition.Internal && (!definition.Listed || definition.Auth == "") {
+			t.Errorf("public route lacks visibility or auth metadata: %+v", definition)
+		}
+	}
+	debugRoute := apiOperation{Listed: true, DebugOnly: true}
+	if apiOperationVisible(debugRoute, false) || !apiOperationMounted(debugRoute, true) || !apiOperationVisible(debugRoute, true) {
+		t.Fatal("DebugOnly mount state and visibility were not kept separate")
+	}
+	internalRoute := apiOperation{Listed: true, Internal: true, DebugOnly: true}
+	if !apiOperationMounted(internalRoute, true) || apiOperationVisible(internalRoute, true) {
+		t.Fatal("Internal visibility incorrectly changed the debug mount state")
+	}
+}
+
 func TestMCPNameSentinelDecoding(t *testing.T) {
 	if got := decodeMCPName("=?base64?Y2Fmw6k=?="); got != "café" {
 		t.Fatalf("decoded MCP name %q", got)

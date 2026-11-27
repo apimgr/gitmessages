@@ -1,0 +1,10 @@
+Subject: Operator action required for {app_name}
+---
+
+Automatic recovery attempts have stopped for {app_name}.
+
+Reason: {reason}
+Failed attempts: {attempts}
+Details: {details}
+
+The server remains in maintenance mode until the issue is resolved and the service is restarted.

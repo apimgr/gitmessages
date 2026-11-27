@@ -1,47 +1,35 @@
 package main
 
-import (
-	"bytes"
-	"strings"
-	"testing"
+import "testing"
 
-	"github.com/apimgr/gitmessages/src/common/display"
-)
-
-func TestWriteStartupBannerFitsTerminalWidths(t *testing.T) {
-	for _, width := range []int{100, 70, 50, 30} {
-		t.Run(string(rune('0'+width/10)), func(t *testing.T) {
-			var output bytes.Buffer
-			if err := writeStartupBanner(&output, display.DisplayEnv{Cols: width}, "auto", "1.2.3", "abc1234", "2026-01-01T00:00:00Z", "production", "https://example.test"); err != nil {
-				t.Fatal(err)
-			}
-			for _, line := range strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n") {
-				if len(line) > width {
-					t.Errorf("banner line has %d columns at width %d: %q", len(line), width, line)
-				}
-			}
-		})
+func TestStartupPublicURLsUseResolvedHostnameAndEveryListener(t *testing.T) {
+	got := startupPublicURLs("example.test", "/app", []serverListener{{port: 8080}, {port: 443, tls: true}})
+	want := []string{"http://example.test:8080/app", "https://example.test/app"}
+	if len(got) != len(want) {
+		t.Fatalf("startupPublicURLs() = %q, want %q", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Errorf("startupPublicURLs()[%d] = %q, want %q", index, got[index], want[index])
+		}
+	}
+	if got := startupPublicURLs("", "", []serverListener{{port: 8080}}); len(got) != 0 {
+		t.Fatalf("startupPublicURLs() without a resolved hostname = %q, want no URLs", got)
 	}
 }
 
-func TestWriteStartupBannerDefaultsWidthWhenUnknown(t *testing.T) {
-	var output bytes.Buffer
-	if err := writeStartupBanner(&output, display.DisplayEnv{}, "auto", "1.2.3", "abc1234", "2026-01-01T00:00:00Z", "production", ""); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output.String(), "Git Messages 1.2.3") {
-		t.Fatalf("banner output = %q", output.String())
+func TestStartupOverlayURLAlwaysUsesHTTP(t *testing.T) {
+	if got := startupOverlayURL("abc.onion", "/app"); got != "http://abc.onion/app" {
+		t.Fatalf("startupOverlayURL() = %q, want http://abc.onion/app", got)
 	}
 }
 
-func TestStartupPublicURLUsesConfiguredTLSAndPort(t *testing.T) {
-	if got := startupPublicURL("example.test", "/app", []serverListener{{port: 8080}, {port: 443, tls: true}}); got != "https://example.test/app" {
-		t.Fatalf("startupPublicURL() = %q, want https://example.test/app", got)
-	}
-	if got := startupPublicURL("example.test", "", []serverListener{{port: 8443, tls: true}}); got != "https://example.test:8443" {
-		t.Fatalf("startupPublicURL() = %q, want https://example.test:8443", got)
-	}
-	if got := startupPublicURL("", "", []serverListener{{port: 8080}}); got != "" {
-		t.Fatalf("startupPublicURL() without a configured FQDN = %q, want empty", got)
+func TestStartupPublicURLsBracketIPv6(t *testing.T) {
+	got := startupPublicURLs("2001:db8::1", "", []serverListener{{port: 80}, {port: 8443, tls: true}})
+	want := []string{"http://[2001:db8::1]", "https://[2001:db8::1]:8443"}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Errorf("startupPublicURLs()[%d] = %q, want %q", index, got[index], want[index])
+		}
 	}
 }

@@ -19,4 +19,5 @@ type Operation struct {
 	Security    []string
 	MountedWhen string
 	Internal    bool
+	DebugOnly   bool
 }

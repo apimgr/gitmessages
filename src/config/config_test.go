@@ -33,11 +33,14 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Server.Security.Reports.RetentionDays != 365 {
 		t.Errorf("Server.Security.Reports.RetentionDays = %d, want 365", cfg.Server.Security.Reports.RetentionDays)
 	}
-	if !cfg.Server.GeoIP.Enabled || cfg.Server.Scheduler.Timezone != "America/New_York" || cfg.Server.Scheduler.Tasks["backup_hourly"].Enabled {
+	if !cfg.Server.GeoIP.Enabled || cfg.Server.Scheduler.Timezone != "America/New_York" || cfg.Server.Scheduler.Tasks["backup_hourly"].Enabled || !cfg.Server.Scheduler.Tasks["database_check"].Enabled || cfg.Server.Scheduler.Tasks["database_check"].Schedule != "@every 1m" || !cfg.Server.Scheduler.Tasks["health_stats_flush"].Enabled || cfg.Server.Scheduler.Tasks["health_stats_flush"].Schedule != "@every 30s" {
 		t.Errorf("security/scheduler defaults do not match the service defaults: GeoIP=%+v Scheduler=%+v", cfg.Server.GeoIP, cfg.Server.Scheduler)
 	}
-	if !cfg.Server.Notifications.DiskLow.Enabled || cfg.Server.Notifications.DiskLow.ThresholdPercent != 85 || cfg.Server.Notifications.DiskLow.CheckInterval != "5m" || cfg.Server.Notifications.DiskLow.Repeat != "24h" {
+	if !cfg.Server.Notifications.DiskLow.Enabled || cfg.Server.Notifications.DiskLow.ThresholdPercent != 85 || cfg.Server.Notifications.DiskLow.Repeat != "24h" {
 		t.Errorf("disk-low notification defaults do not match the service defaults: %+v", cfg.Server.Notifications.DiskLow)
+	}
+	if cfg.Server.Maintenance.SelfHealing.RetryInterval != "30s" || cfg.Server.Maintenance.SelfHealing.MaxAttempts != 0 || cfg.Server.Maintenance.Cleanup.DiskThreshold != 90 || cfg.Server.Maintenance.Cleanup.LogRetentionDays != 7 || !cfg.Server.Maintenance.Notify.OnEnter || !cfg.Server.Maintenance.Notify.OnExit {
+		t.Errorf("maintenance defaults do not match the server recovery contract: %+v", cfg.Server.Maintenance)
 	}
 	if cfg.Data.CVE.Source == "" || cfg.Data.Trivy.Source == "" || !cfg.Server.Security.Blocklists.Enabled {
 		t.Errorf("security feed defaults are incomplete: data=%+v blocklists=%+v", cfg.Data, cfg.Server.Security.Blocklists)

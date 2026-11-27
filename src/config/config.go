@@ -57,6 +57,7 @@ type ServerConfig struct {
 	CSRF           CSRFConfig           `yaml:"csrf"`
 	Metrics        MetricsConfig        `yaml:"metrics"`
 	Logging        LoggingConfig        `yaml:"logs"`
+	Maintenance    MaintenanceConfig    `yaml:"maintenance"`
 	Tor            TorConfig            `yaml:"tor"`
 	I2P            I2PConfig            `yaml:"i2p"`
 	Contact        ContactConfig        `yaml:"contact"`
@@ -521,7 +522,6 @@ type NotificationsConfig struct {
 type DiskLowNotificationConfig struct {
 	Enabled          bool   `yaml:"enabled"`
 	ThresholdPercent int    `yaml:"threshold_percent"`
-	CheckInterval    string `yaml:"check_interval"`
 	Repeat           string `yaml:"repeat"`
 }
 
@@ -649,6 +649,27 @@ type ScheduledTaskConfig struct {
 	RetryOnFail bool                  `yaml:"retry_on_fail"`
 	RetryDelay  string                `yaml:"retry_delay"`
 	Retention   BackupRetentionConfig `yaml:"retention"`
+}
+
+type MaintenanceConfig struct {
+	SelfHealing MaintenanceSelfHealingConfig `yaml:"self_healing"`
+	Cleanup     MaintenanceCleanupConfig     `yaml:"cleanup"`
+	Notify      MaintenanceNotifyConfig      `yaml:"notify"`
+}
+
+type MaintenanceSelfHealingConfig struct {
+	RetryInterval string `yaml:"retry_interval"`
+	MaxAttempts   int    `yaml:"max_attempts"`
+}
+
+type MaintenanceCleanupConfig struct {
+	DiskThreshold    int `yaml:"disk_threshold"`
+	LogRetentionDays int `yaml:"log_retention_days"`
+}
+
+type MaintenanceNotifyConfig struct {
+	OnEnter bool `yaml:"on_enter"`
+	OnExit  bool `yaml:"on_exit"`
 }
 
 type BackupConfig struct {
@@ -958,6 +979,11 @@ func DefaultConfig() *Config {
 				Security:     LogKindConfig{Format: "fail2ban"},
 				Debug:        LogKindConfig{Format: "text"},
 			},
+			Maintenance: MaintenanceConfig{
+				SelfHealing: MaintenanceSelfHealingConfig{RetryInterval: "30s", MaxAttempts: 0},
+				Cleanup:     MaintenanceCleanupConfig{DiskThreshold: 90, LogRetentionDays: 7},
+				Notify:      MaintenanceNotifyConfig{OnEnter: true, OnExit: true},
+			},
 			Tor: TorConfig{
 				MaxCircuits: 32, StartupTimeout: 60, CircuitTimeout: 60, BootstrapTimeout: 180,
 				SafeLogging: true, MaxStreamsPerCircuit: 100, CloseCircuitOnStreamLimit: true,
@@ -980,9 +1006,10 @@ func DefaultConfig() *Config {
 						"ssl_expiring": true, "ssl_renewed": false, "ssl_renewal_failed": true, "security_alert": true,
 						"scheduler_error": true, "update_available": false, "update_installed": true, "update_failed": true,
 						"update_staged": true, "database_error": true,
+						"maintenance_entered": true, "maintenance_exited": true, "self_healing_exhausted": true,
 					},
 				},
-				DiskLow: DiskLowNotificationConfig{Enabled: true, ThresholdPercent: 85, CheckInterval: "5m", Repeat: "24h"},
+				DiskLow: DiskLowNotificationConfig{Enabled: true, ThresholdPercent: 85, Repeat: "24h"},
 			},
 			Pages: PagesConfig{
 				Contact: ContactPageConfig{
@@ -1016,21 +1043,23 @@ func defaultSchedulerConfig() SchedulerConfig {
 	return SchedulerConfig{
 		Timezone: "America/New_York", CatchUpWindow: "1h",
 		Tasks: map[string]ScheduledTaskConfig{
-			"ssl_renewal":      {Enabled: true, Schedule: "0 3 * * *"},
-			"geoip_update":     {Enabled: true, Schedule: "0 3 * * 0"},
-			"blocklist_update": {Enabled: true, Schedule: "0 4 * * *", RetryOnFail: true, RetryDelay: "1h"},
-			"security_cleanup": {Enabled: true, Schedule: "30 3 * * *"},
-			"keyserver_retry":  {Enabled: true, Schedule: "@every 15m"},
-			"cve_update":       {Enabled: true, Schedule: "0 5 * * *", RetryOnFail: true, RetryDelay: "1h"},
-			"update_check":     {Enabled: true, Schedule: "0 6 * * *"},
-			"token_cleanup":    {Enabled: true, Schedule: "@every 15m"},
-			"log_rotation":     {Enabled: true, Schedule: "0 0 * * *"},
-			"backup_daily":     {Enabled: true, Schedule: "0 2 * * *"},
-			"backup_hourly":    {Enabled: false, Schedule: "@hourly"},
-			"disk_check":       {Enabled: true, Schedule: "@every 5m"},
-			"healthcheck_self": {Enabled: true, Schedule: "@every 5m"},
-			"tor_health":       {Enabled: true, Schedule: "@every 10m"},
-			"i2p_health":       {Enabled: true, Schedule: "@every 10m"},
+			"ssl_renewal":        {Enabled: true, Schedule: "0 3 * * *"},
+			"geoip_update":       {Enabled: true, Schedule: "0 3 * * 0"},
+			"blocklist_update":   {Enabled: true, Schedule: "0 4 * * *", RetryOnFail: true, RetryDelay: "1h"},
+			"security_cleanup":   {Enabled: true, Schedule: "30 3 * * *"},
+			"keyserver_retry":    {Enabled: true, Schedule: "@every 15m"},
+			"cve_update":         {Enabled: true, Schedule: "0 5 * * *", RetryOnFail: true, RetryDelay: "1h"},
+			"update_check":       {Enabled: true, Schedule: "0 6 * * *"},
+			"token_cleanup":      {Enabled: true, Schedule: "@every 15m"},
+			"log_rotation":       {Enabled: true, Schedule: "0 0 * * *"},
+			"backup_daily":       {Enabled: true, Schedule: "0 2 * * *"},
+			"backup_hourly":      {Enabled: false, Schedule: "@hourly"},
+			"disk_check":         {Enabled: true, Schedule: "@every 5m"},
+			"database_check":     {Enabled: true, Schedule: "@every 1m"},
+			"health_stats_flush": {Enabled: true, Schedule: "@every 30s"},
+			"healthcheck_self":   {Enabled: true, Schedule: "@every 5m"},
+			"tor_health":         {Enabled: true, Schedule: "@every 10m"},
+			"i2p_health":         {Enabled: true, Schedule: "@every 10m"},
 		},
 	}
 }
@@ -2439,7 +2468,7 @@ func validate(cfg *Config) error {
 	if cfg.Server.Scheduler.Tasks == nil {
 		cfg.Server.Scheduler.Tasks = make(map[string]ScheduledTaskConfig)
 	}
-	for _, taskID := range []string{"ssl_renewal", "security_cleanup", "keyserver_retry", "token_cleanup", "log_rotation", "healthcheck_self"} {
+	for _, taskID := range []string{"ssl_renewal", "security_cleanup", "keyserver_retry", "token_cleanup", "log_rotation", "healthcheck_self", "database_check", "health_stats_flush"} {
 		task, exists := cfg.Server.Scheduler.Tasks[taskID]
 		if !exists {
 			task = defaults.Server.Scheduler.Tasks[taskID]

@@ -24,7 +24,8 @@ var (
 var emailTemplateNames = []string{
 	"security_alert", "backup_complete", "backup_failed", "ssl_expiring", "ssl_renewed",
 	"ssl_renewal_failed", "scheduler_error", "startup", "shutdown", "disk_low",
-	"database_error", "update_available", "update_installed", "update_failed", "update_staged", "test",
+	"database_error", "maintenance_entered", "maintenance_exited", "self_healing_exhausted",
+	"update_available", "update_installed", "update_failed", "update_staged", "test",
 }
 
 var emailTemplateVariables = map[string]struct{}{
@@ -33,8 +34,8 @@ var emailTemplateVariables = map[string]struct{}{
 	"email_subject": {}, "email_body": {}, "event": {}, "reason": {}, "details": {},
 	"filename": {}, "size": {}, "error": {}, "domain": {}, "expires_in": {}, "expiry_date": {},
 	"valid_until": {}, "next_retry": {}, "hostname": {}, "version": {}, "mode": {},
-	"path": {}, "used_percent": {}, "free": {}, "threshold_percent": {}, "since": {},
-	"current_version": {}, "new_version": {}, "channel": {}, "previous_version": {},
+	"path": {}, "used_percent": {}, "free": {}, "threshold_percent": {}, "since": {}, "duration": {},
+	"current_version": {}, "new_version": {}, "channel": {}, "previous_version": {}, "attempts": {},
 	"task_name": {}, "next_run": {}, "ip": {},
 }
 
@@ -100,10 +101,10 @@ func (m *TemplateManager) Render(name, language string, values map[string]string
 		variables["app_name"] = "Git Messages"
 	}
 	if variables["fqdn"] == "" {
-		variables["fqdn"] = "localhost"
+		variables["fqdn"] = ""
 	}
 	if variables["app_url"] == "" {
-		variables["app_url"] = "https://" + variables["fqdn"]
+		variables["app_url"] = ""
 	}
 	if variables["timestamp"] == "" {
 		variables["timestamp"] = now.Format(time.RFC3339)

@@ -100,43 +100,47 @@ func (connection prefixConn) ResetSession(ctx context.Context) error {
 type prefixName string
 
 const (
-	prefixTableAppSecrets       prefixName = "app_secrets"
+	prefixTableAppSecrets           prefixName = "app_secrets"
 	prefixTableAppSecretRevocations prefixName = "app_secret_revocations"
-	prefixTableRateLimits       prefixName = "rate_limits"
-	prefixTableAuditLog         prefixName = "audit_log"
-	prefixTableOwners           prefixName = "owners"
-	prefixTableAPITokens        prefixName = "api_tokens"
-	prefixTableCaptcha          prefixName = "captcha_challenges"
-	prefixTableSecurityReports  prefixName = "security_reports"
-	prefixTableSchedulerTasks   prefixName = "scheduler_tasks"
-	prefixTableSchedulerHistory prefixName = "scheduler_history"
-	prefixTableSecurityThanks   prefixName = "security_thanks"
-	prefixTablePGPKeyMetadata   prefixName = "pgp_key_metadata"
-	prefixTableBackups          prefixName = "backups"
-	prefixIndexRateLimits       prefixName = "idx_rate_limits_window"
-	prefixIndexAuditTimestamp   prefixName = "idx_audit_timestamp"
-	prefixIndexAuditCategory    prefixName = "idx_audit_category"
-	prefixIndexSchedulerTask    prefixName = "idx_scheduler_history_task"
-	prefixIndexSchedulerStart   prefixName = "idx_scheduler_history_started"
-	prefixIndexTokenPrimary     prefixName = "idx_api_tokens_primary"
-	prefixIndexTokenHash        prefixName = "idx_api_tokens_hash"
-	prefixIndexTokenPrefix      prefixName = "idx_api_tokens_prefix"
-	prefixIndexTokenOwner       prefixName = "idx_api_tokens_owner"
-	prefixIndexTokenActive      prefixName = "idx_api_tokens_active"
-	prefixIndexCaptchaExpiry    prefixName = "idx_captcha_challenges_expires"
-	prefixIndexReportStatus     prefixName = "idx_security_reports_status"
+	prefixTableRateLimits           prefixName = "rate_limits"
+	prefixTableAuditLog             prefixName = "audit_log"
+	prefixTableOwners               prefixName = "owners"
+	prefixTableAPITokens            prefixName = "api_tokens"
+	prefixTableCaptcha              prefixName = "captcha_challenges"
+	prefixTableSecurityReports      prefixName = "security_reports"
+	prefixTableSchedulerTasks       prefixName = "scheduler_tasks"
+	prefixTableSchedulerHistory     prefixName = "scheduler_history"
+	prefixTableSecurityThanks       prefixName = "security_thanks"
+	prefixTablePGPKeyMetadata       prefixName = "pgp_key_metadata"
+	prefixTableBackups              prefixName = "backups"
+	prefixTableHealthRequestStats   prefixName = "health_request_stats"
+	prefixTableHealthRequestBuckets prefixName = "health_request_buckets"
+	prefixIndexRateLimits           prefixName = "idx_rate_limits_window"
+	prefixIndexAuditTimestamp       prefixName = "idx_audit_timestamp"
+	prefixIndexAuditCategory        prefixName = "idx_audit_category"
+	prefixIndexSchedulerTask        prefixName = "idx_scheduler_history_task"
+	prefixIndexSchedulerStart       prefixName = "idx_scheduler_history_started"
+	prefixIndexTokenPrimary         prefixName = "idx_api_tokens_primary"
+	prefixIndexTokenHash            prefixName = "idx_api_tokens_hash"
+	prefixIndexTokenPrefix          prefixName = "idx_api_tokens_prefix"
+	prefixIndexTokenOwner           prefixName = "idx_api_tokens_owner"
+	prefixIndexTokenActive          prefixName = "idx_api_tokens_active"
+	prefixIndexCaptchaExpiry        prefixName = "idx_captcha_challenges_expires"
+	prefixIndexReportStatus         prefixName = "idx_security_reports_status"
 )
 
 var libSQLNames = map[string]prefixName{
 	string(prefixTableAppSecrets): prefixTableAppSecrets, string(prefixTableRateLimits): prefixTableRateLimits,
 	string(prefixTableAppSecretRevocations): prefixTableAppSecretRevocations,
-	string(prefixTableAuditLog): prefixTableAuditLog, string(prefixTableOwners): prefixTableOwners,
+	string(prefixTableAuditLog):             prefixTableAuditLog, string(prefixTableOwners): prefixTableOwners,
 	string(prefixTableAPITokens): prefixTableAPITokens, string(prefixTableCaptcha): prefixTableCaptcha,
 	string(prefixTableSecurityReports): prefixTableSecurityReports, string(prefixTableSchedulerTasks): prefixTableSchedulerTasks,
 	string(prefixTableSchedulerHistory): prefixTableSchedulerHistory, string(prefixTableSecurityThanks): prefixTableSecurityThanks,
-	string(prefixTablePGPKeyMetadata): prefixTablePGPKeyMetadata,
-	string(prefixTableBackups):    prefixTableBackups,
-	string(prefixIndexRateLimits): prefixIndexRateLimits, string(prefixIndexAuditTimestamp): prefixIndexAuditTimestamp,
+	string(prefixTablePGPKeyMetadata):       prefixTablePGPKeyMetadata,
+	string(prefixTableBackups):              prefixTableBackups,
+	string(prefixTableHealthRequestStats):   prefixTableHealthRequestStats,
+	string(prefixTableHealthRequestBuckets): prefixTableHealthRequestBuckets,
+	string(prefixIndexRateLimits):           prefixIndexRateLimits, string(prefixIndexAuditTimestamp): prefixIndexAuditTimestamp,
 	string(prefixIndexAuditCategory): prefixIndexAuditCategory, string(prefixIndexTokenPrimary): prefixIndexTokenPrimary,
 	string(prefixIndexSchedulerTask): prefixIndexSchedulerTask, string(prefixIndexSchedulerStart): prefixIndexSchedulerStart,
 	string(prefixIndexTokenHash): prefixIndexTokenHash, string(prefixIndexTokenPrefix): prefixIndexTokenPrefix,

@@ -1,0 +1,10 @@
+Subject: {app_name} recovered from maintenance mode
+---
+
+{app_name} recovered from read-only maintenance mode.
+
+Reason: {reason}
+Details: {details}
+Duration: {duration}
+
+The server has resumed normal operation.

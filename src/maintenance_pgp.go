@@ -22,6 +22,7 @@ import (
 	"github.com/apimgr/gitmessages/src/contact"
 	"github.com/apimgr/gitmessages/src/database"
 	"github.com/apimgr/gitmessages/src/pgp"
+	"github.com/apimgr/gitmessages/src/web"
 )
 
 type pgpKeyserverState struct {
@@ -130,9 +131,9 @@ func generatePGPKey(configuration *config.Config, secret []byte, now time.Time) 
 	}
 	email := strings.TrimSpace(configuration.Server.Contact.Security.Email)
 	if email == "" {
-		host := strings.TrimSpace(configuration.Server.FQDN)
+		host := web.ResolveStartupFQDN()
 		if host == "" {
-			host = "localhost"
+			host = "gitmessages.invalid"
 		}
 		email = "security@" + host
 	}
@@ -241,9 +242,9 @@ func pgpContactEmail(configuration *config.Config) string {
 	if email := strings.TrimSpace(configuration.Server.Contact.Security.Email); email != "" {
 		return email
 	}
-	host := strings.TrimSpace(configuration.Server.FQDN)
+	host := web.ResolveStartupFQDN()
 	if host == "" {
-		host = "localhost"
+		host = "gitmessages.invalid"
 	}
 	return "security@" + host
 }

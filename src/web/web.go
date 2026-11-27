@@ -30,6 +30,7 @@ import (
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
 	graphqlapi "github.com/apimgr/gitmessages/src/graphql"
+	"github.com/apimgr/gitmessages/src/maintenance"
 	"github.com/apimgr/gitmessages/src/messages"
 	"github.com/apimgr/gitmessages/src/metrics"
 	"github.com/apimgr/gitmessages/src/mode"
@@ -49,27 +50,38 @@ func APIBasePath() string {
 }
 
 var (
-	serverVersion         = "dev"
-	serverCommit          = "unknown"
-	serverBuildDate       = ""
-	panicLoggerMu         sync.RWMutex
-	panicLogger           *log.Logger
-	overlayStatusMu       sync.RWMutex
-	overlayStatusProvider func() map[string]any
-	apiBasePathMu         sync.RWMutex
-	apiBasePath           = "/api/" + config.DefaultAPIVersion
-	corsOriginsMu         sync.RWMutex
-	corsOrigins           = []string{"*"}
-	defaultThemeMu        sync.RWMutex
-	defaultTheme          = "dark"
-	metricsExporterMu     sync.RWMutex
-	activeMetricsExporter *metrics.Exporter
-	rateLimitCounter      cache.Counter
-	rateLimitCounterMu    sync.RWMutex
-	copyCodeSequence      atomic.Uint64
-	debugRequestCount     = expvar.NewInt("requests_total")
-	debugRequestSeconds   = expvar.NewFloat("requests_duration_seconds")
-	debugErrorCount       = expvar.NewInt("errors_total")
+	serverVersion          = "dev"
+	serverCommit           = "unknown"
+	serverBuildDate        = ""
+	serverStartedAt        = time.Now().UTC()
+	panicLoggerMu          sync.RWMutex
+	panicLogger            *log.Logger
+	overlayStatusMu        sync.RWMutex
+	overlayStatusProvider  func() map[string]any
+	apiBasePathMu          sync.RWMutex
+	apiBasePath            = "/api/" + config.DefaultAPIVersion
+	corsOriginsMu          sync.RWMutex
+	corsOrigins            = []string{"*"}
+	defaultThemeMu         sync.RWMutex
+	defaultTheme           = "dark"
+	metricsExporterMu      sync.RWMutex
+	activeMetricsExporter  *metrics.Exporter
+	maintenanceMu          sync.RWMutex
+	maintenanceProvider    func() (maintenance.Info, bool)
+	healthProviderMu       sync.RWMutex
+	healthStatsProvider    func() HealthStats
+	healthRestartProvider  func() []string
+	healthShutdownProvider func() bool
+	activeRequests         atomic.Int64
+	requestCounterMu       sync.Mutex
+	pendingRequestTotal    int64
+	pendingRequestHours    = make(map[int64]int64)
+	rateLimitCounter       cache.Counter
+	rateLimitCounterMu     sync.RWMutex
+	copyCodeSequence       atomic.Uint64
+	debugRequestCount      = expvar.NewInt("requests_total")
+	debugRequestSeconds    = expvar.NewFloat("requests_duration_seconds")
+	debugErrorCount        = expvar.NewInt("errors_total")
 )
 
 //go:embed assets/*.css
@@ -152,6 +164,7 @@ func Handler(version string, commit ...string) http.Handler {
 	mux.HandleFunc("/cli/binaries/", serveCLIBinary)
 	mux.HandleFunc(APIBasePath(), apiRoot)
 	mux.HandleFunc("/api/healthz", apiHealth)
+	mux.HandleFunc("/api/healthz.txt", apiTextExtension)
 	mux.HandleFunc(APIBasePath()+".txt", apiTextExtension)
 	mux.HandleFunc(APIBasePath()+"/", apiTextExtension)
 	mux.HandleFunc(APIBasePath()+"/types", apiTypes)
@@ -177,7 +190,7 @@ func Handler(version string, commit ...string) http.Handler {
 	mux.HandleFunc(APIBasePath()+"/server/graphql", graphQLHandler)
 	mux.HandleFunc("/api/graphql", graphQLHandler)
 	mux.HandleFunc("/server/docs/graphql", graphQLUI)
-	mux.Handle("/debug/", debugHandler(mux.routeList))
+	mux.HandleDebugOnly("/debug/", debugHandler(mux.routeList), mode.IsDebugEnabled())
 	handler := language(mux)
 	handler = geoIPMiddleware(handler)
 	handler = rateLimit(handler)
@@ -191,7 +204,8 @@ func Handler(version string, commit ...string) http.Handler {
 	}
 	handler = debugMiddleware(handler)
 	handler = privacySignalMiddleware(handler)
-	return RecoverMiddleware(handler)
+	handler = maintenanceMiddleware(handler)
+	return requestStatsMiddleware(RecoverMiddleware(handler))
 }
 
 // ConfigurePanicLogger directs private panic diagnostics to the configured log file.
@@ -199,6 +213,71 @@ func ConfigurePanicLogger(logger *log.Logger) {
 	panicLoggerMu.Lock()
 	panicLogger = logger
 	panicLoggerMu.Unlock()
+}
+
+// SetMaintenanceProvider connects maintenance state to health output and write gating.
+func SetMaintenanceProvider(provider func() (maintenance.Info, bool)) {
+	maintenanceMu.Lock()
+	maintenanceProvider = provider
+	maintenanceMu.Unlock()
+}
+
+func currentMaintenance() (maintenance.Info, bool) {
+	maintenanceMu.RLock()
+	provider := maintenanceProvider
+	maintenanceMu.RUnlock()
+	if provider == nil {
+		return maintenance.Info{}, false
+	}
+	return provider()
+}
+
+// SetHealthStatsProvider connects persistent request counters to health output.
+func SetHealthStatsProvider(provider func() HealthStats) {
+	healthProviderMu.Lock()
+	healthStatsProvider = provider
+	healthProviderMu.Unlock()
+}
+
+// SetHealthRestartProvider connects pending restart reasons to health output.
+func SetHealthRestartProvider(provider func() []string) {
+	healthProviderMu.Lock()
+	healthRestartProvider = provider
+	healthProviderMu.Unlock()
+}
+
+// SetHealthShutdownProvider reports graceful shutdown state to health output.
+func SetHealthShutdownProvider(provider func() bool) {
+	healthProviderMu.Lock()
+	healthShutdownProvider = provider
+	healthProviderMu.Unlock()
+}
+
+func currentHealthStats() HealthStats {
+	healthProviderMu.RLock()
+	provider := healthStatsProvider
+	healthProviderMu.RUnlock()
+	if provider == nil {
+		return HealthStats{}
+	}
+	return provider()
+}
+
+func currentHealthRestartReasons() []string {
+	healthProviderMu.RLock()
+	provider := healthRestartProvider
+	healthProviderMu.RUnlock()
+	if provider == nil {
+		return nil
+	}
+	return append([]string(nil), provider()...)
+}
+
+func currentHealthShuttingDown() bool {
+	healthProviderMu.RLock()
+	provider := healthShutdownProvider
+	healthProviderMu.RUnlock()
+	return provider != nil && provider()
 }
 
 // ConfigureDatabaseMetrics connects the active metrics exporter to the shared SQLite store.
@@ -448,7 +527,7 @@ func cors(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		for _, domain := range domainList(os.Getenv("DOMAIN"), config.Get().Server.FQDN) {
+		for _, domain := range domainList(os.Getenv("DOMAIN"), "") {
 			origins = append(origins, "https://"+domain)
 		}
 		for _, host := range learnedURLHosts() {
@@ -525,7 +604,7 @@ func secureHeaders(next http.Handler) http.Handler {
 		for _, source := range strings.Fields(trackingImage) {
 			imageSources += " " + source
 		}
-		csp := "default-src 'self'; style-src 'self'; script-src " + scriptSources + "; frame-src " + frameSources + "; connect-src " + connectSources + "; img-src " + imageSources + "; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+		csp := "default-src 'self'; style-src 'self'; font-src 'self' data: https:; script-src " + scriptSources + "; frame-src " + frameSources + "; connect-src " + connectSources + "; img-src " + imageSources + "; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
 		if requestIsSecure(r) {
 			csp += "; upgrade-insecure-requests"
 		}
@@ -962,15 +1041,14 @@ func discoveryOrigins(r *http.Request) []string {
 		seen[origin] = struct{}{}
 		urls = append(urls, origin)
 	}
+	if requestUsesTorAddress(r) {
+		if requestURL, err := url.Parse(BuildURL(r, "")); err == nil {
+			add(requestURL.Scheme + "://" + requestURL.Host)
+		}
+		return urls
+	}
 	if requestURL, err := url.Parse(BuildURL(r, "")); err == nil {
 		add(requestURL.Scheme + "://" + requestURL.Host)
-	}
-	if fqdn := strings.TrimSpace(config.Get().Server.FQDN); fqdn != "" {
-		scheme := "https"
-		if requestURL, err := url.Parse(BuildURL(r, "")); err == nil && requestURL.Scheme != "" {
-			scheme = requestURL.Scheme
-		}
-		add(scheme + "://" + fqdn)
 	}
 	for _, domain := range strings.Split(os.Getenv("DOMAIN"), ",") {
 		domain = strings.TrimSpace(domain)
@@ -1056,32 +1134,7 @@ func apiHealth(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	features := overlayStatuses()
-	if features == nil {
-		features = map[string]any{}
-	}
-	checks := make(map[string]string, len(features))
-	status := "healthy"
-	for name, feature := range features {
-		encoded, err := json.Marshal(feature)
-		if err != nil {
-			continue
-		}
-		var state struct {
-			Enabled bool   `json:"enabled"`
-			Status  string `json:"status"`
-		}
-		if json.Unmarshal(encoded, &state) != nil || !state.Enabled || state.Status == "disabled" {
-			continue
-		}
-		check := "ok"
-		if state.Status == "unavailable" {
-			check = "degraded"
-			status = "degraded"
-		}
-		checks[name] = check
-	}
-	writeJSON(w, r, http.StatusOK, map[string]any{"status": status, "version": serverVersion, "service": "gitmessages", "features": features, "checks": checks})
+	writeHealthResponse(w, r)
 }
 
 func apiAbout(w http.ResponseWriter, r *http.Request) {
@@ -1746,7 +1799,11 @@ func privacyPage(w http.ResponseWriter, r *http.Request) {
 		for _, service := range thirdPartyServices {
 			fmt.Fprintf(&body, `<tr><td>%s</td><td>%s</td><td>%s</td><td>`, template.HTMLEscapeString(service.Name), template.HTMLEscapeString(service.Purpose), template.HTMLEscapeString(service.DataSent))
 			if policyURL, err := url.Parse(service.PolicyURL); err == nil && (policyURL.Scheme == "https" || policyURL.Scheme == "http") && policyURL.Host != "" {
-				fmt.Fprintf(&body, `<a href="%s">%s</a>`, template.HTMLEscapeString(policyURL.String()), template.HTMLEscapeString(tr(r, "privacy.policy_link")))
+				if requestUsesTorAddress(r) {
+					body.WriteString(template.HTMLEscapeString(policyURL.String()))
+				} else {
+					fmt.Fprintf(&body, `<a href="%s">%s</a>`, template.HTMLEscapeString(policyURL.String()), template.HTMLEscapeString(tr(r, "privacy.policy_link")))
+				}
 			}
 			body.WriteString(`</td></tr>`)
 		}
@@ -1981,28 +2038,15 @@ func healthPage(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	content := `<p role="status">` + tr(r, "health.ok") + `</p><p>` + tr(r, "health.version") + `: ` + template.HTMLEscapeString(serverVersion) + `</p>`
-	if features := overlayStatuses(); features != nil {
-		for name, status := range features {
-			encoded, _ := json.Marshal(status)
-			var value struct {
-				Status  string `json:"status"`
-				Address string `json:"hostname"`
-				I2P     string `json:"address"`
-			}
-			_ = json.Unmarshal(encoded, &value)
-			address := value.Address
-			if address == "" {
-				address = value.I2P
-			}
-			content += `<p><strong>` + template.HTMLEscapeString(strings.ToUpper(name)) + `:</strong> ` + template.HTMLEscapeString(value.Status)
-			if address != "" && value.Status == "healthy" {
-				content += ` <code>` + template.HTMLEscapeString(address) + `</code>`
-			}
-			content += `</p>`
-		}
+	health, statusCode := buildHealthResponse()
+	if wantsFrontendText(r) {
+		writeText(w, statusCode, humanHealthText(r, health))
+		return
 	}
-	page(w, r, tr(r, "health.title"), template.HTML(content))
+	if statusCode != http.StatusOK {
+		w.WriteHeader(statusCode)
+	}
+	page(w, r, tr(r, "health.title"), template.HTML(healthHTMLContent(r, health)))
 }
 
 func isTopLevelHTMLNavigation(r *http.Request) bool {
@@ -2336,6 +2380,7 @@ func swaggerJSON(w http.ResponseWriter, r *http.Request) {
 	document = swaggerapi.FilterMounted(document, map[string]bool{
 		"server.metrics.enabled":      metricsConfig.Enabled,
 		"server.metrics.root.enabled": metricsConfig.Enabled && metricsConfig.Root.Enabled,
+		"debug_enabled":               mode.IsDebugEnabled(),
 	})
 	writeJSON(w, r, http.StatusOK, document)
 }
@@ -2390,7 +2435,7 @@ func BuildOpenAPISuperset(r *http.Request) map[string]any {
 		})
 	}
 	for _, definition := range apiOperationDefinitions(r) {
-		if definition.Internal {
+		if !definition.Listed || definition.Internal {
 			continue
 		}
 		responses := response(definition.description)
@@ -2399,7 +2444,7 @@ func BuildOpenAPISuperset(r *http.Request) map[string]any {
 		}
 		operations = append(operations, swaggerapi.Operation{
 			Path: definition.path, Method: definition.method, ID: definition.name, Summary: definition.summary,
-			Description: definition.description, RequestBody: func() map[string]any {
+			Description: definition.description, DebugOnly: definition.DebugOnly, RequestBody: func() map[string]any {
 				if definition.method == http.MethodPost {
 					return definition.inputSchema
 				}

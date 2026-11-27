@@ -128,10 +128,7 @@ func contactMailer(cfg config.ServerConfig) email.Mailer {
 	mailcfg := cfg.Notifications.Email
 	fromAddress := mailcfg.From.Email
 	if fromAddress == "" {
-		host := cfg.FQDN
-		if host == "" {
-			host = fallbackHostname()
-		}
+		host := fallbackHostname()
 		if host != "" {
 			fromAddress = "no-reply@" + host
 		}
@@ -140,7 +137,7 @@ func contactMailer(cfg config.ServerConfig) email.Mailer {
 	if fromName == "" {
 		fromName = seoBrandingTitle()
 	}
-	return email.Mailer{SMTP: email.SMTPConfig{Host: mailcfg.SMTP.Host, Port: mailcfg.SMTP.Port, Username: mailcfg.SMTP.Username, Password: mailcfg.SMTP.Password, TLS: mailcfg.SMTP.TLS}, Sender: email.Sender{Name: fromName, Address: fromAddress, FQDN: cfg.FQDN}}
+	return email.Mailer{SMTP: email.SMTPConfig{Host: mailcfg.SMTP.Host, Port: mailcfg.SMTP.Port, Username: mailcfg.SMTP.Username, Password: mailcfg.SMTP.Password, TLS: mailcfg.SMTP.TLS}, Sender: email.Sender{Name: fromName, Address: fromAddress, FQDN: fallbackHostname()}}
 }
 
 func (contactEmailSender) SendSecurityNotification(_ string, subject, body, filename string, encrypted []byte) error {
@@ -861,6 +858,9 @@ func llmsTextBody(r *http.Request) string {
 	body.WriteString("\n## Endpoints\n")
 	fmt.Fprintf(&body, "- GET %s - Health check page (no auth)\n- GET %s - Server information page (no auth)\n", BuildURL(r, "/server/healthz"), BuildURL(r, "/server/about"))
 	for _, operation := range apiOperationDefinitions(r) {
+		if !apiOperationVisibleNow(operation) {
+			continue
+		}
 		if operation.path == APIBasePath()+"/server/contact" || strings.Contains(operation.path, "/server/metrics") {
 			continue
 		}

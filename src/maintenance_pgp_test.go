@@ -323,12 +323,14 @@ func TestPGPRecoveryHandlesEmptyStateAndContactIdentityFallbacks(t *testing.T) {
 		t.Fatalf("missing installation-secret stage should be a no-op: %v", err)
 	}
 	configuration := &config.Config{}
-	if got := pgpContactEmail(configuration); got != "security@localhost" {
-		t.Fatalf("default security contact = %q", got)
+	t.Setenv("DOMAIN", "git.example.test")
+	if got := pgpContactEmail(configuration); got != "security@git.example.test" {
+		t.Fatalf("resolved security contact = %q", got)
 	}
 	configuration.Server.FQDN = "git.example.test"
-	if got := pgpContactEmail(configuration); got != "security@git.example.test" {
-		t.Fatalf("FQDN security contact = %q", got)
+	t.Setenv("DOMAIN", "public.example.test")
+	if got := pgpContactEmail(configuration); got != "security@public.example.test" {
+		t.Fatalf("server.fqdn overrode the resolved security contact = %q", got)
 	}
 }
 

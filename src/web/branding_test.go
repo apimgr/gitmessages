@@ -79,6 +79,25 @@ func TestRenderOperatorContentSanitizesHTMLAndLinks(t *testing.T) {
 	}
 }
 
+func TestTorOperatorContentRemovesClearnetLinks(t *testing.T) {
+	current := config.Get()
+	previous := current.Server.Tor.OnionAddress
+	current.Server.Tor.OnionAddress = strings.Repeat("a", 56) + ".onion"
+	t.Cleanup(func() { current.Server.Tor.OnionAddress = previous })
+	request := httptest.NewRequest("GET", "http://"+current.Server.Tor.OnionAddress+"/server/privacy", nil)
+	content := renderOperatorContent(request, "privacy", &config.OperatorContent{
+		Format: "md",
+		Body:   "[external](https://example.com/privacy) and [onion](http://" + current.Server.Tor.OnionAddress + "/privacy) and [email](mailto:privacy@example.com)",
+	})
+	got := string(content)
+	if strings.Contains(got, `href="https://example.com/privacy"`) || strings.Contains(got, `href="mailto:privacy@example.com"`) {
+		t.Fatalf("Tor privacy page retained a clearnet link: %s", got)
+	}
+	if !strings.Contains(got, "<span>external</span>") || !strings.Contains(got, "email") || !strings.Contains(got, `href="http://`+current.Server.Tor.OnionAddress+`/privacy"`) {
+		t.Fatalf("Tor privacy page did not preserve plain labels and the onion link: %s", got)
+	}
+}
+
 func TestRenderOperatorContentRejectsInvalidEntries(t *testing.T) {
 	request := httptest.NewRequest("GET", "/server/about", nil)
 	if got := renderOperatorContent(request, "about", &config.OperatorContent{Format: "unknown", Body: "content"}); got != "" {

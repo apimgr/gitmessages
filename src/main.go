@@ -27,17 +27,18 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	_ "time/tzdata"
 
 	"github.com/apimgr/gitmessages/src/auth"
 	"github.com/apimgr/gitmessages/src/cache"
-	"github.com/apimgr/gitmessages/src/common/display"
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
 	"github.com/apimgr/gitmessages/src/email"
+	maintenancepkg "github.com/apimgr/gitmessages/src/maintenance"
 	"github.com/apimgr/gitmessages/src/metrics"
 	"github.com/apimgr/gitmessages/src/mode"
 	"github.com/apimgr/gitmessages/src/overlay"
@@ -45,6 +46,7 @@ import (
 	"github.com/apimgr/gitmessages/src/privilege"
 	schedulerpkg "github.com/apimgr/gitmessages/src/scheduler"
 	"github.com/apimgr/gitmessages/src/securitydata"
+	serverbanner "github.com/apimgr/gitmessages/src/server/banner"
 	servicepkg "github.com/apimgr/gitmessages/src/service"
 	"github.com/apimgr/gitmessages/src/ssl"
 	updatepkg "github.com/apimgr/gitmessages/src/update"
@@ -163,10 +165,7 @@ func configuredTLSHosts(configuration *config.Config) []string {
 	if configuration == nil {
 		return nil
 	}
-	fqdn := strings.TrimSpace(configuration.Server.FQDN)
-	if fqdn == "" {
-		fqdn = strings.TrimSpace(strings.Split(os.Getenv("DOMAIN"), ",")[0])
-	}
+	fqdn := strings.TrimSpace(strings.Split(os.Getenv("DOMAIN"), ",")[0])
 	if fqdn == "" {
 		return nil
 	}
@@ -593,7 +592,7 @@ func main() {
 		cfg.Server.BaseURL = baseURL
 	}
 	web.SetCORSOrigins(cfg.Server.CORS.AllowedOrigins)
-	web.SetServerFQDN(cfg.Server.FQDN)
+	web.SetServerFQDN(web.ResolveStartupFQDN())
 	web.SetDefaultTheme(cfg.Web.UI.Theme)
 	var debugOverride *bool
 	if flagWasProvided("debug") {
@@ -663,13 +662,6 @@ func main() {
 	}
 
 	// Log startup information
-	displayEnvironment := display.DetectDisplayEnv()
-	if displayEnvironment.IsTerminal && !paths.IsRunningInContainer() && !*daemonFlag && !earlyDaemonize {
-		publicURL := startupPublicURL(cfg.Server.FQDN, cfg.Server.BaseURL, listeners)
-		if err := writeStartupBanner(os.Stdout, displayEnvironment, *colorFlag, Version, CommitID, buildDate(), modeInfo, publicURL); err != nil {
-			log.Printf("write startup banner: %v", err)
-		}
-	}
 	log.Printf("gitmessages %s (commit: %s, built: %s)", Version, CommitID, buildDate())
 
 	// Setup signal handling
@@ -682,6 +674,98 @@ func main() {
 		log.Fatalf("open application database: %v", err)
 	}
 	defer func() { _ = sharedDB.Close() }()
+	healthStats, err := sharedDB.ReadHealthRequestStats(context.Background(), time.Now().UTC())
+	if err != nil {
+		log.Fatalf("load health request statistics: %v", err)
+	}
+	healthStatsCache := newHealthStatsCache(healthStats)
+	var maintenanceManager *maintenancepkg.Manager
+	heal := func(ctx context.Context, reason string) error {
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if reason == "database_connection" || reason == "database_write" {
+			if err := sharedDB.Read().PingContext(probeCtx); err != nil {
+				return err
+			}
+			return sharedDB.Write(probeCtx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(probeCtx, `UPDATE health_request_stats SET total_count=total_count WHERE id=1`)
+				return err
+			})
+		}
+		if reason == "disk_full" || reason == "file_write" || reason == "file_permission" {
+			if err := cleanupMaintenanceFiles(sharedDB, dirs, cfg, time.Now()); err != nil {
+				return err
+			}
+			if reason == "disk_full" {
+				threshold := cfg.Server.Maintenance.Cleanup.DiskThreshold
+				if threshold < 1 || threshold > 100 {
+					threshold = 90
+				}
+				volumes, err := collectDiskVolumes(dirs)
+				if err != nil {
+					return err
+				}
+				for _, volume := range volumes {
+					if volume.usage.UsedPercent >= float64(threshold) {
+						return errors.New("disk usage remains above the cleanup threshold")
+					}
+				}
+			}
+			probe, err := os.CreateTemp(configDir, ".maintenance-write-*")
+			if err != nil {
+				return err
+			}
+			name := probe.Name()
+			if err := probe.Close(); err != nil {
+				_ = os.Remove(name)
+				return err
+			}
+			return os.Remove(name)
+		}
+		return errors.New("no recovery probe is configured for this maintenance reason")
+	}
+	maintenanceManager, err = maintenancepkg.New(maintenancepkg.Config{
+		RetryInterval: cfg.Server.Maintenance.SelfHealing.RetryInterval,
+		MaxAttempts:   cfg.Server.Maintenance.SelfHealing.MaxAttempts,
+	}, heal)
+	if err != nil {
+		log.Fatalf("configure maintenance self-healing: %v", err)
+	}
+	maintenanceManager.SetHandlers(
+		func(info maintenancepkg.Info) {
+			recordMaintenanceEvent(sharedDB, "server.maintenance_entered", info)
+			if cfg.Server.Maintenance.Notify.OnEnter {
+				_ = sendOperatorEmail(context.Background(), cfg, "maintenance_entered", "", map[string]string{"reason": info.Reason, "details": info.Message, "since": info.Since})
+			}
+		},
+		func(info maintenancepkg.Info) {
+			recordMaintenanceEvent(sharedDB, "server.maintenance_exited", info)
+			if cfg.Server.Maintenance.Notify.OnExit {
+				duration := "unknown"
+				if startedAt, parseErr := time.Parse(time.RFC3339, info.Since); parseErr == nil {
+					duration = time.Since(startedAt).Round(time.Second).String()
+				}
+				_ = sendOperatorEmail(context.Background(), cfg, "maintenance_exited", "", map[string]string{"reason": info.Reason, "details": "The maintenance condition has been resolved.", "duration": duration})
+			}
+		},
+		func(info maintenancepkg.Info) {
+			recordMaintenanceEvent(sharedDB, "server.self_healing_exhausted", info)
+			_ = sendOperatorEmail(context.Background(), cfg, "self_healing_exhausted", "", map[string]string{"reason": info.Reason, "attempts": strconv.Itoa(info.SelfHealing.Attempts), "details": "Operator action is required."})
+		},
+	)
+	maintenanceManager.Start(context.Background())
+	defer maintenanceManager.Stop()
+	web.SetMaintenanceProvider(maintenanceManager.Snapshot)
+	web.SetHealthStatsProvider(func() web.HealthStats { return healthStatsCache.snapshot(web.SnapshotHealthRequestCounters()) })
+	var restartReasonsMu sync.RWMutex
+	restartReasons := []string(nil)
+	web.SetHealthRestartProvider(func() []string {
+		restartReasonsMu.RLock()
+		defer restartReasonsMu.RUnlock()
+		return append([]string(nil), restartReasons...)
+	})
+	var shuttingDown atomic.Bool
+	web.SetHealthShutdownProvider(shuttingDown.Load)
 	if err := recoverEncryptionKeyRotation(context.Background(), sharedDB, cfg); err != nil {
 		log.Fatalf("recover encryption key rotation: %v", err)
 	}
@@ -781,7 +865,7 @@ func main() {
 		}
 		domains := configuredTLSHosts(cfg)
 		if len(domains) == 0 {
-			log.Fatalf("TLS requires server.fqdn or DOMAIN to be configured")
+			log.Fatalf("TLS requires DOMAIN to be configured")
 		}
 		tlsDomains = append([]string(nil), domains...)
 		le := cfg.Server.SSL.LetsEncrypt
@@ -805,7 +889,7 @@ func main() {
 			currentDomains := append([]string(nil), tlsDomains...)
 			tlsDomainsMu.RUnlock()
 			if len(currentDomains) == 0 {
-				return nil, errors.New("TLS requires server.fqdn or DOMAIN to be configured")
+				return nil, errors.New("TLS requires DOMAIN to be configured")
 			}
 			updated, err := tlsManager.GetTLSConfig(currentDomains)
 			if err != nil || updated == nil {
@@ -834,7 +918,7 @@ func main() {
 	i2pManager := overlay.NewI2PManager(configDir, dirs.Data, dirs.Logs, cfg.Server.I2P, mux)
 	i2pManager.Start()
 	activeOverlays := &overlayManagers{tor: torManager, i2p: i2pManager}
-	backgroundScheduler, err := newApplicationScheduler(sharedDB, securityManager, authStore, cfg, dirs, securityLogger, tlsManager, torManager, i2pManager, activeOverlays.current, func() []string {
+	backgroundScheduler, err := newApplicationScheduler(sharedDB, securityManager, authStore, cfg, dirs, securityLogger, tlsManager, torManager, i2pManager, maintenanceManager, healthStatsCache, activeOverlays.current, func() []string {
 		tlsDomainsMu.RLock()
 		defer tlsDomainsMu.RUnlock()
 		return append([]string(nil), tlsDomains...)
@@ -844,10 +928,56 @@ func main() {
 	}
 	web.ConfigureSchedulerMetrics(backgroundScheduler)
 	backgroundScheduler.Start()
-	defer backgroundScheduler.Stop()
+	defer func() {
+		backgroundScheduler.Stop()
+		flushHealthRequestCounters(sharedDB, healthStatsCache, context.Background())
+	}()
 	web.SetOverlayStatus(func() map[string]any {
 		currentTor, currentI2P := activeOverlays.current()
 		return map[string]any{"tor": currentTor.Status(), "i2p": currentI2P.Status()}
+	})
+	fqdn := web.ResolveStartupFQDN()
+	if fqdn == "" {
+		log.Printf("WARN no public hostname could be resolved; no clearnet startup URL will be shown")
+	}
+	urls := startupPublicURLs(fqdn, cfg.Server.BaseURL, listeners)
+	var torAddress, i2pAddress string
+	overlayDeadline := time.Now().Add(5 * time.Second)
+	for {
+		torStatus := torManager.Status()
+		i2pStatus := i2pManager.Status()
+		torAddress = torStatus.Hostname
+		i2pAddress = i2pStatus.Hostname
+		if i2pAddress == "" {
+			i2pAddress = i2pStatus.Address
+		}
+		torReady := !torStatus.Enabled || torAddress != ""
+		i2pReady := !i2pStatus.Enabled || i2pAddress != ""
+		if (torReady && i2pReady) || !time.Now().Before(overlayDeadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if torAddress != "" {
+		urls = append(urls, startupOverlayURL(torAddress, cfg.Server.BaseURL))
+	}
+	if i2pAddress != "" {
+		urls = append(urls, startupOverlayURL(i2pAddress, cfg.Server.BaseURL))
+	}
+	var forceColor *bool
+	if *colorFlag != "auto" {
+		forced := *colorFlag == "yes"
+		forceColor = &forced
+	}
+	appName := strings.TrimSpace(cfg.Server.Branding.Title)
+	if appName == "" {
+		appName = "Git Messages"
+	}
+	serverbanner.PrintServerStartupBanner(serverbanner.ServerBannerInfo{
+		AppName: appName, Version: Version, AppMode: string(mode.Get()),
+		StartupDatetime: serverbanner.FormatStartupDatetime(time.Now(), os.Getenv("TZ")),
+		URLs:            urls, OnionAddress: torAddress, I2PAddress: i2pAddress,
+		ForceColor: forceColor, Lang: os.Getenv("GITMESSAGES_LANG"),
 	})
 	reloadConfiguration := func() {
 		loaded, err := config.Load(configPath)
@@ -868,6 +998,9 @@ func main() {
 			loaded.Server.BaseURL = baseURL
 		}
 		restartRequired := restartRequiredSettings(cfg.Server, loaded.Server)
+		restartReasonsMu.Lock()
+		restartReasons = append(restartReasons[:0], restartRequired...)
+		restartReasonsMu.Unlock()
 		if len(restartRequired) > 0 {
 			log.Printf("WARN config.restart_required settings=%s apply_at_next_start=true", strings.Join(restartRequired, ","))
 		}
@@ -890,7 +1023,7 @@ func main() {
 		tlsDomains = configuredTLSHosts(cfg)
 		tlsDomainsMu.Unlock()
 		web.SetCORSOrigins(cfg.Server.CORS.AllowedOrigins)
-		web.SetServerFQDN(cfg.Server.FQDN)
+		web.SetServerFQDN(web.ResolveStartupFQDN())
 		web.SetDefaultTheme(cfg.Web.UI.Theme)
 		if torConfigChanged {
 			if err := torManager.Close(); err != nil {
@@ -945,6 +1078,7 @@ func main() {
 	for {
 		select {
 		case err := <-errChan:
+			shuttingDown.Store(true)
 			if err != nil && err != http.ErrServerClosed {
 				log.Printf("HTTP listener stopped: %v", err)
 			}
@@ -953,9 +1087,13 @@ func main() {
 		case <-reloadChan:
 			reloadConfiguration()
 		case <-updateRestartRequests:
+			shuttingDown.Store(true)
 			log.Printf("INFO update.restart_requested exit_code=75")
 			stopWatcher()
 			backgroundScheduler.Stop()
+			if err := flushHealthRequestCounters(sharedDB, healthStatsCache, context.Background()); err != nil {
+				log.Printf("flush health request counters during update shutdown: %v", err)
+			}
 			cancelSecurity()
 			_, currentI2P := activeOverlays.current()
 			currentTor, _ := activeOverlays.current()
@@ -980,6 +1118,7 @@ func main() {
 				log.Println("Received SIGHUP, reloading configuration...")
 				reloadConfiguration()
 			default:
+				shuttingDown.Store(true)
 				log.Printf("Received signal %v, shutting down...", sig)
 				stopWatcher()
 				_, currentI2P := activeOverlays.current()
@@ -1004,6 +1143,177 @@ func main() {
 	}
 }
 
+type healthStatsCache struct {
+	mu    sync.RWMutex
+	stats database.HealthRequestStats
+}
+
+func newHealthStatsCache(stats database.HealthRequestStats) *healthStatsCache {
+	return &healthStatsCache{stats: stats}
+}
+
+func (cache *healthStatsCache) add(batch web.HealthRequestCounterBatch) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	cache.stats.Total += batch.Total
+	for _, bucket := range batch.Hours {
+		hour := bucket.HourStart.UTC().Truncate(time.Hour)
+		found := false
+		for index := range cache.stats.Hours {
+			if cache.stats.Hours[index].HourStart.Equal(hour) {
+				cache.stats.Hours[index].Count += bucket.Count
+				found = true
+				break
+			}
+		}
+		if !found {
+			cache.stats.Hours = append(cache.stats.Hours, database.HealthRequestHourBucket{HourStart: hour, Count: bucket.Count})
+		}
+	}
+	cache.trim(time.Now().UTC())
+}
+
+func (cache *healthStatsCache) trim(now time.Time) {
+	oldest := now.UTC().Truncate(time.Hour).Add(-23 * time.Hour)
+	hours := make([]database.HealthRequestHourBucket, 0, len(cache.stats.Hours))
+	cache.stats.Last24Hour = 0
+	for _, bucket := range cache.stats.Hours {
+		if bucket.HourStart.Before(oldest) {
+			continue
+		}
+		hours = append(hours, bucket)
+		cache.stats.Last24Hour += bucket.Count
+	}
+	cache.stats.Hours = hours
+}
+
+func (cache *healthStatsCache) snapshot(pending web.HealthRequestCounterBatch) web.HealthStats {
+	cache.mu.RLock()
+	defer cache.mu.RUnlock()
+	total := cache.stats.Total + pending.Total
+	last24 := cache.stats.Last24Hour
+	oldest := time.Now().UTC().Truncate(time.Hour).Add(-23 * time.Hour)
+	for _, bucket := range pending.Hours {
+		if !bucket.HourStart.Before(oldest) {
+			last24 += bucket.Count
+		}
+	}
+	return web.HealthStats{RequestsTotal: total, Requests24Hours: last24}
+}
+
+func flushHealthRequestCounters(store *database.Store, cache *healthStatsCache, ctx context.Context) error {
+	batch := web.SnapshotHealthRequestCounters()
+	if batch.Total == 0 && len(batch.Hours) == 0 {
+		return nil
+	}
+	databaseBatch := database.HealthRequestCounterBatch{Total: batch.Total, Hours: make([]database.HealthRequestHourBucket, 0, len(batch.Hours))}
+	for _, bucket := range batch.Hours {
+		databaseBatch.Hours = append(databaseBatch.Hours, database.HealthRequestHourBucket{HourStart: bucket.HourStart, Count: bucket.Count})
+	}
+	if err := store.FlushHealthRequestCounters(ctx, databaseBatch, time.Now().UTC()); err != nil {
+		return err
+	}
+	web.CommitHealthRequestCounters(batch, func() { cache.add(batch) })
+	return nil
+}
+
+func probeApplicationDirectory(directory, pattern string) error {
+	file, err := os.CreateTemp(directory, pattern)
+	if err != nil {
+		return err
+	}
+	name := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(name)
+		return err
+	}
+	return os.Remove(name)
+}
+
+func recordMaintenanceEvent(store *database.Store, action string, info maintenancepkg.Info) {
+	if err := store.Write(context.Background(), func(tx *sql.Tx) error {
+		details := fmt.Sprintf(`{"reason":%q,"attempts":%d}`, info.Reason, info.SelfHealing.Attempts)
+		_, err := tx.Exec(`INSERT INTO audit_log(level,category,action,target_type,target_id,details,success) VALUES('warning','server',?,'maintenance',?,?,1)`, action, info.Reason, details)
+		return err
+	}); err != nil {
+		log.Printf("ERROR maintenance audit event failed action=%s", action)
+	}
+}
+
+func cleanupMaintenanceFiles(store *database.Store, directories paths.Directories, configuration *config.Config, now time.Time) error {
+	before, beforeErr := collectDiskVolumes(directories)
+	defer func() {
+		if beforeErr != nil {
+			return
+		}
+		after, err := collectDiskVolumes(directories)
+		if err != nil {
+			log.Printf("WARN maintenance.cleanup space measurement failed: %v", err)
+			return
+		}
+		freeByVolume := make(map[string]uint64, len(after))
+		for _, volume := range after {
+			freeByVolume[volume.key] = volume.usage.Free
+		}
+		var freed uint64
+		for _, volume := range before {
+			if remaining, ok := freeByVolume[volume.key]; ok && volume.usage.Free > remaining {
+				freed += volume.usage.Free - remaining
+			}
+		}
+		log.Printf("INFO maintenance.cleanup space_freed_bytes=%d", freed)
+	}()
+	retention := configuration.Server.Maintenance.Cleanup.LogRetentionDays
+	if retention < 1 {
+		retention = 7
+	}
+	entries, err := os.ReadDir(directories.Logs)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	cutoff := now.Add(-time.Duration(retention) * 24 * time.Hour)
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.ModTime().Before(cutoff) {
+			if err := os.Remove(filepath.Join(directories.Logs, entry.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	if err := applyBackupRetention(context.Background(), store, directories.Backup, configuration); err != nil {
+		return err
+	}
+	tempParent := filepath.Join(os.TempDir(), paths.OrgName)
+	tempEntries, err := os.ReadDir(tempParent)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range tempEntries {
+		if !strings.HasPrefix(entry.Name(), paths.ProjectName+"-") || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.ModTime().Before(now.Add(-24 * time.Hour)) {
+			if err := os.RemoveAll(filepath.Join(tempParent, entry.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func newApplicationScheduler(
 	store *database.Store,
 	securityManager *securitydata.Manager,
@@ -1014,6 +1324,8 @@ func newApplicationScheduler(
 	tlsManager *ssl.Manager,
 	torManager *overlay.TorManager,
 	i2pManager *overlay.I2PManager,
+	maintenanceManager *maintenancepkg.Manager,
+	healthStatsCache *healthStatsCache,
 	currentOverlays func() (*overlay.TorManager, *overlay.I2PManager),
 	tlsDomains func() []string,
 ) (*schedulerpkg.Scheduler, error) {
@@ -1065,7 +1377,6 @@ func newApplicationScheduler(
 			values["size"] = "unknown"
 		case "ssl_renewal":
 			event = "ssl_renewal_failed"
-			values["fqdn"] = configuration.Server.FQDN
 			values["expires_in"] = "unknown"
 			values["expiry_date"] = "unknown"
 			values["next_retry"] = task.NextRun.Format(time.RFC3339)
@@ -1084,11 +1395,6 @@ func newApplicationScheduler(
 		taskConfig, ok := schedulerConfig.Tasks[id]
 		if !ok {
 			taskConfig = defaults[id]
-		}
-		if id == "disk_check" {
-			if interval, err := time.ParseDuration(configuration.Server.Notifications.DiskLow.CheckInterval); err == nil && interval > 0 {
-				taskConfig.Schedule = "@every " + interval.String()
-			}
 		}
 		retryDelay, _ := time.ParseDuration(taskConfig.RetryDelay)
 		return scheduled.AddScheduledTask(schedulerpkg.TaskConfig{
@@ -1112,11 +1418,76 @@ func newApplicationScheduler(
 			return publishPGPKey(ctx, store, configuration, filepath.Join(config.ConfigDirectory(), "security"))
 		}),
 		"healthcheck_self": func() error { return store.Read().Ping() },
+		"database_check": func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := store.Read().PingContext(ctx); err != nil {
+				maintenanceManager.Enter("database_connection", "The database connection is unavailable; writes are temporarily paused.")
+				return err
+			}
+			if err := store.Write(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `UPDATE health_request_stats SET total_count=total_count WHERE id=1`)
+				return err
+			}); err != nil {
+				maintenanceManager.Enter("database_write", "The database cannot accept writes; writes are temporarily paused.")
+				return err
+			}
+			if err := probeApplicationDirectory(directories.Config, ".maintenance-write-*"); err != nil {
+				maintenanceManager.Enter("file_write", "The server cannot write required files; writes are temporarily paused.")
+				return err
+			}
+			return nil
+		},
+		"health_stats_flush": func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := flushHealthRequestCounters(store, healthStatsCache, ctx); err != nil {
+				maintenanceManager.Enter("database_write", "The database cannot persist server statistics; writes are temporarily paused.")
+				return err
+			}
+			return nil
+		},
 		"log_rotation": withTaskContext(func(context.Context) error {
 			return rotateLogFiles(directories.Logs, configuration.Server.Logging, time.Now())
 		}),
 		"disk_check": withTaskContext(func(context.Context) error {
-			return checkDiskSpace(directories, configuration, logger, time.Now())
+			now := time.Now()
+			if err := checkDiskSpace(directories, configuration, logger, now); err != nil {
+				return err
+			}
+			threshold := configuration.Server.Maintenance.Cleanup.DiskThreshold
+			if threshold < 1 || threshold > 100 {
+				threshold = 90
+			}
+			volumes, err := collectDiskVolumes(directories)
+			if err != nil {
+				return err
+			}
+			pressured := false
+			for _, volume := range volumes {
+				if volume.usage.UsedPercent >= float64(threshold) {
+					pressured = true
+					break
+				}
+			}
+			if !pressured {
+				return nil
+			}
+			if err := cleanupMaintenanceFiles(store, directories, configuration, now); err != nil {
+				maintenanceManager.Enter("disk_full", "Disk pressure cleanup could not complete; writes are temporarily paused.")
+				return err
+			}
+			volumes, err = collectDiskVolumes(directories)
+			if err != nil {
+				return err
+			}
+			for _, volume := range volumes {
+				if volume.usage.UsedPercent >= float64(threshold) {
+					maintenanceManager.Enter("disk_full", "Disk usage remains above the configured cleanup threshold; writes are temporarily paused.")
+					break
+				}
+			}
+			return nil
 		}),
 		"backup_daily": withTaskContext(func(ctx context.Context) error {
 			err := runScheduledBackup(ctx, store, configuration, directories, false)
@@ -1293,7 +1664,7 @@ func newApplicationScheduler(
 			return nil
 		}
 	}
-	for _, id := range []string{"healthcheck_self", "security_cleanup", "keyserver_retry", "token_cleanup", "geoip_update", "blocklist_update", "cve_update", "update_check", "ssl_renewal", "log_rotation", "disk_check", "backup_daily", "backup_hourly", "tor_health", "i2p_health"} {
+	for _, id := range []string{"healthcheck_self", "database_check", "health_stats_flush", "security_cleanup", "keyserver_retry", "token_cleanup", "geoip_update", "blocklist_update", "cve_update", "update_check", "ssl_renewal", "log_rotation", "disk_check", "backup_daily", "backup_hourly", "tor_health", "i2p_health"} {
 		callback, ok := callbacks[id]
 		if !ok {
 			continue
@@ -1346,7 +1717,7 @@ func configureSMTP(configuration *config.Config) {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		detected, err := email.DetectSMTP(ctx, configuration.Server.FQDN, smtpConfiguration)
+		detected, err := email.DetectSMTP(ctx, web.ResolveStartupFQDN(), smtpConfiguration)
 		cancel()
 		if err != nil {
 			mail.Enabled = false

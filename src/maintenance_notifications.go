@@ -15,6 +15,7 @@ import (
 	"github.com/apimgr/gitmessages/src/database"
 	"github.com/apimgr/gitmessages/src/email"
 	"github.com/apimgr/gitmessages/src/paths"
+	"github.com/apimgr/gitmessages/src/web"
 )
 
 // sendOperatorEmail sends an event only when SMTP is healthy and that event is enabled.
@@ -43,9 +44,10 @@ func sendOperatorEmail(ctx context.Context, configuration *config.Config, event,
 	if appName == "" {
 		appName = paths.ProjectName
 	}
-	fqdn := strings.TrimSpace(configuration.Server.FQDN)
+	publicHost := web.ResolveStartupFQDN()
+	fqdn := publicHost
 	if fqdn == "" {
-		fqdn = "localhost"
+		fqdn = "gitmessages.invalid"
 	}
 	fromName := strings.TrimSpace(settings.From.Name)
 	if fromName == "" {
@@ -60,8 +62,8 @@ func sendOperatorEmail(ctx context.Context, configuration *config.Config, event,
 		variables[key] = value
 	}
 	variables["app_name"] = appName
-	variables["fqdn"] = fqdn
-	variables["app_url"] = "https://" + fqdn
+	variables["fqdn"] = publicHost
+	variables["app_url"] = ""
 	variables["notification_reply_to"] = settings.ReplyTo
 	manager := email.NewTemplateManager(filepath.Join(config.ConfigDirectory(), "template", "email"))
 	message, err := manager.Render(event, configuration.Server.I18N.DefaultLanguage, variables)
@@ -102,8 +104,8 @@ func runEmailCommand(args []string, configuration *config.Config, configDir stri
 	manager := email.NewTemplateManager(filepath.Join(configDir, "template", "email"))
 	values := map[string]string{
 		"app_name":              configuration.Server.Branding.Title,
-		"app_url":               "https://" + configuration.Server.FQDN,
-		"fqdn":                  configuration.Server.FQDN,
+		"app_url":               "",
+		"fqdn":                  web.ResolveStartupFQDN(),
 		"ip":                    "192.168.1.100",
 		"notification_reply_to": settings.ReplyTo,
 		"event":                 "Test email",
@@ -112,7 +114,7 @@ func runEmailCommand(args []string, configuration *config.Config, configDir stri
 		"error":                 "sample error",
 		"filename":              "sample-backup.tar.gz",
 		"size":                  "1 MiB",
-		"domain":                configuration.Server.FQDN,
+		"domain":                web.ResolveStartupFQDN(),
 		"expires_in":            "7 days",
 		"expiry_date":           "2030-01-01",
 		"valid_until":           "2031-01-01",
@@ -166,9 +168,9 @@ func runEmailCommand(args []string, configuration *config.Config, configDir stri
 	if appName == "" {
 		appName = paths.ProjectName
 	}
-	fqdn := strings.TrimSpace(configuration.Server.FQDN)
+	fqdn := web.ResolveStartupFQDN()
 	if fqdn == "" {
-		fqdn = "localhost"
+		fqdn = "gitmessages.invalid"
 	}
 	fromName, fromAddress := strings.TrimSpace(settings.From.Name), strings.TrimSpace(settings.From.Email)
 	if fromName == "" {

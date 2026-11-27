@@ -48,7 +48,7 @@ func Probe(ctx context.Context, configuration SMTPConfig, timeout time.Duration)
 	defer func() { _ = client.Close() }()
 	clientName, _ := os.Hostname()
 	if clientName == "" {
-		clientName = "localhost"
+		clientName = "gitmessages.invalid"
 	}
 	if err := client.Hello(clientName); err != nil {
 		return fmt.Errorf("SMTP EHLO failed: %w", err)

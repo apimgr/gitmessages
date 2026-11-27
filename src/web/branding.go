@@ -98,7 +98,7 @@ func renderOperatorContent(r *http.Request, name string, entry *config.OperatorC
 	}
 	policy := operatorPolicy(name)
 	sanitized := policy.Sanitize(rendered)
-	sanitized = normalizeOperatorLinks(sanitized, r.URL.Path)
+	sanitized = normalizeOperatorLinks(sanitized, r.URL.Path, requestUsesTorAddress(r))
 	if strings.TrimSpace(sanitized) == "" && strings.TrimSpace(body) != "" {
 		warnOperatorContent(key)
 		return ""
@@ -188,7 +188,7 @@ func operatorPolicy(name string) *bluemonday.Policy {
 	policy.AllowAttrs("href", "title", "target", "rel").OnElements("a")
 	policy.RequireNoReferrerOnLinks(true)
 	policy.AllowAttrs("src", "alt", "title", "width", "height").OnElements("img")
-	policy.AllowURLSchemes("https", "data")
+	policy.AllowURLSchemes("http", "https", "data")
 	policy.AllowRelativeURLs(true)
 	policy.AllowAttrs("class", "id").Globally()
 	if name != "header" && name != "footer" {
@@ -197,13 +197,13 @@ func operatorPolicy(name string) *bluemonday.Policy {
 	return policy
 }
 
-func normalizeOperatorLinks(fragment, pagePath string) string {
+func normalizeOperatorLinks(fragment, pagePath string, torRequest bool) string {
 	root, err := htmlnode.ParseFragment(strings.NewReader(fragment), &htmlnode.Node{Type: htmlnode.ElementNode, Data: "div", DataAtom: atom.Div})
 	if err != nil {
 		return fragment
 	}
 	for _, node := range root {
-		normalizeOperatorNode(node, pagePath)
+		normalizeOperatorNode(node, pagePath, torRequest)
 	}
 	var output bytes.Buffer
 	for _, node := range root {
@@ -249,7 +249,7 @@ func convertOperatorHeadings(node *htmlnode.Node) {
 	}
 }
 
-func normalizeOperatorNode(node *htmlnode.Node, pagePath string) {
+func normalizeOperatorNode(node *htmlnode.Node, pagePath string, torRequest bool) {
 	if node.Type == htmlnode.ElementNode && node.Data == "a" {
 		var href string
 		for index := 0; index < len(node.Attr); index++ {
@@ -269,7 +269,11 @@ func normalizeOperatorNode(node *htmlnode.Node, pagePath string) {
 			}
 		}
 		parsed, err := url.Parse(href)
-		if err == nil && parsed.Host != "" && (parsed.Scheme == "https" || parsed.Scheme == "http" || parsed.Scheme == "") {
+		if torRequest && err == nil && isClearnetLink(parsed) {
+			node.Data = "span"
+			node.DataAtom = atom.Span
+			node.Attr = nil
+		} else if err == nil && parsed.Host != "" && (parsed.Scheme == "https" || parsed.Scheme == "http" || parsed.Scheme == "") {
 			rel := "noopener noreferrer nofollow ugc"
 			found := false
 			for index := range node.Attr {
@@ -284,8 +288,34 @@ func normalizeOperatorNode(node *htmlnode.Node, pagePath string) {
 		}
 	}
 	for child := node.FirstChild; child != nil; child = child.NextSibling {
-		normalizeOperatorNode(child, pagePath)
+		normalizeOperatorNode(child, pagePath, torRequest)
 	}
+}
+
+func requestUsesTorAddress(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	configured := config.Get().Server.Tor.OnionAddress
+	if configured == "" {
+		return false
+	}
+	_, host, _ := GetURLVars(r)
+	return strings.EqualFold(host, configured)
+}
+
+func isClearnetLink(target *url.URL) bool {
+	if target == nil {
+		return false
+	}
+	if target.Scheme != "http" && target.Scheme != "https" {
+		return target.Scheme == "mailto"
+	}
+	if target.Host == "" {
+		return false
+	}
+	configured := config.Get().Server.Tor.OnionAddress
+	return configured == "" || !strings.EqualFold(target.Hostname(), configured)
 }
 
 func substituteOperatorVariables(value string, escapeValues bool) string {

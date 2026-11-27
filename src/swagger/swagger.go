@@ -51,8 +51,12 @@ func Build(document Document) map[string]any {
 			}
 			operation["security"] = security
 		}
-		if definition.MountedWhen != "" {
-			operation["x-mounted-when"] = definition.MountedWhen
+		mountedWhen := definition.MountedWhen
+		if definition.DebugOnly {
+			mountedWhen = "debug_enabled"
+		}
+		if mountedWhen != "" {
+			operation["x-mounted-when"] = mountedWhen
 		}
 		operations, _ := paths[definition.Path].(map[string]any)
 		if operations == nil {

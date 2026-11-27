@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	graphqlapi "github.com/apimgr/gitmessages/src/graphql"
+	"github.com/apimgr/gitmessages/src/mode"
 )
 
 const mcpProtocolVersion = "2026-07-28"
@@ -53,7 +54,27 @@ type apiOperation struct {
 	description string
 	handler     http.HandlerFunc
 	inputSchema map[string]any
+	Auth        string
+	Listed      bool
 	Internal    bool
+	DebugOnly   bool
+	Request     any
+	Response    any
+	Primary     string
+	Message     string
+	Binary      string
+}
+
+func apiOperationMounted(definition apiOperation, debugEnabled bool) bool {
+	return !definition.DebugOnly || debugEnabled
+}
+
+func apiOperationVisible(definition apiOperation, debugEnabled bool) bool {
+	return apiOperationMounted(definition, debugEnabled) && definition.Listed && !definition.Internal
+}
+
+func apiOperationVisibleNow(definition apiOperation) bool {
+	return apiOperationVisible(definition, mode.IsDebugEnabled())
 }
 
 // SetServerFQDN sets the public hostname used by MCP's origin check.
@@ -287,7 +308,7 @@ func mcpResponseMetadata() map[string]any {
 }
 
 func apiOperationDefinitions(r *http.Request) []apiOperation {
-	return []apiOperation{
+	definitions := []apiOperation{
 		{name: "get_api_index", path: APIBasePath(), method: http.MethodGet, summary: tr(r, "api.rest"), description: tr(r, "api.resources"), handler: apiRoot, inputSchema: emptyInputSchema()},
 		{name: "list_commit_types", path: APIBasePath() + "/types", method: http.MethodGet, summary: tr(r, "swagger.types.summary"), description: tr(r, "swagger.types.response"), handler: apiTypes, inputSchema: emptyInputSchema()},
 		{name: "list_conventions", path: APIBasePath() + "/conventions", method: http.MethodGet, summary: tr(r, "swagger.conventions.summary"), description: tr(r, "swagger.conventions.response"), handler: apiConventions, inputSchema: emptyInputSchema()},
@@ -314,6 +335,15 @@ func apiOperationDefinitions(r *http.Request) []apiOperation {
 		{name: "get_openapi", path: APIBasePath() + "/server/swagger", method: http.MethodGet, summary: tr(r, "api.openapi"), description: tr(r, "api.rest"), handler: swaggerJSON, inputSchema: emptyInputSchema()},
 		{name: "graphql_query", path: APIBasePath() + "/server/graphql", method: http.MethodPost, summary: tr(r, "graphql.title"), description: tr(r, "graphql.description"), handler: graphqlapi.Handler().ServeHTTP, inputSchema: graphqlInputSchema(r)},
 	}
+	for index := range definitions {
+		if definitions[index].Auth == "" {
+			definitions[index].Auth = "none"
+		}
+		if !definitions[index].Internal {
+			definitions[index].Listed = true
+		}
+	}
+	return definitions
 }
 
 func emptyInputSchema() map[string]any {
@@ -351,7 +381,7 @@ func mcpTools(r *http.Request) []map[string]any {
 	definitions := apiOperationDefinitions(r)
 	tools := make([]map[string]any, 0, len(definitions))
 	for _, definition := range definitions {
-		if definition.Internal {
+		if !apiOperationVisibleNow(definition) {
 			continue
 		}
 		annotations := map[string]bool{"readOnlyHint": definition.method == http.MethodGet}
@@ -377,7 +407,7 @@ func callMCPTool(r *http.Request, params map[string]any) (any, int, *mcpError) {
 	arguments, _ := params["arguments"].(map[string]any)
 	var definition *apiOperation
 	for _, candidate := range apiOperationDefinitions(r) {
-		if !candidate.Internal && candidate.name == name {
+		if apiOperationVisibleNow(candidate) && candidate.name == name {
 			definition = &candidate
 			break
 		}

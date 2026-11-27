@@ -62,7 +62,7 @@ func GetURLVars(r *http.Request) (proto, fqdn, port string) {
 		proto = "https"
 	}
 
-	configuredDomains := domainList(osDomainList(), cfg.FQDN)
+	configuredDomains := domainList("", osDomainList())
 	hostCandidate := ""
 	if peerTrusted {
 		for _, candidate := range []string{firstHeader(r, "X-Forwarded-Host"), firstHeader(r, "X-Real-Host"), firstHeader(r, "X-Original-Host")} {
@@ -399,7 +399,7 @@ func secureOwnerCookie(r *http.Request) bool {
 
 // GetBaseDomain returns the configured primary domain or the learned registrable domain.
 func GetBaseDomain() string {
-	if domains := domainList(osDomainList(), config.Get().Server.FQDN); len(domains) > 0 {
+	if domains := domainList(osDomainList(), ""); len(domains) > 0 {
 		return baseDomain(domains[0])
 	}
 	learnedURLDomains.RLock()
@@ -417,7 +417,7 @@ func GetBaseDomain() string {
 
 // GetWildcardDomain returns a wildcard after the configured or observed hosts share a base domain.
 func GetWildcardDomain() string {
-	if domains := domainList(osDomainList(), config.Get().Server.FQDN); len(domains) > 0 {
+	if domains := domainList(osDomainList(), ""); len(domains) > 0 {
 		return wildcardFromDomains(domains)
 	}
 	cfg := config.Get().Server.URLDetection
@@ -516,14 +516,43 @@ func wildcardFromDomains(domains []string) string {
 }
 
 func fallbackHostname() string {
-	if hostname, err := os.Hostname(); err == nil && validURLDisplayHost(hostname) {
-		return hostname
+	return ResolveStartupFQDN()
+}
+
+// ResolveStartupFQDN applies the no-request URL host order used for startup URLs.
+func ResolveStartupFQDN() string {
+	addresses := publicInterfaceIPs()
+	return resolveStartupFQDN(osDomainList(), hostnameValue(), strings.TrimSpace(os.Getenv("HOSTNAME")), addresses)
+}
+
+func hostnameValue() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return ""
 	}
-	if hostname := strings.TrimSpace(os.Getenv("HOSTNAME")); validURLDisplayHost(hostname) {
-		return hostname
+	return hostname
+}
+
+func resolveStartupFQDN(domain, osHostname, envHostname string, addresses []net.IP) string {
+	if configured := domainList("", domain); len(configured) > 0 && validURLDisplayHost(configured[0]) {
+		return configured[0]
 	}
-	for _, address := range publicInterfaceAddresses() {
-		return address
+	if validURLDisplayHost(osHostname) {
+		return strings.TrimSpace(osHostname)
+	}
+	if validURLDisplayHost(envHostname) {
+		return strings.TrimSpace(envHostname)
+	}
+	for _, wantIPv4 := range []bool{false, true} {
+		for _, address := range addresses {
+			if address == nil || !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() || address.IsUnspecified() || address.IsLinkLocalUnicast() {
+				continue
+			}
+			isIPv4 := address.To4() != nil
+			if isIPv4 == wantIPv4 {
+				return address.String()
+			}
+		}
 	}
 	return ""
 }
@@ -534,16 +563,17 @@ func validURLDisplayHost(host string) bool {
 		return false
 	}
 	if address := net.ParseIP(host); address != nil {
-		return address.IsGlobalUnicast() && !address.IsLoopback() && !address.IsUnspecified() && !address.IsLinkLocalUnicast()
+		return address.IsGlobalUnicast() && !address.IsPrivate() && !address.IsLoopback() && !address.IsUnspecified() && !address.IsLinkLocalUnicast()
 	}
 	return true
 }
 
-func publicInterfaceAddresses() []string {
+func publicInterfaceIPs() []net.IP {
 	interfaces, err := net.InterfaceAddrs()
 	if err != nil {
 		return nil
 	}
+	addresses := make([]net.IP, 0, len(interfaces))
 	for _, address := range interfaces {
 		var ip net.IP
 		switch value := address.(type) {
@@ -552,9 +582,9 @@ func publicInterfaceAddresses() []string {
 		case *net.IPAddr:
 			ip = value.IP
 		}
-		if ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
-			return []string{ip.String()}
+		if ip != nil {
+			addresses = append(addresses, ip)
 		}
 	}
-	return nil
+	return addresses
 }
