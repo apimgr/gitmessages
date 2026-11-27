@@ -4,6 +4,63 @@ const root=document.documentElement;
 const stamp=root.dataset.build||'';
 const base=root.dataset.basePath||'';
 const appURL=value=>base+value;
+const toastContainer=document.getElementById('toast-container');
+const toastSeconds=(value,fallback)=>{const parsed=Number.parseFloat(value);return Number.isFinite(parsed)&&parsed>=0?parsed:fallback;};
+const toastDurations={success:toastSeconds(document.body.dataset.toastDuration,3)*1000,info:toastSeconds(document.body.dataset.toastDuration,3)*1000,warning:toastSeconds(document.body.dataset.toastWarningDuration,5)*1000,error:0};
+const toastIcons={success:'✓',error:'✗',warning:'⚠',info:'ℹ'};
+const toastQueue=[];
+const toastRecords=new Map();
+let nextToastId=0;
+const removeToastRecord=record=>{clearTimeout(record.timer);record.element?.remove();toastRecords.delete(record.id);promoteToast();};
+function dismissToast(id){
+  const record=toastRecords.get(id);
+  if(!record)return;
+  if(!record.element){const index=toastQueue.indexOf(record);if(index>=0)toastQueue.splice(index,1);toastRecords.delete(id);return;}
+  clearTimeout(record.timer);record.element.classList.remove('toast-visible');
+  record.timer=window.setTimeout(()=>removeToastRecord(record),250);
+}
+function promoteToast(){
+  while(toastContainer&&toastContainer.children.length<5&&toastQueue.length){
+    const record=toastQueue.shift();
+    if(toastRecords.has(record.id))mountToast(record);
+  }
+}
+function mountToast(record){
+  const toast=document.createElement('div');
+  toast.className='toast toast-'+record.type;
+  toast.id=record.id;
+  toast.setAttribute('role','alert');
+  toast.setAttribute('aria-live','polite');
+  const icon=document.createElement('span');icon.className='toast-icon';icon.setAttribute('aria-hidden','true');icon.textContent=toastIcons[record.type];
+  const message=document.createElement('span');message.className='toast-message';message.textContent=record.message;
+  const close=document.createElement('button');close.className='toast-close';close.type='button';close.setAttribute('aria-label',document.body.dataset.toastDismiss||'Dismiss');close.textContent='×';
+  toast.append(icon,message,close);
+  if(record.remaining>0){const progress=document.createElement('div');progress.className='toast-progress';toast.append(progress);}
+  close.addEventListener('click',event=>{event.stopPropagation();dismissToast(record.id);});
+  toast.addEventListener('click',event=>{if(event.target!==close)dismissToast(record.id);});
+  toast.addEventListener('pointerenter',()=>{if(record.timer){clearTimeout(record.timer);record.timer=0;record.remaining=Math.max(0,record.remaining-(Date.now()-record.started));}});
+  toast.addEventListener('pointerleave',()=>startToastTimer(record));
+  toastContainer.prepend(toast);record.element=toast;
+  requestAnimationFrame(()=>toast.classList.add('toast-visible'));
+  startToastTimer(record);
+}
+function startToastTimer(record){
+  if(record.remaining<=0||!record.element||record.timer)return;
+  record.started=Date.now();
+  record.timer=window.setTimeout(()=>dismissToast(record.id),record.remaining);
+}
+function showToast(message,type='info'){
+  if(!toastContainer)return null;
+  if(!Object.prototype.hasOwnProperty.call(toastDurations,type))type='info';
+  const id='toast-'+(++nextToastId);
+  const record={id,type,message:String(message),remaining:toastDurations[type],timer:0,started:0,element:null};
+  toastRecords.set(id,record);
+  if(toastContainer.children.length<5)mountToast(record);else toastQueue.push(record);
+  return id;
+}
+function dismissAllToasts(){for(const id of Array.from(toastRecords.keys()))dismissToast(id);}
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&toastContainer?.firstElementChild)dismissToast(toastContainer.firstElementChild.id);});
+window.showToast=showToast;window.dismissToast=dismissToast;window.dismissAllToasts=dismissAllToasts;
 const offlineData=document.getElementById('offline-strings');
 let offlineStrings={title:'Offline',heading:'Offline',message:'This page is not available offline.',reload:'Reload page'};
 try{

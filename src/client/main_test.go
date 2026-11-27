@@ -110,6 +110,44 @@ func TestClientRequestErrors(t *testing.T) {
 	}
 }
 
+func TestClientOutputFormats(t *testing.T) {
+	data := []byte(`[{"name":"feat","description":"feature"},{"name":"fix","description":"bug fix"}]`)
+	jsonOutput, err := formatClientOutput(data, "json")
+	if err != nil || !json.Valid(jsonOutput) {
+		t.Fatalf("JSON output = %q, %v", jsonOutput, err)
+	}
+	tableOutput, err := formatClientOutput(data, "table")
+	if err != nil || !strings.Contains(string(tableOutput), "┌") || !strings.Contains(string(tableOutput), "NAME") || !strings.Contains(string(tableOutput), "feat") {
+		t.Fatalf("table output = %q, %v", tableOutput, err)
+	}
+	coloredTable, err := formatClientOutputWithColor(data, "table", true)
+	if err != nil || !strings.Contains(string(coloredTable), "\x1b[1;36m") {
+		t.Fatalf("colored table output = %q, %v", coloredTable, err)
+	}
+	plainOutput, err := formatClientOutput([]byte(`{"message":"feat: add search"}`), "plain")
+	if err != nil || string(plainOutput) != "feat: add search" {
+		t.Fatalf("plain output = %q, %v", plainOutput, err)
+	}
+	if _, err := formatClientOutput(data, "yaml"); err == nil {
+		t.Fatal("unsupported output format unexpectedly succeeded")
+	}
+	if configuredColor(false) != "no" || configuredColor(true) != "yes" || configuredColor("auto") != "auto" || configuredColor("invalid") != "" {
+		t.Fatal("client output color configuration did not normalize boolean and string values")
+	}
+	unsafeOutput, err := formatClientOutput([]byte(`[{"message":"safe\u001b[2J\u0007value"}]`), "plain")
+	if err != nil || strings.ContainsAny(string(unsafeOutput), "\x1b\x07") || !strings.Contains(string(unsafeOutput), "safe[2Jvalue") {
+		t.Fatalf("plain output was not sanitized: %q, %v", unsafeOutput, err)
+	}
+}
+
+func TestMoveClientGlobalFlags(t *testing.T) {
+	got := moveClientGlobalFlags([]string{"types", "--output", "json", "--color=no"}, "--output", "--color")
+	want := []string{"--output", "json", "--color=no", "types"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("moved flags = %#v, want %#v", got, want)
+	}
+}
+
 func TestRequestUsesDiscoveredAPIVersion(t *testing.T) {
 	var discovered, versioned int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

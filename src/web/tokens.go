@@ -250,7 +250,7 @@ func tokenPageOrAction(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	var body strings.Builder
 	if foundFlash && flash.toast != "" {
-		body.WriteString(`<p role="status" class="alert alert-success toast">` + html.EscapeString(tokenText(r, strings.TrimPrefix(flash.toast, "tokens."))) + `</p>`)
+		body.WriteString(`<p role="status" class="alert alert-success toast toast-visible">` + html.EscapeString(tokenText(r, strings.TrimPrefix(flash.toast, "tokens."))) + `</p>`)
 	}
 	if !ok {
 		body.WriteString(tokenSection("token-create", tokenText(r, "new"), `<form method="post" action="/server/preferences/token/create"><input type="hidden" name="csrf_token" value="`+html.EscapeString(csrf)+`"><button type="submit">`+html.EscapeString(tokenText(r, "create"))+`</button></form>`))
@@ -1274,7 +1274,7 @@ func tokenDate(r *http.Request, value *time.Time) string {
 func tokenResultPage(w http.ResponseWriter, r *http.Request, value string, toast ...string) {
 	message := ""
 	if len(toast) > 0 && toast[0] != "" {
-		message = `<p role="status" class="toast">` + html.EscapeString(tokenText(r, toast[0])) + `</p>`
+		message = `<p role="status" class="toast toast-visible">` + html.EscapeString(tokenText(r, toast[0])) + `</p>`
 	}
 	copyLabel := html.EscapeString(tokenText(r, "copy"))
 	copiedLabel := html.EscapeString(i18n.T(r.Header.Get("X-GitMessages-Language"), "copied"))

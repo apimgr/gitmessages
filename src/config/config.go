@@ -523,8 +523,15 @@ type ContactAntispamConfig struct {
 }
 
 type NotificationsConfig struct {
+	WebUI   WebUINotificationConfig   `yaml:"webui"`
 	Email   EmailNotificationConfig   `yaml:"email"`
 	DiskLow DiskLowNotificationConfig `yaml:"disk_low"`
+}
+
+type WebUINotificationConfig struct {
+	Position        string `yaml:"position"`
+	Duration        int    `yaml:"duration"`
+	WarningDuration int    `yaml:"warning_duration"`
 }
 
 type DiskLowNotificationConfig struct {
@@ -1007,6 +1014,7 @@ func DefaultConfig() *Config {
 				Security: ContactRecipientConfig{Email: ""},
 			},
 			Notifications: NotificationsConfig{
+				WebUI: WebUINotificationConfig{Position: "top-right", Duration: 3, WarningDuration: 5},
 				Email: EmailNotificationConfig{
 					SMTP: SMTPConfig{Port: 587, TLS: "auto"},
 					Events: map[string]bool{
@@ -1152,9 +1160,11 @@ func validPort(port string) bool {
 }
 
 func runningInContainer() bool {
-	systemdRunning := pathExists("/run/systemd/system")
-	openRCRunning := pathExists("/run/openrc")
-	if isSystemManagerHost(os.Getenv("INVOCATION_ID"), os.Getenv("RC_SVCNAME"), systemdRunning, openRCRunning) {
+	pid1 := ""
+	if data, err := os.ReadFile("/proc/1/comm"); err == nil {
+		pid1 = strings.TrimSpace(string(data))
+	}
+	if isSystemManagerHost(os.Getenv("INVOCATION_ID"), os.Getenv("RC_SVCNAME"), pid1, pathExists("/run/openrc")) {
 		return false
 	}
 	for _, marker := range []string{"/.dockerenv", "/run/.containerenv", "/dev/lxc"} {
@@ -1165,8 +1175,8 @@ func runningInContainer() bool {
 	if strings.TrimSpace(os.Getenv("container")) != "" || strings.TrimSpace(os.Getenv("KUBERNETES_SERVICE_HOST")) != "" {
 		return true
 	}
-	if data, err := os.ReadFile("/proc/1/comm"); err == nil {
-		name := strings.ToLower(strings.TrimSpace(string(data)))
+	if pid1 != "" {
+		name := strings.ToLower(pid1)
 		if name == "tini" || name == "dumb-init" || name == "s6-svscan" || name == "runsv" || name == "runsvdir" || name == "catatonit" {
 			return true
 		}
@@ -1182,8 +1192,9 @@ func runningInContainer() bool {
 	return false
 }
 
-func isSystemManagerHost(invocationID, rcServiceName string, systemdRunning, openRCRunning bool) bool {
-	return strings.TrimSpace(invocationID) != "" || strings.TrimSpace(rcServiceName) != "" || systemdRunning || openRCRunning
+func isSystemManagerHost(invocationID, rcServiceName, pid1 string, openRCRunning bool) bool {
+	pid1 = strings.TrimSpace(pid1)
+	return strings.TrimSpace(invocationID) != "" || strings.TrimSpace(rcServiceName) != "" || pid1 == "systemd" || pid1 == "openrc-init" || pid1 == "init" && openRCRunning
 }
 
 func pathExists(path string) bool {
@@ -2560,6 +2571,23 @@ func validate(cfg *Config) error {
 	if cfg.Server.Notifications.Email.SMTP.Port < 1 || cfg.Server.Notifications.Email.SMTP.Port > 65535 {
 		warnInvalid("server.notifications.email.smtp.port")
 		cfg.Server.Notifications.Email.SMTP.Port = defaults.Server.Notifications.Email.SMTP.Port
+	}
+	if cfg.Server.Notifications.WebUI.Position == "" {
+		cfg.Server.Notifications.WebUI.Position = defaults.Server.Notifications.WebUI.Position
+	}
+	switch cfg.Server.Notifications.WebUI.Position {
+	case "top-right", "top-left", "bottom-right", "bottom-left":
+	default:
+		warnInvalid("server.notifications.webui.position")
+		cfg.Server.Notifications.WebUI.Position = defaults.Server.Notifications.WebUI.Position
+	}
+	if cfg.Server.Notifications.WebUI.Duration < 0 {
+		warnInvalid("server.notifications.webui.duration")
+		cfg.Server.Notifications.WebUI.Duration = defaults.Server.Notifications.WebUI.Duration
+	}
+	if cfg.Server.Notifications.WebUI.WarningDuration < 0 {
+		warnInvalid("server.notifications.webui.warning_duration")
+		cfg.Server.Notifications.WebUI.WarningDuration = defaults.Server.Notifications.WebUI.WarningDuration
 	}
 	if replyTo := strings.TrimSpace(cfg.Server.Notifications.Email.ReplyTo); replyTo != "" {
 		if strings.ContainsAny(replyTo, "\r\n") {

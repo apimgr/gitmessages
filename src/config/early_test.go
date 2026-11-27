@@ -63,22 +63,24 @@ func TestEarlyBaseURLUsesOrderedDropIns(t *testing.T) {
 
 func TestIsSystemManagerHost(t *testing.T) {
 	tests := []struct {
-		name           string
-		invocationID   string
-		rcServiceName  string
-		systemdRunning bool
-		openRCRunning  bool
-		want           bool
+		name          string
+		invocationID  string
+		rcServiceName string
+		pid1          string
+		openRCRunning bool
+		want          bool
 	}{
 		{name: "systemd service", invocationID: "service-id", want: true},
 		{name: "OpenRC service", rcServiceName: "gitmessages", want: true},
-		{name: "systemd system container", systemdRunning: true, want: true},
-		{name: "OpenRC system container", openRCRunning: true, want: true},
+		{name: "systemd system container", pid1: "systemd", want: true},
+		{name: "OpenRC init process", pid1: "openrc-init", want: true},
+		{name: "OpenRC system container", pid1: "init", openRCRunning: true, want: true},
+		{name: "openrc marker without OpenRC init", openRCRunning: true, want: false},
 		{name: "application container", want: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := isSystemManagerHost(test.invocationID, test.rcServiceName, test.systemdRunning, test.openRCRunning); got != test.want {
+			if got := isSystemManagerHost(test.invocationID, test.rcServiceName, test.pid1, test.openRCRunning); got != test.want {
 				t.Errorf("isSystemManagerHost() = %v, want %v", got, test.want)
 			}
 		})

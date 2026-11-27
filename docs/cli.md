@@ -13,7 +13,7 @@ gitmessages --maintenance -h
 gitmessages --update help
 ```
 
-The server also accepts `--service {start|stop|restart|reload|status|--install|--uninstall|--disable}` and `--maintenance {backup|restore|update|mode|setup|pgp|secret|security|token|data|compliance}`. Update commands are `--update [check|yes|branch {stable|beta|devel}]`.
+The server also accepts `--service {start|stop|restart|reload|status|--install|--uninstall|--disable}` and `--maintenance {backup|restore|update|mode|setup|pgp|secret|security|token|data|compliance}`. Update commands are `--update [check|yes|branch {stable|beta|devel}]`. `--status` prints localized server health, port, mode, uptime, Tor state and address, and enabled I2P lifecycle state and address. A healthy result goes to stdout with exit status `0`; an unhealthy reason goes to stderr with exit status `1`.
 
 Email commands validate or send operator email using the configured SMTP relay. `email test --dry-run` previews and validates every embedded or overridden template without sending. `email test` sends the test template to `server.notifications.email.reply_to`; `--to ADDRESS` selects a one-off recipient. A real test send requires a working SMTP relay.
 
@@ -55,7 +55,7 @@ gitmessages --baseurl /gitmessages
 
 `gitmessages-cli` connects to the public API. Set a server with `--server`, `GITMESSAGES_SERVER_PRIMARY`, or the CLI config file. `--token` supplies a Bearer token and saves it to `cli.yml` only when no token is already configured. The CLI config directory and `cli.yml` use owner-only permissions. Output language precedence is `--lang`, CLI config `language`, `LC_ALL`, `LANG`, then English (`en`); `language: auto` uses the environment. Supported languages are English (`en`), Spanish (`es`), French (`fr`), German (`de`), Italian (`it`), Arabic (`ar`), Chinese (`zh`), and Japanese (`ja`). The CLI sends the selected language with API requests. Unsupported values fall back to English.
 
-Output formats are `json`, `table`, and `plain`, selected with `--output` (the one format flag). Precedence is `--output`, `GITMESSAGES_OUTPUT_FORMAT`, `output.format` in `cli.yml`, then `table`. The color preference follows `--color`, `GITMESSAGES_OUTPUT_COLOR`, `output.color` in `cli.yml`, `NO_COLOR`, then terminal detection. Valid color values are `auto`, `yes`, and `no`; `NO_COLOR` can be overridden by the explicit CLI or project setting. The `random` command prints only the message in `table` and `plain` modes, so it can be used in command substitution.
+Output formats are `json`, `table`, and `plain`, selected with `--output` (the one format flag). Precedence is `--output`, `GITMESSAGES_OUTPUT_FORMAT`, `output.format` in `cli.yml`, then `table`. Color preference follows `--color`, `GITMESSAGES_OUTPUT_COLOR`, boolean `output.color` in `cli.yml`, `NO_COLOR`, then terminal detection. The flag and environment accept `auto`, `yes`, or `no`; an explicit CLI or project setting can override `NO_COLOR`. The `random` command prints only the message in `table` and `plain` modes, so it can be used in command substitution.
 
 ```sh
 GITMESSAGES_SERVER=http://127.0.0.1:8080

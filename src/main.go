@@ -31,6 +31,7 @@ import (
 	"syscall"
 	"time"
 	_ "time/tzdata"
+	"unicode"
 
 	"github.com/apimgr/gitmessages/src/auth"
 	"github.com/apimgr/gitmessages/src/cache"
@@ -425,10 +426,9 @@ func main() {
 			os.Exit(2)
 		}
 		if err := checkHealth(checkPort, checkBaseURL); err != nil {
-			fmt.Fprintf(os.Stderr, "Health check failed: %v\n", err)
+			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Println("OK")
 		return
 	}
 	if *maintenanceCmd == "--help" {
@@ -2064,13 +2064,196 @@ func checkHealth(port string, baseURL ...string) error {
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return err
+		return healthStatusError("", err.Error())
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("health check returned status %d", resp.StatusCode)
+	var payload struct {
+		Data json.RawMessage `json:"data"`
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return healthStatusError(strconv.Itoa(resp.StatusCode), err.Error())
+	}
+	if json.Unmarshal(body, &payload) == nil && len(payload.Data) > 0 {
+		body = payload.Data
+	}
+	var health struct {
+		Status        string                     `json:"status"`
+		Mode          string                     `json:"mode"`
+		Uptime        string                     `json:"uptime"`
+		Features      map[string]json.RawMessage `json:"features"`
+		Checks        map[string]string          `json:"checks"`
+		RestartReason []string                   `json:"restart_reason"`
+		Maintenance   *struct {
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
+		} `json:"maintenance"`
+	}
+	if err := json.Unmarshal(body, &health); err != nil {
+		return healthStatusError(strconv.Itoa(resp.StatusCode), "health response could not be decoded")
+	}
+	if resp.StatusCode != http.StatusOK || health.Status == "unhealthy" {
+		return healthStatusError(strconv.Itoa(resp.StatusCode), healthFailureReason(health.Status, health.Checks, health.Maintenance, health.RestartReason))
+	}
+	if health.Status == "" || health.Mode == "" || health.Uptime == "" {
+		return healthStatusError(strconv.Itoa(resp.StatusCode), "health response is missing status details")
+	}
+	language := os.Getenv("GITMESSAGES_LANG")
+	fmt.Printf("%s: %s\n  %s: %s\n  %s: %s\n  %s: %s\n", i18n.T(language, "cli.status.server"), statusLabel(health.Status, language), i18n.T(language, "cli.status.port"), safeStatusText(port), i18n.T(language, "health.field.mode"), safeStatusText(health.Mode), i18n.T(language, "health.field.uptime"), safeStatusText(humanStatusUptime(health.Uptime, language)))
+	var tor struct {
+		Enabled            bool   `json:"enabled"`
+		Running            bool   `json:"running"`
+		CircuitEstablished bool   `json:"circuit_established"`
+		Status             string `json:"status"`
+		Hostname           string `json:"hostname"`
+	}
+	torStatus := i18n.T(language, "health.value.disabled")
+	if raw := health.Features["tor"]; len(raw) > 0 && json.Unmarshal(raw, &tor) == nil {
+		if tor.Running && tor.CircuitEstablished {
+			torStatus = i18n.T(language, "cli.status.connected")
+		} else if tor.Status == "starting" {
+			torStatus = i18n.T(language, "health.value.starting")
+		} else if tor.Status == "unavailable" {
+			torStatus = i18n.T(language, "health.value.unavailable")
+		} else if tor.Enabled {
+			torStatus = i18n.T(language, "cli.status.disconnected")
+		}
+	}
+	fmt.Printf("%s: %s\n", i18n.T(language, "cli.status.tor"), torStatus)
+	if tor.Hostname != "" {
+		fmt.Printf("  %s: %s\n", i18n.T(language, "cli.status.address"), safeStatusText(tor.Hostname))
+	}
+	var i2p struct {
+		Enabled  bool   `json:"enabled"`
+		Running  bool   `json:"running"`
+		State    string `json:"state"`
+		Status   string `json:"status"`
+		Provider string `json:"provider"`
+		Hostname string `json:"hostname"`
+		Address  string `json:"address"`
+	}
+	if raw := health.Features["i2p"]; len(raw) > 0 && json.Unmarshal(raw, &i2p) == nil {
+		state := i2p.State
+		if state == "" {
+			state = i2p.Status
+		}
+		if state == "" {
+			state = "disabled"
+		}
+		if state == "running" && strings.TrimSpace(i2p.Provider) != "" {
+			state += " (" + strings.TrimSpace(i2p.Provider) + ")"
+		}
+		fmt.Printf("%s: %s\n", i18n.T(language, "cli.status.i2p"), safeStatusText(state))
+		address := i2p.Hostname
+		if address == "" {
+			address = i2p.Address
+		}
+		if strings.HasSuffix(strings.ToLower(address), ".b32.i2p") {
+			fmt.Printf("  %s: %s\n", i18n.T(language, "cli.status.address"), safeStatusText(address))
+		}
 	}
 	return nil
+}
+
+func statusLabel(status, language string) string {
+	switch status {
+	case "healthy":
+		return i18n.T(language, "health.value.running")
+	case "degraded":
+		return i18n.T(language, "health.value.degraded")
+	case "unhealthy":
+		return i18n.T(language, "health.value.error")
+	case "restart_required":
+		return i18n.T(language, "health.value.restart_required")
+	case "maintenance":
+		return i18n.T(language, "health.value.maintenance")
+	case "shutting_down":
+		return i18n.T(language, "health.value.shutting_down")
+	}
+	return status
+}
+
+func humanStatusUptime(value, language string) string {
+	if strings.TrimSpace(value) == "" {
+		return i18n.T(language, "health.value.unavailable")
+	}
+	parts := strings.Fields(value)
+	units := map[byte][2]string{'d': {"cli.status.day", "cli.status.days"}, 'h': {"cli.status.hour", "cli.status.hours"}, 'm': {"cli.status.minute", "cli.status.minutes"}, 's': {"cli.status.second", "cli.status.seconds"}}
+	for index, part := range parts {
+		if len(part) < 2 {
+			return value
+		}
+		unitKeys, ok := units[part[len(part)-1]]
+		if !ok {
+			return value
+		}
+		count := strings.TrimSuffix(part, string(part[len(part)-1]))
+		if _, err := strconv.Atoi(count); err != nil {
+			return value
+		}
+		unitKey := unitKeys[1]
+		if count == "1" {
+			unitKey = unitKeys[0]
+		}
+		parts[index] = count + " " + i18n.T(language, unitKey)
+	}
+	return strings.Join(parts, " ")
+}
+
+func healthStatusError(status, reason string) error {
+	language := os.Getenv("GITMESSAGES_LANG")
+	status = safeStatusText(status)
+	reason = safeStatusText(reason)
+	key := "cli.status.health_failed"
+	if status == "" {
+		key = "cli.status.health_unavailable"
+	}
+	return errors.New(i18n.Format(language, key, map[string]string{"status": status, "reason": reason}))
+}
+
+func safeStatusText(value string) string {
+	return strings.Map(func(character rune) rune {
+		if character == '\t' {
+			return ' '
+		}
+		if unicode.IsControl(character) {
+			return -1
+		}
+		return character
+	}, value)
+}
+
+func healthFailureReason(status string, checks map[string]string, maintenance *struct {
+	Reason  string `json:"reason"`
+	Message string `json:"message"`
+}, restartReasons []string) string {
+	if maintenance != nil {
+		if reason := strings.TrimSpace(maintenance.Message); reason != "" {
+			return reason
+		}
+		if reason := strings.TrimSpace(maintenance.Reason); reason != "" {
+			return reason
+		}
+	}
+	checkNames := make([]string, 0, len(checks))
+	for check := range checks {
+		checkNames = append(checkNames, check)
+	}
+	sort.Strings(checkNames)
+	for _, check := range checkNames {
+		if value := strings.TrimSpace(checks[check]); value != "" && value != "ok" {
+			label := i18n.Format(os.Getenv("GITMESSAGES_LANG"), "health.check.unknown", map[string]string{"key": check})
+			translatedValue := i18n.T(os.Getenv("GITMESSAGES_LANG"), "health.value."+value)
+			return label + ": " + translatedValue
+		}
+	}
+	if len(restartReasons) > 0 {
+		return strings.Join(restartReasons, ", ")
+	}
+	if strings.TrimSpace(status) != "" {
+		return statusLabel(status, os.Getenv("GITMESSAGES_LANG"))
+	}
+	return i18n.T(os.Getenv("GITMESSAGES_LANG"), "health.value.unavailable")
 }
 
 func watchConfiguration(ctx context.Context, configDir string, changed chan<- struct{}) {
@@ -2232,7 +2415,7 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, bac
 				backupFile = args[1]
 			}
 			if backupFile == "" {
-				selected, err := newestBackupFile(backupDir)
+				selected, err := newestFullBackupFile(backupDir)
 				if err != nil {
 					log.Fatalf("select backup for verification: %v", err)
 				}

@@ -173,7 +173,7 @@ func connectionTLSBackupPath(configDir, filename string) (string, string, error)
 
 func verifyApplicationBackup(ctx context.Context, backupFile, backupDir, password string, limits config.RestoreConfig) (backuppkg.Manifest, error) {
 	if backupFile == "" {
-		selected, err := newestBackupFile(backupDir)
+		selected, err := newestFullBackupFile(backupDir)
 		if err != nil {
 			return backuppkg.Manifest{}, err
 		}

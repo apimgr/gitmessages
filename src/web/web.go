@@ -477,7 +477,10 @@ func assetStamp() string {
 }
 
 func setVersionedAssetHeaders(w http.ResponseWriter, r *http.Request, versioned bool) bool {
-	stamp := assetStamp()
+	return setAssetHeaders(w, r, assetStamp(), versioned)
+}
+
+func setAssetHeaders(w http.ResponseWriter, r *http.Request, stamp string, versioned bool) bool {
 	etag := `"` + stamp + `"`
 	w.Header().Set("ETag", etag)
 	if versioned && r.URL.Query().Get("v") == stamp {
@@ -1541,6 +1544,9 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
 	theme := selectedTheme(r)
 	var output bytes.Buffer
 	stampURL := template.HTMLEscapeString(url.QueryEscape(stamp))
+	notificationSettings := config.Get().Server.Notifications.WebUI
+	componentStamp := fmt.Sprintf("%s-%d-%d", stamp, notificationSettings.Duration, notificationSettings.WarningDuration)
+	componentStyleURL := template.HTMLEscapeString(url.QueryEscape(componentStamp))
 	offlineStrings, _ := json.Marshal(map[string]string{
 		"title":   tr(r, "common.offline"),
 		"heading": tr(r, "common.offline"),
@@ -1600,18 +1606,18 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
     %s
     <title>%s</title>
   </head>
-	  <body>%s<script type="application/json" id="offline-strings">%s</script>
+	  <body data-toast-duration="%d" data-toast-warning-duration="%d" data-toast-dismiss="%s">%s<script type="application/json" id="offline-strings">%s</script>
 	    <a class="skip-link" href="#main-content">%s</a><a class="skip-link skip-link-secondary" href="#navigation">%s</a>%s<input type="checkbox" id="nav-toggle" class="nav-checkbox" aria-label="%s"><header role="banner"><a class="brand" href="/">%s</a><nav class="nav-links" id="navigation" aria-label="%s">%s</nav><label class="nav-toggle" for="nav-toggle" aria-hidden="true">☰</label><div class="header-actions"><a href="/server/preferences">%s</a>%s</div>%s</header>
     <main id="main-content" role="main" tabindex="-1"><div class="container %s"><header class="page-header">%s<h1 class="page-title">%s</h1>%s</header>%s</div></main>
         <nav class="nav-panel" id="nav-panel" aria-label="%s"><label for="nav-toggle" class="nav-close" aria-label="%s">✕</label>%s</nav><label for="nav-toggle" class="nav-overlay" aria-hidden="true"></label>
-        <div id="offline-indicator" class="offline-indicator" role="status" aria-live="polite" hidden>%s</div>
+	        <div id="offline-indicator" class="offline-indicator" role="status" aria-live="polite" hidden>%s</div><div id="toast-container" class="toast-container" data-position="%s" aria-label="%s" aria-live="polite"></div>
         <div id="pwa-update-prompt" class="pwa-update-prompt" role="status" aria-live="polite" hidden><span>%s</span><button id="pwa-update-now" type="button">%s</button></div>
         <section id="pwa-install" class="pwa-install" aria-label="%s" hidden><button id="pwa-install-button" type="button">%s</button><details id="pwa-ios-install" hidden><summary>%s</summary><p>%s</p></details></section>
 	        %s<footer role="contentinfo">%s%s · <a href="/server/about">%s</a> · <a href="/server/help">%s</a> · <a href="/server/privacy">%s</a> · <a href="/server/terms">%s</a> · <a href="/server/security">%s</a> · <a href="/server/preferences">%s</a> · <a href="/server/preferences#language" lang="%s">%s</a> · <a href="/server/docs/swagger">%s</a> · <a href="/server/docs/graphql">%s</a></footer>
     <script src="/static/js/app.js?v=%s" defer></script>
   </body>
 </html>
-	`, locale.Meta.Language, locale.Meta.Direction, theme, theme, template.HTMLEscapeString(stamp), template.HTMLEscapeString(requestBasePath(r)), template.HTMLEscapeString(seoDescription(r)), seoHeadMarkup(r, title), stampURL, stampURL, stampURL, stampURL, template.HTMLEscapeString(seoBrandingTitle()), stampURL, stampURL, robots, stampURL, stampURL, stampURL, stampURL, toolStyles, trackingTags, template.HTMLEscapeString(seoPageTitle(title)), trackingNoscript, string(offlineStrings), tr(r, "nav.skip"), tr(r, "nav.skip_navigation"), consentBanner, tr(r, "nav.toggle"), brandingHeaderMarkup(r), tr(r, "nav.main"), nav, tr(r, "preferences.title"), headerThemeToggle, customHeader, containerClass, serverPageBreadcrumb(r), template.HTMLEscapeString(title), pageLead, body, tr(r, "nav.main"), tr(r, "nav.close"), nav, tr(r, "pwa.offline_indicator"), tr(r, "pwa.update_available"), tr(r, "pwa.update_now"), tr(r, "pwa.install_label"), tr(r, "pwa.install_button"), tr(r, "pwa.install_ios_title"), tr(r, "pwa.install_ios_instructions"), customFooter, overlayFooter, template.HTMLEscapeString(seoBrandingTitle()), tr(r, "nav.about"), tr(r, "nav.help"), tr(r, "nav.privacy"), tr(r, "nav.terms"), tr(r, "nav.security"), tr(r, "preferences.title"), locale.Meta.Language, template.HTMLEscapeString(locale.Meta.NativeName), tr(r, "api.rest"), tr(r, "graphql.title"), stampURL)
+	`, locale.Meta.Language, locale.Meta.Direction, theme, theme, template.HTMLEscapeString(stamp), template.HTMLEscapeString(requestBasePath(r)), template.HTMLEscapeString(seoDescription(r)), seoHeadMarkup(r, title), stampURL, stampURL, stampURL, stampURL, template.HTMLEscapeString(seoBrandingTitle()), stampURL, stampURL, robots, stampURL, stampURL, componentStyleURL, stampURL, toolStyles, trackingTags, template.HTMLEscapeString(seoPageTitle(title)), notificationSettings.Duration, notificationSettings.WarningDuration, template.HTMLEscapeString(tr(r, "toast.dismiss")), trackingNoscript, string(offlineStrings), tr(r, "nav.skip"), tr(r, "nav.skip_navigation"), consentBanner, tr(r, "nav.toggle"), brandingHeaderMarkup(r), tr(r, "nav.main"), nav, tr(r, "preferences.title"), headerThemeToggle, customHeader, containerClass, serverPageBreadcrumb(r), template.HTMLEscapeString(title), pageLead, body, tr(r, "nav.main"), tr(r, "nav.close"), nav, tr(r, "pwa.offline_indicator"), notificationSettings.Position, tr(r, "toast.container"), tr(r, "pwa.update_available"), tr(r, "pwa.update_now"), tr(r, "pwa.install_label"), tr(r, "pwa.install_button"), tr(r, "pwa.install_ios_title"), tr(r, "pwa.install_ios_instructions"), customFooter, overlayFooter, template.HTMLEscapeString(seoBrandingTitle()), tr(r, "nav.about"), tr(r, "nav.help"), tr(r, "nav.privacy"), tr(r, "nav.terms"), tr(r, "nav.security"), tr(r, "preferences.title"), locale.Meta.Language, template.HTMLEscapeString(locale.Meta.NativeName), tr(r, "api.rest"), tr(r, "graphql.title"), stampURL)
 	pageHTML := prefixHTMLPaths(output.String(), requestBasePath(r))
 	if wantsFrontendText(r) {
 		writeText(w, http.StatusOK, formatHTMLText(pageHTML))
@@ -2417,12 +2423,27 @@ func styles(w http.ResponseWriter, r *http.Request) {
 }
 
 func stylesheetAsset(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodGet) {
+		return
+	}
 	name := strings.TrimPrefix(r.URL.Path, "/static/css/")
 	if name != "common.css" && name != "components.css" && name != "public.css" {
 		http.NotFound(w, r)
 		return
 	}
 	content, err := documentationAssets.ReadFile("static/css/" + name)
+	if err == nil && name == "components.css" {
+		settings := config.Get().Server.Notifications.WebUI
+		stamp := fmt.Sprintf("%s-%d-%d", assetStamp(), settings.Duration, settings.WarningDuration)
+		if !setAssetHeaders(w, r, stamp, true) {
+			return
+		}
+		content = bytes.ReplaceAll(content, []byte("--toast-duration: 3s"), []byte(fmt.Sprintf("--toast-duration: %ds", settings.Duration)))
+		content = bytes.ReplaceAll(content, []byte("--toast-duration-warning: 5s"), []byte(fmt.Sprintf("--toast-duration-warning: %ds", settings.WarningDuration)))
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		_, _ = w.Write(content)
+		return
+	}
 	serveEmbeddedAsset(w, r, content, err, "text/css; charset=utf-8")
 }
 
@@ -2527,6 +2548,8 @@ func serviceWorker(w http.ResponseWriter, r *http.Request) {
 	offlineBody := template.HTMLEscapeString(tr(r, "common.offline_body"))
 	offlineReload := template.HTMLEscapeString(tr(r, "offline.reload"))
 	offlineURL := template.HTMLEscapeString(BuildURL(r, "/"))
+	notificationSettings := config.Get().Server.Notifications.WebUI
+	componentStamp := fmt.Sprintf("%s-%d-%d", assetStamp(), notificationSettings.Duration, notificationSettings.WarningDuration)
 	offlineHTML, _ := json.Marshal(fmt.Sprintf(`<!doctype html><html lang="%s"><title>%s</title><main><h1>%s</h1><p>%s</p><p><a href="%s">%s</a></p></main></html>`, template.HTMLEscapeString(languageCode(r)), offlineTitle, offlineTitle, offlineBody, offlineURL, offlineReload))
 	_, _ = fmt.Fprintf(w, `const BASE=%q;
 const appURL=value=>BASE+value;
@@ -2628,7 +2651,7 @@ self.addEventListener('fetch',event=>{
       }catch(error){return new Response('',{status:504,statusText:'Gateway Timeout'});}
     })());
   }
-	});`, requestBasePath(r), assetStamp(), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), string(offlineHTML))
+	});`, requestBasePath(r), assetStamp(), url.QueryEscape(assetStamp()), url.QueryEscape(componentStamp), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), string(offlineHTML))
 }
 
 func swaggerJSON(w http.ResponseWriter, r *http.Request) {

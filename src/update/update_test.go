@@ -50,8 +50,8 @@ func TestInstallFromURLRequiresHTTPSAndChecksum(t *testing.T) {
 }
 
 func TestStripUpdateArgumentsPreservesCommandAndRemovesUpdateControls(t *testing.T) {
-	got := stripUpdateArguments([]string{"gitmessages-cli", "--update", "yes", "--server", "https://example.test", "--update=check", "messages", "list", "--maintenance", "update", "--json"})
-	want := []string{"gitmessages-cli", "--server", "https://example.test", "messages", "list", "--json"}
+	got := stripUpdateArguments([]string{"gitmessages-cli", "--update", "yes", "--server", "https://example.test", "--update=check", "messages", "list", "--maintenance", "update", "--output", "json"})
+	want := []string{"gitmessages-cli", "--server", "https://example.test", "messages", "list", "--output", "json"}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("stripUpdateArguments() = %#v, want %#v", got, want)
 	}

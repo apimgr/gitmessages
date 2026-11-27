@@ -1623,10 +1623,13 @@ func TestPublicPagesHaveNavigationAndMainLandmarks(t *testing.T) {
 func TestPagesUseExternalStylesheetAndRestrictiveCSP(t *testing.T) {
 	response := httptest.NewRecorder()
 	Handler("test-version").ServeHTTP(response, webTestRequest(http.MethodGet, "/", nil))
-	for _, name := range []string{"common.css", "components.css", "public.css"} {
+	for _, name := range []string{"common.css", "public.css"} {
 		if !bytes.Contains(response.Body.Bytes(), []byte(`<link rel="stylesheet" href="/static/css/`+name+`?v=test-version-unknown">`)) {
 			t.Errorf("page does not link the %s stylesheet", name)
 		}
+	}
+	if !bytes.Contains(response.Body.Bytes(), []byte(`/static/css/components.css?v=test-version-unknown-3-5`)) || !bytes.Contains(response.Body.Bytes(), []byte(`data-toast-duration="3" data-toast-warning-duration="5"`)) || !bytes.Contains(response.Body.Bytes(), []byte(`id="toast-container"`)) {
+		t.Fatal("page did not expose configured toast timing and the toast container")
 	}
 	if bytes.Contains(response.Body.Bytes(), []byte("<style")) {
 		t.Fatal("page contains inline CSS")
@@ -1634,6 +1637,21 @@ func TestPagesUseExternalStylesheetAndRestrictiveCSP(t *testing.T) {
 	policy := response.Header().Get("Content-Security-Policy")
 	if strings.Contains(policy, "unsafe-inline") || !strings.Contains(policy, "style-src 'self'") || !strings.Contains(policy, "font-src 'self' data: https:") {
 		t.Fatalf("CSP does not match the required style and font policy: %q", policy)
+	}
+}
+
+func TestToastStylesheetUsesConfiguredDurations(t *testing.T) {
+	handler := Handler("test-version")
+	request := webTestRequest(http.MethodGet, "/static/css/components.css?v=test-version-unknown-3-5", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	for _, value := range []string{"--toast-duration: 3s", "--toast-duration-warning: 5s", "#toast-container[data-position=\"bottom-left\"]"} {
+		if !strings.Contains(response.Body.String(), value) {
+			t.Errorf("toast stylesheet omitted %q", value)
+		}
+	}
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Fatalf("versioned toast stylesheet response = %d Cache-Control=%q", response.Code, response.Header().Get("Cache-Control"))
 	}
 }
 

@@ -39,6 +39,9 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.Server.Notifications.DiskLow.Enabled || cfg.Server.Notifications.DiskLow.ThresholdPercent != 85 || cfg.Server.Notifications.DiskLow.Repeat != "24h" {
 		t.Errorf("disk-low notification defaults do not match the service defaults: %+v", cfg.Server.Notifications.DiskLow)
 	}
+	if cfg.Server.Notifications.WebUI.Position != "top-right" || cfg.Server.Notifications.WebUI.Duration != 3 || cfg.Server.Notifications.WebUI.WarningDuration != 5 {
+		t.Errorf("web notification defaults do not match the page contract: %+v", cfg.Server.Notifications.WebUI)
+	}
 	if cfg.Server.Maintenance.SelfHealing.RetryInterval != "30s" || cfg.Server.Maintenance.SelfHealing.MaxAttempts != 0 || cfg.Server.Maintenance.Cleanup.DiskThreshold != 90 || cfg.Server.Maintenance.Cleanup.LogRetentionDays != 7 || !cfg.Server.Maintenance.Notify.OnEnter || !cfg.Server.Maintenance.Notify.OnExit {
 		t.Errorf("maintenance defaults do not match the server recovery contract: %+v", cfg.Server.Maintenance)
 	}
@@ -1144,6 +1147,21 @@ func TestValidationFallsBackForInvalidValues(t *testing.T) {
 		{"i2p", func(cfg *Config) { cfg.Server.I2P.SignatureType = 0 }, func(t *testing.T, cfg *Config) {
 			if cfg.Server.I2P.SignatureType != 7 {
 				t.Fatal("invalid I2P config did not reset")
+			}
+		}},
+		{"toast duration", func(cfg *Config) { cfg.Server.Notifications.WebUI.Duration = -1 }, func(t *testing.T, cfg *Config) {
+			if cfg.Server.Notifications.WebUI.Duration != 3 {
+				t.Fatal("invalid toast duration did not reset")
+			}
+		}},
+		{"toast warning duration", func(cfg *Config) { cfg.Server.Notifications.WebUI.WarningDuration = -1 }, func(t *testing.T, cfg *Config) {
+			if cfg.Server.Notifications.WebUI.WarningDuration != 5 {
+				t.Fatal("invalid warning toast duration did not reset")
+			}
+		}},
+		{"toast position", func(cfg *Config) { cfg.Server.Notifications.WebUI.Position = "center" }, func(t *testing.T, cfg *Config) {
+			if cfg.Server.Notifications.WebUI.Position != "top-right" {
+				t.Fatal("invalid toast position did not reset")
 			}
 		}},
 	}

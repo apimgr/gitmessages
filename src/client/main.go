@@ -14,16 +14,19 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/apimgr/gitmessages/src/common/display"
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/messages"
 	projectpaths "github.com/apimgr/gitmessages/src/paths"
 	"github.com/apimgr/gitmessages/src/update"
+	"github.com/mattn/go-runewidth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -55,7 +58,11 @@ var apiToken string
 
 type clientConfig struct {
 	Language string `yaml:"language"`
-	Display  struct {
+	Output   struct {
+		Format string `yaml:"format"`
+		Color  any    `yaml:"color"`
+	} `yaml:"output"`
+	Display struct {
 		Mode string `yaml:"mode"`
 	} `yaml:"display"`
 	Server struct {
@@ -93,15 +100,16 @@ func run(args []string) error {
 	tokenFlag := flags.String("token", "", "API bearer token")
 	configFlag := flags.String("config", "", "Configuration profile or file path")
 	languageFlag := flags.String("lang", "", "Language for output")
-	jsonOutput := flags.Bool("json", false, "Print the API response as JSON")
+	outputFlag := flags.String("output", "", "Output format: json, table, or plain")
 	versionFlag := flags.Bool("version", false, "Print version")
 	flags.BoolVar(versionFlag, "v", false, "Print version")
 	helpFlag := flags.Bool("help", false, "Print help")
 	flags.BoolVar(helpFlag, "h", false, "Print help")
 	debugFlag := flags.Bool("debug", false, "Print API requests to stderr")
 	updateFlag := flags.String("update", "", "Check for or install a CLI update: check, yes")
-	colorFlag := flags.String("color", "auto", "Color output: auto, yes, no")
+	colorFlag := flags.String("color", "", "Color output: auto, yes, no")
 	shellFlag := flags.String("shell", "", "Print shell completions or shell initialization")
+	args = moveClientGlobalFlags(args, "--output", "--color")
 	if err := flags.Parse(args); err != nil {
 		return fmt.Errorf("%s: %w", binary, err)
 	}
@@ -109,13 +117,26 @@ func run(args []string) error {
 	if *updateFlag != "" && *updateFlag != "check" && *updateFlag != "yes" {
 		return errors.New("invalid --update value: expected check or yes")
 	}
-	if *colorFlag != "auto" && *colorFlag != "yes" && *colorFlag != "no" {
+	if *colorFlag != "" && !validColorMode(*colorFlag) {
 		return fmt.Errorf("invalid --color value %q: expected auto, yes, or no", *colorFlag)
 	}
+	if *outputFlag != "" && !validOutputFormat(*outputFlag) {
+		return fmt.Errorf("invalid --output value %q: expected json, table, or plain", *outputFlag)
+	}
 	displayEnvironment := display.DetectDisplayEnv()
-	if display.ColorEnabled(&displayEnvironment, *colorFlag) {
+	configProfile = strings.TrimSpace(*configFlag)
+	config, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	colorMode := firstNonEmpty(*colorFlag, os.Getenv("GITMESSAGES_OUTPUT_COLOR"), configuredColor(config.Output.Color), "auto")
+	if !validColorMode(colorMode) {
+		return fmt.Errorf("invalid output color mode %q: expected auto, yes, or no", colorMode)
+	}
+	colorEnabled := display.ColorEnabled(&displayEnvironment, colorMode)
+	if colorEnabled && colorMode == "yes" {
 		_ = os.Unsetenv("NO_COLOR")
-	} else {
+	} else if colorMode == "no" {
 		_ = os.Setenv("NO_COLOR", "1")
 	}
 	if *shellFlag != "" {
@@ -125,7 +146,6 @@ func run(args []string) error {
 		printVersion(binary)
 		return nil
 	}
-	configProfile = strings.TrimSpace(*configFlag)
 	if previous := os.Getenv("GITMESSAGES_CLI_UPDATE_FROM"); previous != "" {
 		recordCLIAudit("cli.update_completed", map[string]string{"old_version": previous, "new_version": os.Getenv("GITMESSAGES_CLI_UPDATE_TO"), "os_arch": runtime.GOOS + "-" + runtime.GOARCH})
 		_ = os.Unsetenv("GITMESSAGES_CLI_UPDATE_FROM")
@@ -135,11 +155,11 @@ func run(args []string) error {
 		return err
 	}
 
-	config, err := loadConfig()
-	if err != nil {
-		return err
-	}
 	lang := selectLanguage(*languageFlag, config.Language)
+	outputFormat := firstNonEmpty(*outputFlag, os.Getenv("GITMESSAGES_OUTPUT_FORMAT"), config.Output.Format, "table")
+	if !validOutputFormat(outputFormat) {
+		return fmt.Errorf("invalid output format %q: expected json, table, or plain", outputFormat)
+	}
 	apiToken = strings.TrimSpace(config.Server.Token)
 	if *tokenFlag != "" {
 		apiToken = strings.TrimSpace(*tokenFlag)
@@ -219,7 +239,7 @@ func run(args []string) error {
 	}
 	command := flags.Arg(0)
 	if command == "build" {
-		return runBuild(server, flags.Args()[1:], *jsonOutput, lang)
+		return runBuild(server, flags.Args()[1:], outputFormat, colorEnabled, lang)
 	}
 	path, ok := paths[command]
 	if !ok {
@@ -229,25 +249,11 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *jsonOutput {
-		_, err = os.Stdout.Write(append(data, '\n'))
+	formatted, err := formatClientOutputWithColor(data, outputFormat, colorEnabled)
+	if err != nil {
 		return err
 	}
-	if command == "random" {
-		var result struct {
-			Message string `json:"message"`
-		}
-		if err := json.Unmarshal(data, &result); err != nil {
-			return err
-		}
-		fmt.Println(result.Message)
-		return nil
-	}
-	var formatted bytes.Buffer
-	if err := json.Indent(&formatted, data, "", "  "); err != nil {
-		return err
-	}
-	_, err = fmt.Fprintln(os.Stdout, formatted.String())
+	_, err = os.Stdout.Write(append(bytes.TrimRight(formatted, "\n"), '\n'))
 	return err
 }
 
@@ -259,7 +265,7 @@ func printVersion(binary string) {
 	fmt.Printf("%s %s (%s)\nBuilt: %s\nGo: %s\nOS/Arch: %s/%s\n", binary, Version, CommitID, clientBuildDate(), runtime.Version(), runtime.GOOS, runtime.GOARCH)
 }
 
-func runBuild(server string, args []string, jsonOutput bool, lang string) error {
+func runBuild(server string, args []string, outputFormat string, colorEnabled bool, lang string) error {
 	flags := flag.NewFlagSet("build", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	kind := flags.String("type", "", "Commit type")
@@ -283,18 +289,246 @@ func runBuild(server string, args []string, jsonOutput bool, lang string) error 
 	if err != nil {
 		return err
 	}
-	if jsonOutput {
-		_, err = os.Stdout.Write(append(data, '\n'))
+	formatted, err := formatClientOutputWithColor(data, outputFormat, colorEnabled)
+	if err != nil {
 		return err
 	}
-	var result struct {
-		Message string `json:"message"`
+	_, err = os.Stdout.Write(append(bytes.TrimRight(formatted, "\n"), '\n'))
+	return err
+}
+
+func validOutputFormat(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "json", "table", "plain":
+		return true
+	default:
+		return false
 	}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return err
+}
+
+func moveClientGlobalFlags(args []string, names ...string) []string {
+	global := make([]string, 0, len(names)*2)
+	remaining := make([]string, 0, len(args))
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		matched := false
+		for _, name := range names {
+			if argument == name {
+				matched = true
+				global = append(global, argument)
+				if index+1 < len(args) {
+					index++
+					global = append(global, args[index])
+				}
+				break
+			}
+			if strings.HasPrefix(argument, name+"=") {
+				matched = true
+				global = append(global, argument)
+				break
+			}
+		}
+		if !matched {
+			remaining = append(remaining, argument)
+		}
 	}
-	fmt.Println(result.Message)
-	return nil
+	return append(global, remaining...)
+}
+
+func validColorMode(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "auto", "yes", "no":
+		return true
+	default:
+		return false
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func formatClientOutput(data []byte, format string) ([]byte, error) {
+	return formatClientOutputWithColor(data, format, false)
+}
+
+func formatClientOutputWithColor(data []byte, format string, colorEnabled bool) ([]byte, error) {
+	if !validOutputFormat(format) {
+		return nil, fmt.Errorf("unsupported output format %q", format)
+	}
+	format = strings.ToLower(strings.TrimSpace(format))
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return nil, fmt.Errorf("decode response for %s output: %w", format, err)
+	}
+	if format == "json" {
+		return json.MarshalIndent(value, "", "  ")
+	}
+	if object, ok := value.(map[string]any); ok {
+		if message, ok := object["message"].(string); ok {
+			value = message
+		}
+	}
+	if format == "plain" {
+		return []byte(plainClientOutput(value)), nil
+	}
+	return tableClientOutput(value, colorEnabled)
+}
+
+func plainClientOutput(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return safeClientText(typed, true)
+	case []any:
+		lines := make([]string, 0, len(typed))
+		for _, item := range typed {
+			lines = append(lines, plainClientOutput(item))
+		}
+		return strings.Join(lines, "\n")
+	case map[string]any:
+		if message, ok := typed["message"].(string); ok {
+			return safeClientText(message, true)
+		}
+		keys := sortedMapKeys(typed)
+		lines := make([]string, 0, len(keys))
+		for _, key := range keys {
+			lines = append(lines, safeClientText(key, false)+"\t"+clientCell(typed[key]))
+		}
+		return strings.Join(lines, "\n")
+	default:
+		encoded, _ := json.Marshal(value)
+		return string(encoded)
+	}
+}
+
+func tableClientOutput(value any, colorEnabled bool) ([]byte, error) {
+	rows, ok := value.([]any)
+	if !ok {
+		if object, objectOK := value.(map[string]any); objectOK {
+			rows = make([]any, 0, len(object))
+			for _, key := range sortedMapKeys(object) {
+				rows = append(rows, map[string]any{"field": key, "value": object[key]})
+			}
+		} else {
+			return []byte(plainClientOutput(value)), nil
+		}
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	columns := make([]string, 0)
+	seen := make(map[string]bool)
+	for _, row := range rows {
+		if object, ok := row.(map[string]any); ok {
+			for _, key := range sortedMapKeys(object) {
+				if !seen[key] {
+					seen[key] = true
+					columns = append(columns, key)
+				}
+			}
+		}
+	}
+	if len(columns) == 0 {
+		return []byte(plainClientOutput(value)), nil
+	}
+	widths := make([]int, len(columns))
+	for index, column := range columns {
+		widths[index] = runewidth.StringWidth(strings.ToUpper(safeClientText(column, false)))
+	}
+	for _, row := range rows {
+		object, ok := row.(map[string]any)
+		if !ok {
+			continue
+		}
+		for index, column := range columns {
+			if width := runewidth.StringWidth(clientCell(object[column])); width > widths[index] {
+				widths[index] = width
+			}
+		}
+	}
+	var output bytes.Buffer
+	writeBorder := func(left, middle, right, horizontal string) {
+		output.WriteString(left)
+		for index, width := range widths {
+			if index > 0 {
+				output.WriteString(middle)
+			}
+			output.WriteString(strings.Repeat(horizontal, width+2))
+		}
+		output.WriteString(right + "\n")
+	}
+	writeRow := func(values []string) {
+		output.WriteString("│")
+		for index, value := range values {
+			output.WriteString(" " + value + strings.Repeat(" ", widths[index]-runewidth.StringWidth(value)+1) + "│")
+		}
+		output.WriteByte('\n')
+	}
+	writeBorder("┌", "┬", "┐", "─")
+	headers := make([]string, len(columns))
+	for index, column := range columns {
+		headers[index] = strings.ToUpper(safeClientText(column, false))
+	}
+	writeRow(headers)
+	writeBorder("├", "┼", "┤", "─")
+	for _, row := range rows {
+		object, ok := row.(map[string]any)
+		if !ok {
+			continue
+		}
+		values := make([]string, len(columns))
+		for index, column := range columns {
+			values[index] = clientCell(object[column])
+		}
+		writeRow(values)
+	}
+	writeBorder("└", "┴", "┘", "─")
+	result := output.Bytes()
+	if colorEnabled {
+		lines := bytes.Split(result, []byte("\n"))
+		if len(lines) > 2 {
+			lines[1] = []byte("\x1b[1;36m" + string(lines[1]) + "\x1b[0m")
+		}
+		result = bytes.Join(lines, []byte("\n"))
+	}
+	return bytes.TrimRight(result, "\n"), nil
+}
+
+func sortedMapKeys(values map[string]any) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func clientCell(value any) string {
+	if text, ok := value.(string); ok {
+		return safeClientText(text, false)
+	}
+	encoded, _ := json.Marshal(value)
+	return safeClientText(string(encoded), false)
+}
+
+func safeClientText(value string, preserveNewlines bool) string {
+	return strings.Map(func(character rune) rune {
+		if character == '\n' && preserveNewlines {
+			return character
+		}
+		if unicode.IsControl(character) {
+			if character == '\t' {
+				return ' '
+			}
+			return -1
+		}
+		return character
+	}, value)
 }
 
 func request(server, method, path string, payload []byte, lang string) ([]byte, error) {
@@ -568,10 +802,31 @@ func loadConfig() (*clientConfig, error) {
 	if config.Display.Mode != "" && config.Display.Mode != "auto" && config.Display.Mode != "gui" && config.Display.Mode != "tui" {
 		return nil, fmt.Errorf("invalid client display.mode %q: expected auto, gui, or tui", config.Display.Mode)
 	}
+	if config.Output.Format != "" && !validOutputFormat(config.Output.Format) {
+		return nil, fmt.Errorf("invalid client output.format %q: expected json, table, or plain", config.Output.Format)
+	}
+	if config.Output.Color != nil && configuredColor(config.Output.Color) == "" {
+		return nil, fmt.Errorf("invalid client output.color %v: expected boolean or auto, yes, or no", config.Output.Color)
+	}
 	if config.Language != "" && !i18n.IsSupported(normalizeLanguage(config.Language)) {
 		return nil, fmt.Errorf("unsupported language in client config: %q", config.Language)
 	}
 	return config, nil
+}
+
+func configuredColor(value any) string {
+	switch typed := value.(type) {
+	case bool:
+		if typed {
+			return "yes"
+		}
+		return "no"
+	case string:
+		if validColorMode(typed) {
+			return strings.ToLower(strings.TrimSpace(typed))
+		}
+	}
+	return ""
 }
 
 func saveConfig(config *clientConfig) error {
@@ -733,7 +988,7 @@ func printUsage(binary, lang string) {
 	fmt.Printf(`%s %s
 
 %s:
-%s [--server URL] [--token TOKEN] [--config PROFILE|PATH] [--lang CODE] [--json] [--update check|yes] <command>
+%s [--server URL] [--token TOKEN] [--config PROFILE|PATH] [--lang CODE] [--output json|table|plain] [--color auto|yes|no] [--update check|yes] <command>
 
 %s:
   types         %s

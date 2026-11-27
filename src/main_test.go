@@ -50,6 +50,110 @@ func TestConfigureOutputFallsBackToEnglish(t *testing.T) {
 	}
 }
 
+func TestCheckHealthReportsI2PLifecycleState(t *testing.T) {
+	t.Setenv("GITMESSAGES_LANG", "en")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/server/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, `{"status":"healthy","mode":"production","uptime":"2d 5h","features":{"tor":{"enabled":true,"running":true,"circuit_established":true,"hostname":"example.onion"},"i2p":{"enabled":true,"running":true,"state":"running","provider":"i2pd","address":"example.b32.i2p"}}}`)
+	}))
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	checkErr := checkHealth(port)
+	_ = writer.Close()
+	os.Stdout = originalStdout
+	output, readErr := io.ReadAll(reader)
+	_ = reader.Close()
+	if checkErr != nil || readErr != nil {
+		t.Fatalf("checkHealth() = %v, read output: %v", checkErr, readErr)
+	}
+	for _, expected := range []string{"Server Status: Running", "Uptime: 2 days 5 hours", "Tor Hidden Service: Connected", "I2P Eepsite: running (i2pd)", "Address: example.b32.i2p"} {
+		if !strings.Contains(string(output), expected) {
+			t.Errorf("status output %q omitted %q", output, expected)
+		}
+	}
+}
+
+func TestHumanStatusUptime(t *testing.T) {
+	for _, test := range []struct{ input, want string }{
+		{"2d 5h", "2 days 5 hours"},
+		{"1h 1m", "1 hour 1 minute"},
+		{"30s", "30 seconds"},
+		{"unknown-value", "unknown-value"},
+		{"", "Unavailable"},
+	} {
+		if got := humanStatusUptime(test.input, "en"); got != test.want {
+			t.Errorf("humanStatusUptime(%q) = %q, want %q", test.input, got, test.want)
+		}
+	}
+}
+
+func TestStatusTranslationsExistForEveryLocale(t *testing.T) {
+	keys := []string{"cli.status.server", "cli.status.port", "cli.status.tor", "cli.status.i2p", "cli.status.address", "cli.status.connected", "cli.status.disconnected", "cli.status.health_failed", "cli.status.health_unavailable", "cli.status.day", "cli.status.days", "cli.status.hour", "cli.status.hours", "cli.status.minute", "cli.status.minutes", "cli.status.second", "cli.status.seconds"}
+	for _, language := range i18n.Supported() {
+		for _, key := range keys {
+			if got := i18n.T(language, key); got == key {
+				t.Errorf("locale %s is missing %s", language, key)
+			}
+		}
+	}
+}
+
+func TestSafeStatusTextRemovesTerminalControls(t *testing.T) {
+	if got := safeStatusText("status\x1b[2J\x07\nnext\tvalue"); got != "status[2Jnext value" {
+		t.Fatalf("safeStatusText() = %q", got)
+	}
+}
+
+func TestCheckHealthReportsUnhealthyReason(t *testing.T) {
+	t.Setenv("GITMESSAGES_LANG", "en")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, `{"status":"unhealthy","checks":{"database":"error"}}`)
+	}))
+	defer server.Close()
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = checkHealth(port)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 503") || !strings.Contains(err.Error(), "database") || !strings.Contains(err.Error(), "Error") {
+		t.Fatalf("checkHealth() error = %v, want HTTP status and translated health reason", err)
+	}
+}
+
+func TestCheckHealthAcceptsDegradedServingStatus(t *testing.T) {
+	t.Setenv("GITMESSAGES_LANG", "en")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"status":"degraded","mode":"production","uptime":"1m","features":{"tor":{"enabled":true,"running":false,"status":"unavailable"}},"checks":{"tor":"degraded"}}`)
+	}))
+	defer server.Close()
+	_, port, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkHealth(port); err != nil {
+		t.Fatalf("checkHealth() rejected a serving degraded status: %v", err)
+	}
+}
+
 func TestConfigureOutputRejectsUnknownColor(t *testing.T) {
 	if err := configureOutput("invalid", "en"); err == nil {
 		t.Fatal("unsupported color mode was accepted")
@@ -865,7 +969,8 @@ func TestCheckHealth(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"status":"healthy","mode":"production","uptime":"0s","features":{}}`)
 	}))
 	defer srv.Close()
 

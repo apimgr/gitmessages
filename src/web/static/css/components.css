@@ -21,6 +21,75 @@ article,
   border-radius: .5rem;
 }
 
+#toast-container {
+  position: fixed;
+  top: max(1rem, env(safe-area-inset-top));
+  right: max(1rem, env(safe-area-inset-right));
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  max-height: calc(100dvh - 2rem);
+  overflow: hidden;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  min-width: min(300px, calc(100vw - 2rem));
+  max-width: min(400px, calc(100vw - 2rem));
+  padding: .75rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text);
+  background: var(--color-bg-secondary);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 15%);
+  opacity: 0;
+  transform: translateX(1rem);
+  transition: opacity .2s ease, transform .2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.toast-visible { opacity: 1; transform: translateX(0); }
+.toast-success { border-color: var(--color-success); }
+.toast-error { border-color: var(--color-error); }
+.toast-warning { border-color: var(--color-warning); }
+.toast-info { border-color: var(--color-accent); }
+.toast-icon, .toast-close { flex: 0 0 auto; }
+.toast-message { flex: 1 1 auto; overflow-wrap: anywhere; }
+.toast-close { padding: .1rem .4rem; }
+
+.toast-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  width: 100%;
+  background: currentColor;
+  transform-origin: left;
+  animation: toast-countdown linear forwards;
+}
+
+:root {
+  --toast-duration: 3s;
+  --toast-duration-warning: 5s;
+}
+
+.toast-success .toast-progress,
+.toast-info .toast-progress { animation-duration: var(--toast-duration, 3s); }
+.toast-warning .toast-progress { animation-duration: var(--toast-duration-warning, 5s); }
+#toast-container[data-position="top-left"] { right: auto; left: max(1rem, env(safe-area-inset-left)); }
+#toast-container[data-position="bottom-right"] { top: auto; bottom: max(1rem, env(safe-area-inset-bottom)); }
+#toast-container[data-position="bottom-left"] { top: auto; right: auto; bottom: max(1rem, env(safe-area-inset-bottom)); left: max(1rem, env(safe-area-inset-left)); }
+@keyframes toast-countdown { to { transform: scaleX(0); } }
+.toast:hover .toast-progress { animation-play-state: paused; }
+
+@media (prefers-reduced-motion: reduce) {
+  .toast { transition: none; }
+}
+
 .code-block-multi {
   margin: 1rem 0;
   border: 1px solid var(--color-border);
