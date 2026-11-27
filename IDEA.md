@@ -147,7 +147,7 @@ No third-party content providers supply catalog or message data. AI.md-required 
 | GET | `/api/{api_version}/server/dpo` | None | Privacy contact information |
 | GET | `/api/{api_version}/server/security/policy` | None | Security disclosure policy |
 | GET | `/api/{api_version}/server/security/thanks` | None | Public researcher acknowledgments |
-| POST | `/api/{api_version}/server/mcp`, `/api/mcp`, `/mcp` | Owner or operator Bearer token | MCP JSON-RPC tools for public catalog reads and stateless message building |
+| POST | `/api/{api_version}/server/mcp`, `/api/mcp`, `/mcp` | Owner, linked, or operator Bearer token | MCP JSON-RPC tools for the API operations allowed by the caller's token scope, including configured contact-report submission |
 | POST | `/api/graphql`, `/api/{api_version}/server/graphql` | None | Read the catalog or statelessly build a commit message |
 
 All listed API routes accept JSON by default. The GET resources and server pages also support plain text through their `.txt` form or `Accept: text/plain`; the message builder accepts JSON or form-compatible browser input. `/api/swagger` is a compatibility alias for the OpenAPI document. `/.well-known/security.txt` is a public metadata file, not an API route.

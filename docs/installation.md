@@ -37,7 +37,7 @@ Run the published image with persistent configuration and data directories:
 ```sh
 mkdir -p ./volumes/config ./volumes/data
 docker run -d --name gitmessages --restart unless-stopped \
-  -p 127.0.0.1:8080:80 \
+  -p 172.17.0.1:64580:80 \
   -v "$PWD/volumes/config:/config" \
   -v "$PWD/volumes/data:/data" \
   ghcr.io/apimgr/gitmessages:latest

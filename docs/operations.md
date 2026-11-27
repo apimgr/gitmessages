@@ -17,15 +17,15 @@ gitmessages --maintenance backup --include-ssl --include-data
 gitmessages --maintenance backup test
 ```
 
-Without a filename, the server creates a timestamped archive in its configured backup directory. Use `--include-ssl` to add the full SSL directory and `--include-data` to add the data directory. Every SQLite backup includes `server.yml`, `server.db`, existing configuration directories, and any referenced cache TLS CA/client-certificate files. Sensitive archives may contain credentials, owner-token material, encryption keys, reports, and private configuration; keep them access-controlled and outside public web roots.
+Without a filename, the server creates a timestamped archive in its configured backup directory. Use `--include-ssl` to add the full SSL directory and `--include-data` to add the data directory. Backups always include `app_secrets.json` with every application secret row and an `info` file naming the configured database driver. SQLite backups also include `server.db`; remote libSQL/Turso backups do not include the remote database or the local read cache. Sensitive archives may contain credentials, owner-token material, encryption keys, reports, and private configuration; keep them access-controlled and outside public web roots.
 
-Remote libSQL backup and restore are currently unavailable. The CLI stops with an explicit error instead of operating on a local SQLite file.
+Remote libSQL/Turso backup exports application secrets while leaving the remote database to its provider backup. Restore to a remote database applies archived secrets only when its `app_secrets` table has no rows. Existing remote data is left in place. A SQLite archive seeds a remote database only when that database has no application data; otherwise its rows are left unchanged. The local cache is never restored from or included in an archive.
 
 Disaster-recovery restore enforces the configured archive size, total expanded size, file count, and per-file size limits. It does not apply a compression-ratio limit. Archive imports are not available in this product.
 
 For remote libSQL, `server.database.cache.enabled` maintains a local SQLite read cache at `server.database.cache.path`. The cache is refreshed on startup, after successful remote writes, and at `sync_interval`. When `offline_mode` is enabled, an unavailable remote can use only a cache refreshed within `max_age`; this mode is read-only. The cache contains a replica of database records and should be protected like the remote database. It is a performance/offline cache, not a backup.
 
-Archives use `.tar.gz`; when `server.backup.encryption_password` is set, they use `.tar.gz.enc` and AES-256-GCM encryption. Compliance mode requires that password before backups can run. Store the password separately from the archive. `backup test [file]` verifies an archive without restoring it; when the file is omitted, the server selects the full backup with the latest UTC date in its filename, breaking date ties by file modification time. If no full backup exists, it reports that no full backup archive was found. The encrypted manifest is not read to select an archive; an explicitly selected incremental is verified together with its base.
+Archives use `.tar.gz`; when `server.backup.encryption_password` is set, they use `.tar.gz.enc` and AES-256-GCM encryption. Compliance mode requires that password before backups can run. Store the password separately from the archive. `backup test [file]` verifies an archive without restoring it; when the file is omitted, it selects the newest full or incremental archive by the UTC date in its filename, breaking date ties by file modification time. An explicitly selected incremental is verified together with its base.
 
 Restore an archive from the server host:
 
@@ -36,7 +36,7 @@ gitmessages --maintenance restore
 
 When the file is omitted, the server selects the full backup with the latest UTC date in its filename, breaking date ties by file modification time, and asks you to type `RESTORE`. It does not select an incremental archive by default. Encrypted archives prompt for their backup password. Restore is destructive and requires the configured operator authorization when running as the service account; a root-run restore requires confirmation. A restore is checked before files are replaced. For an explicitly selected incremental archive, keep its full base archive in the same directory.
 
-The built-in scheduler performs the daily full and incremental SQLite backup work. It also applies the configured retention policy and skips scheduled backups when the disk threshold is exceeded. Configure schedules, backup location, retention, encryption, and restore size limits as described in [Configuration](configuration.md#scheduler) and its backup settings. Scheduled backups are unavailable when the server uses remote libSQL.
+The built-in scheduler performs daily full and incremental SQLite backups. For remote libSQL/Turso, it exports application secrets without copying the database. It also applies the configured retention policy and skips scheduled backups when the disk threshold is exceeded. Configure schedules, backup location, retention, encryption, and restore size limits as described in [Configuration](configuration.md#scheduler) and its backup settings.
 
 ## Scheduled maintenance
 

@@ -55,6 +55,8 @@ Download the server binary for your operating system from [GitHub Releases](http
 
 ### Run the server
 
+For a local development server, run:
+
 ```sh
 gitmessages --port 8080 --address 127.0.0.1
 ```
@@ -69,7 +71,7 @@ Maintenance commands cover backup and restore, updates, server mode and setup, O
 
 Install `gitmessages-cli` from the same release as the server. The default CLI is a static command-line and terminal interface; with no configured server, it provides a first-run connection flow. Optional `gitmessages-cli-gui-{os}-{arch}` release artifacts enable the native desktop GUI on Linux, macOS, and Windows and require the toolchain's system loader. BSD builds use the terminal interface. Select `display.mode` as `auto`, `gui`, or `tui` in `cli.yml`; without the optional GUI build, automatic mode selects the TUI when a terminal is available.
 
-The CLI uses `--server`, `GITMESSAGES_SERVER_PRIMARY`, or its user configuration at `~/.config/apimgr/gitmessages/cli.yml`.
+The CLI uses `--server`, `GITMESSAGES_SERVER_PRIMARY`, or its user configuration at `~/.config/apimgr/gitmessages/cli.yml`. These examples connect to a local development server.
 
 ```sh
 gitmessages-cli --server http://127.0.0.1:8080 types
@@ -102,7 +104,7 @@ curl -q -LSsf "$SERVER_URL/api/$API_VERSION/messages" \
 
 
 
-The active API version and available CLI updates are published by `GET /api/autodiscover`. Operators can provision CLI release assets in `{data_dir}/cli/`; the server verifies each SHA-256 before advertising it, and the CLI can check and install updates over HTTPS. OpenAPI JSON is served at `/api/{api_version}/server/swagger` (also `/api/swagger`). GraphQL accepts POST requests at `/api/{api_version}/server/graphql` and `/api/graphql`. MCP Streamable HTTP accepts JSON-RPC POST requests at `/api/{api_version}/server/mcp` (also `/api/mcp` and `/mcp`) and requires an owner or operator Bearer token. See the [API reference](docs/api.md) and [CLI reference](docs/cli.md).
+The active API version and available CLI updates are published by `GET /api/autodiscover`. Operators can provision CLI release assets in `{data_dir}/cli/`; the server verifies each SHA-256 before advertising it, and the CLI can check and install updates over HTTPS. OpenAPI JSON is served at `/api/{api_version}/server/swagger` (also `/api/swagger`). GraphQL accepts POST requests at `/api/{api_version}/server/graphql` and `/api/graphql`. MCP Streamable HTTP accepts JSON-RPC POST requests at `/api/{api_version}/server/mcp` (also `/api/mcp` and `/mcp`) and requires an owner, linked, or operator Bearer token. See the [API reference](docs/api.md) and [CLI reference](docs/cli.md).
 
 ## Other
 
@@ -112,8 +114,9 @@ The active API version and available CLI updates are published by `GET /api/auto
 - `/types` — commit type reference
 - `/templates` — message templates
 - `/builder` — interactive commit message builder
-- `/server/about`, `/server/help`, `/server/healthz`, `/server/privacy`, `/server/terms`, `/server/security`, `/server/security/policy`, `/server/security/thanks`, `/server/dpo` — server information and reporting pages
+- `/server/about`, `/server/help`, `/server/healthz`, `/server/privacy`, `/server/terms`, `/server/security`, `/server/security/policy`, `/server/security/thanks`, `/server/security/report/{id}`, `/server/dpo` — server information, reporting, and report-status pages
 - `/server/contact` and `/.well-known/security.txt` — configured contact and security-report entry points
+- `/server/preferences` — browser theme, language, consent, and application preferences; consent choices submit to the `/server/consent` form endpoint
 - `/server/preferences/tokens` — anonymous owner token management
 - `/server/preferences/sync` — export and import browser preferences between devices
 - `/server/metrics[/{service}]` — internal service metrics, protected by per-service Bearer tokens
@@ -123,7 +126,7 @@ The active API version and available CLI updates are published by `GET /api/auto
 - `/robots.txt` and `/sitemap.xml` — crawler rules and public HTML page discovery
 - `/feed.xml` (Atom) and `/rss.xml` (RSS) — valid empty feeds; the product has no public item resource
 
-## Security and privacy
+### Security and privacy
 
 The catalog is embedded and user-submitted commit messages or conventions are not accepted. Contact and security reports follow the configured validation, encryption, access, and retention rules. Builder fields are validated on the server. Browser preference cookies and optional analytics follow the visitor's cookie choices; `Sec-GPC: 1` and, when configured, `DNT: 1` disable nonessential cookies and analytics. Public endpoints include security headers, CORS, request size limits, and per-client rate limiting. Tor and I2P provide alternate access. The service does not query third-party providers for catalog or message data; it can fetch operational security and GeoIP datasets from configured sources. Tor starts when its binary is available. I2P is opt-in on bare metal and in VMs and enabled by default in containers.
 

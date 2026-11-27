@@ -37,6 +37,10 @@ For a new language, add a complete `{lang}.json` locale with its metadata, direc
 
 For an existing locale, update only that language's file alongside the English key change. Keep all other locales in sync and update `meta.translators` when translators request credit.
 
+## Translator credits
+
+Contributors who request public credit are listed in the corresponding locale's `meta.translators` field and in this section. No individual contributor names are currently recorded in the shipped locale metadata.
+
 ## Review checklist
 
 - Verify keys, placeholders, plural categories, and values with `make test` in the Go toolchain container.

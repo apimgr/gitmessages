@@ -4,7 +4,7 @@ Git Messages does not query third-party content providers for catalog or message
 
 ## HTTP clients
 
-Any HTTP client can use the public catalog REST API. The companion CLI uses the configured server and sends a project-specific User-Agent. OpenAPI JSON is available at `/api/{api_version}/server/swagger`; GraphQL accepts POST requests at `/api/{api_version}/server/graphql` and `/api/graphql`; MCP Streamable HTTP is available at `/api/{api_version}/server/mcp` and the `/api/mcp` and `/mcp` aliases and requires an owner or operator Bearer token. Health is available at `/api/{api_version}/server/healthz` and its direct `/api/healthz` alias. The optional `/healthz` alias is disabled by default and enabled with `server.healthz.root.enabled`.
+Any HTTP client can use the public catalog REST API. The companion CLI uses the configured server and sends a project-specific User-Agent. OpenAPI JSON is available at `/api/{api_version}/server/swagger`; GraphQL accepts POST requests at `/api/{api_version}/server/graphql` and `/api/graphql`; MCP Streamable HTTP is available at `/api/{api_version}/server/mcp` and the `/api/mcp` and `/mcp` aliases and requires an owner, linked, or operator Bearer token. Health is available at `/api/{api_version}/server/healthz` and its direct `/api/healthz` alias. The optional `/healthz` alias is disabled by default and enabled with `server.healthz.root.enabled`.
 
 `GET /api/autodiscover` returns the active API version, public origins, exposed overlay addresses, CLI versions with verified SHA-256 checksums, and the minimum accepted CLI version. The CLI binaries are provisioned by the operator in `{data_dir}/cli/` and downloaded from `/cli/binaries/{project_name}-cli-{os}-{arch}[.exe]`; downloads are public unless `cli.binary_download.require_auth` is enabled. The CLI checks for updates on each invocation and installs only over HTTPS after checksum verification. See [API autodiscovery](api.md#autodiscovery) and the [CLI reference](cli.md#client-binary).
 
@@ -16,7 +16,7 @@ The server also publishes `/robots.txt` and `/sitemap.xml` for crawler discovery
 
 MCP exposes tools for the public REST operations and a GraphQL POST query. Tool names match their camelCase OpenAPI `operationId` values: `getApiIndex`, `listCommitTypes`, `listConventions`, `listTemplates`, `getRandomTemplate`, `getRandomExample`, `buildCommitMessage`, `getHealth`, `getAbout`, `getHelp`, `getMcpHelp`, `getPrivacy`, `getTerms`, `getSecurity`, `getSecurityPolicy`, `getSecurityThanks`, `getDataProtectionContact`, `getContactForm`, `submitContactReport`, `getOpenAPI`, and `graphqlQuery`. Browser preference routes, token management, and metrics are not exposed as tools. The localized `/server/help/mcp` page and the API tool list use the same operation definitions.
 
-## Git command pipelines
+## Local Git command pipelines
 
 The CLI prints a single commit example from `random`, suitable for shell pipelines:
 

@@ -37,4 +37,4 @@ The operator `adm_` token lives in `secrets.yml` and grants operator scope. Owne
 
 ## MCP
 
-MCP requires `Authorization: Bearer …` on every request and uses the same operator or owner token as the API. Cookies are ignored. A linked token is recommended for each MCP client. Read-only linked tokens may call only read-only tools; write operations require a `read-write` or primary token. Token issuance and management are not exposed as MCP tools. See [API](api.md#model-context-protocol) for transport details.
+MCP requires `Authorization: Bearer …` on every request and accepts the same operator, primary owner, or linked token as the API. Cookies are ignored. A linked token is recommended for each MCP client. Read-only linked tokens may call only read-only tools; write operations require a `read-write` or primary token. Token issuance and management are not exposed as MCP tools. See [API](api.md#model-context-protocol) for transport details.
