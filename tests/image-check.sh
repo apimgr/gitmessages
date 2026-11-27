@@ -17,12 +17,21 @@ temp_dir=$(mktemp -d "$temp_parent/${internal_name}-image-check-XXXXXX")
 chmod 0700 "$temp_dir"
 container_name=${internal_name}-image-check-$$
 cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
   docker stop "$container_name" >/dev/null 2>&1 || true
   docker rm "$container_name" >/dev/null 2>&1 || true
-  docker run --rm --name "${container_name}-cleanup" --volume "$temp_dir:/cleanup" alpine:latest sh -c 'chmod -R u+rwx /cleanup' >/dev/null 2>&1 || true
-  rm -rf "$temp_dir"
+  if docker run --rm --name "${container_name}-cleanup" --volume "$temp_dir:/cleanup" alpine:latest sh -c 'for path in /cleanup/* /cleanup/.[!.]* /cleanup/..?*; do [ -e "$path" ] || [ -L "$path" ] || continue; rm -rf "$path"; done' >/dev/null; then
+    rmdir "$temp_dir" || status=1
+  else
+    echo 'Failed to remove the image-check temporary volume contents.' >&2
+    status=1
+  fi
+  exit "$status"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 print_tor_failures() {
   docker logs "$container_name" 2>&1 | grep 'WARN Tor unavailable:' | tail -5 >&2 || true
