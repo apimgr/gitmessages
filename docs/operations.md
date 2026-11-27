@@ -21,6 +21,8 @@ Without a filename, the server creates a timestamped archive in its configured b
 
 Remote libSQL backup and restore are currently unavailable. The CLI stops with an explicit error instead of operating on a local SQLite file.
 
+Disaster-recovery restore enforces the configured archive size, total expanded size, file count, and per-file size limits. It does not apply a compression-ratio limit. Archive imports are not available in this product.
+
 For remote libSQL, `server.database.cache.enabled` maintains a local SQLite read cache at `server.database.cache.path`. The cache is refreshed on startup, after successful remote writes, and at `sync_interval`. When `offline_mode` is enabled, an unavailable remote can use only a cache refreshed within `max_age`; this mode is read-only. The cache contains a replica of database records and should be protected like the remote database. It is a performance/offline cache, not a backup.
 
 Archives use `.tar.gz`; when `server.backup.encryption_password` is set, they use `.tar.gz.enc` and AES-256-GCM encryption. Compliance mode requires that password before backups can run. Store the password separately from the archive. `backup test [file]` verifies an archive without restoring it; when the file is omitted, the server selects the full backup with the latest UTC date in its filename, breaking date ties by file modification time. If no full backup exists, it selects the newer daily or hourly incremental by modification time. The encrypted manifest is not read to select an archive; an incremental is verified together with its base.
@@ -41,6 +43,8 @@ The built-in scheduler performs the daily full and incremental SQLite backup wor
 The scheduler runs inside the server process and stores task state in `server.db`. It resumes eligible missed jobs after restart within `server.scheduler.catch_up_window`. Do not run a separate cron job or system timer for application maintenance. Task schedules, retry settings, and time zone are configured under `server.scheduler` in `yaml.d/maintenance.yml`.
 
 Scheduled work includes SSL renewal, GeoIP and security-feed updates, security-report cleanup, log rotation, disk and health checks, backups, and update checks. Tor and I2P health tasks are registered only when those features are active. Task failures are logged and exposed through the scheduler metrics described in [Internal metrics](metrics.md).
+
+During database maintenance, writes return `503`. Reads continue while the database or an allowed fresh offline cache can answer. If neither can answer, only health endpoints remain available and other routes return `503`.
 
 ## Debug diagnostics
 
