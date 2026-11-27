@@ -29,9 +29,10 @@ Restore an archive from the server host:
 
 ```sh
 gitmessages --maintenance restore /path/to/gitmessages_backup.tar.gz
+gitmessages --maintenance restore
 ```
 
-Encrypted archives prompt for their backup password. Restore is destructive and requires the configured operator authorization when running as the service account; a root-run restore requires confirmation. A restore is checked before files are replaced. For an incremental archive, keep its full base archive in the same directory.
+When the file is omitted, the server selects the full backup with the latest UTC date in its filename, breaking date ties by file modification time, and asks you to type `RESTORE`. It does not select an incremental archive by default. Encrypted archives prompt for their backup password. Restore is destructive and requires the configured operator authorization when running as the service account; a root-run restore requires confirmation. A restore is checked before files are replaced. For an explicitly selected incremental archive, keep its full base archive in the same directory.
 
 The built-in scheduler performs the daily full and incremental SQLite backup work. It also applies the configured retention policy and skips scheduled backups when the disk threshold is exceeded. Configure schedules, backup location, retention, encryption, and restore size limits as described in [Configuration](configuration.md#scheduler) and its backup settings. Scheduled backups are unavailable when the server uses remote libSQL.
 
@@ -45,7 +46,9 @@ Scheduled work includes SSL renewal, GeoIP and security-feed updates, security-r
 
 Unexpected handler panics produce a generic 500 response. The stack trace is written to the private application log, never returned to the browser or API client. If the themed error page cannot render, a minimal static fallback is returned.
 
-Enable diagnostics for one process with `gitmessages --debug`, `DEBUG=true`, or `gitmessages --mode debug`. `--debug` has the highest priority, followed by `DEBUG`; `MODE=debug` enables diagnostics by default. `DEBUG=false` or `--debug=false` turns them off. Debug settings under `server.debug` control pprof, runtime handlers, query/cache logging, optional body previews, and profiling rates; the mode flag itself is never saved in configuration.
+Enable diagnostics with the persisted `server.mode: debug` setting or `gitmessages --mode debug`; both are explicit opt-ins saved to `server.yml`. `--debug` and `DEBUG=true` enable diagnostics for one process without changing the saved mode. `--debug=false` or `DEBUG=false` disables diagnostics for that process. Debug settings under `server.debug` control pprof, runtime handlers, query/cache logging, optional body previews, and profiling rates.
+
+The optional top-level `output.emoji` setting controls startup-banner emoji. An explicit `true` or `false` overrides `NO_COLOR`; an unset value follows automatic terminal detection. `TERM=dumb` always disables emoji. `output.color` can explicitly enable or disable banner color, with `--color` taking precedence.
 
 When enabled, every `/debug/*` endpoint requires the operator token as an `Authorization: Bearer …` header. The handlers return 404 when diagnostics are disabled. Available endpoints include `/debug/pprof/*`, `/debug/vars`, `/debug/config`, `/debug/routes`, `/debug/cache`, `/debug/db`, `/debug/scheduler`, `/debug/memory`, `/debug/goroutines`, and `/debug/error500`. These are root paths and are not part of the versioned API. The command line and expvar `cmdline` value expose only the binary name; configuration credentials and token-shaped log values are redacted.
 

@@ -21,7 +21,7 @@ docker run --rm --name "gitmessages-$(od -An -N4 -tx4 /dev/urandom | tr -d '[:sp
 
 OpenAPI supersets for all supported locales are generated from the route definitions in `src/web` into `src/swagger/assets/openapi-*.json`. The `make` build and test targets run `go generate ./src/swagger`; do not edit generated documents by hand.
 
-Run `bash scripts/verify-licenses.sh` inside `casjaysdev/go:latest` to check dependency license metadata and NOTICE files. The script stores its temporary report under the project-scoped OS temp directory and removes it when complete.
+Run `bash scripts/verify-licenses.sh` inside `casjaysdev/go:latest` to check dependency license metadata and save third-party license notices. Dependencies that the scanner cannot identify must have a reviewed entry in `.github/license-overrides.txt` (`module SPDX-ID reviewer date evidence`); unused overrides are rejected. The script reports resolved license identities, detects copyleft licenses, and stores its temporary report under the project-scoped OS temp directory before removing it.
 
 ## Binary integration checks
 

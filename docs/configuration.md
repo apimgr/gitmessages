@@ -84,6 +84,10 @@ Area names are conventions; the loader accepts supported settings in any merged 
 
 Configuration changes reload automatically. Listener address, port, TLS listener settings (`server.ssl.enabled`, `cert`, `key`, and `min_version`), database settings, `daemonize`, and `pidfile` are logged as restart-required and remain at their running values until restart. `server.ssl.letsencrypt.*` changes apply live and are used for the next certificate issuance or renewal.
 
+## Console output
+
+The optional top-level `output` section controls the server startup banner. `output.color` and `output.emoji` accept explicit YAML booleans; omitted values use automatic terminal detection. `output.emoji` overrides `NO_COLOR`, while `TERM=dumb` always disables emoji. A `--color` command-line value overrides `output.color`.
+
 ## Database and cache connections
 
 The default database is local SQLite at `server.db` in the configured database directory. Remote libSQL/Turso is selected with `server.database.driver: libsql` and a `libsql://` URL, or an `https://` URL with `server.database.token`. SQLite accepts a file path or `file:` URL. The URL scheme selects the driver and overrides the separate driver field. Credential-bearing URLs and the separate token belong in `secrets.yml`; connection URLs are redacted in diagnostics.
@@ -363,7 +367,8 @@ See [Tokens](tokens.md) for issuance and management, and [Security](security.md)
 | `server.contact.security.email` | Security report recipient. |
 | `server.contact.abuse.email` | Abuse report recipient. |
 | `server.contact.general.email` | General/privacy contact recipient and fallback where documented. |
-| `server.contact.dpo.{name,email}` | Data protection contact details. |
+| `server.contact.dpo.{name,email}` | Contact-only data protection officer display name and email; privacy submission email falls back to general, then admin. The DPO has no notification or webhook settings. |
+| `server.contact.{admin,security,abuse,general}.webhooks.<transport>` | Private outbound webhook endpoint; supported transports are Telegram, Discord, Slack, Mattermost, Pushover, Gotify, and generic JSON. Webhook URLs and generated `<transport>_secret` signing keys are stored in `secrets.yml`. |
 | `server.pages.contact.enabled` | Enables the contact/report form; defaults to `true`. |
 | `server.pages.contact.captcha` | `simple` (default), `recaptcha`, or `hcaptcha`; overlay requests always use `simple`. |
 | `server.pages.contact.captcha_site_key` | Public site key rendered for the selected external CAPTCHA provider. |
