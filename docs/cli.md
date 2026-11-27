@@ -15,6 +15,8 @@ gitmessages --update help
 
 The server also accepts `--service {start|stop|restart|reload|status|--install|--uninstall|--disable}` and `--maintenance {backup|restore|update|mode|setup|pgp|secret|security|token|data|compliance}`. Update commands are `--update [check|yes|branch {stable|beta|devel}]`. `--status` prints localized server health, port, mode, uptime, Tor state and address, and enabled I2P lifecycle state and address. A healthy result goes to stdout with exit status `0`; an unhealthy reason goes to stderr with exit status `1`.
 
+Installing a service asks before using detected administrator access. If escalation is declined, systemd and launchd can install a per-user service; other service managers require administrator access. Commands that target an installed system service also ask for elevation.
+
 Email commands validate or send operator email using the configured SMTP relay. `email test --dry-run` previews and validates every embedded or overridden template without sending. `email test` sends the test template to `server.notifications.email.reply_to`; `--to ADDRESS` selects a one-off recipient. A real test send requires a working SMTP relay.
 
 ```sh
