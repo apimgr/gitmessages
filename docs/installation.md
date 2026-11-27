@@ -43,7 +43,7 @@ docker run -d --name gitmessages --restart unless-stopped \
   ghcr.io/apimgr/gitmessages:latest
 ```
 
-The container runs as UID/GID `10001:10001` and listens on port 80. Ensure the mounted host directories are writable by that UID/GID. Configuration is stored under `/config/gitmessages`; application data and cache are under `/data/gitmessages`, and logs are under `/data/log/gitmessages`. The curated catalog is embedded and read-only. The repository's Compose examples show the same persistent mounts and publish the service on a private host interface.
+The container starts as root so the server can create its dedicated service account, prepare its configured directories, set permissions, and then drop privileges. Mounted host directories must allow those ownership changes. The service listens on port 80. Configuration is stored under `/config/gitmessages`; application data and cache are under `/data/gitmessages`, and logs are under `/data/log/gitmessages`. The curated catalog is embedded and read-only. The repository's Compose examples show the same persistent mounts and publish the service on a private host interface.
 
 ## Linux systemd
 
