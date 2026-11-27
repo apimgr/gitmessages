@@ -24,6 +24,10 @@ SOFTWARE.
 
 ## Third-Party Licenses
 
+### Original Project Content
+
+The bundled commit-message samples in `src/messages/data/messages.json` are original project content authored or explicitly released for this project by apimgr and distributed under the MIT License. This dataset has no external source.
+
 This software includes the following third-party Go dependencies. Entries are derived from the imported package graph; repeated module rows distinguish packages that carry different licenses or notices.
 
 | Library | Version | License | Copyright | License source |

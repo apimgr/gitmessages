@@ -306,6 +306,14 @@ Privacy settings fill the deployment-specific sections of `/server/privacy` and 
 
 ## Notifications
 
+The public WebUI toast settings control visitor-facing feedback. Toast messages are ephemeral in the browser; they are not stored server-side.
+
+| YAML key | Default | Behavior |
+|---|---:|---|
+| `server.notifications.webui.position` | `top-right` | `top-right`, `top-left`, `bottom-right`, or `bottom-left`. |
+| `server.notifications.webui.duration` | `3` | Auto-dismiss seconds for success and info toasts; `0` keeps them until dismissed. |
+| `server.notifications.webui.warning_duration` | `5` | Auto-dismiss seconds for warning toasts; `0` keeps them until dismissed. Errors always require manual dismissal. |
+
 `server.notifications.disk_low` controls the scheduler's disk-space alerts for the filesystems containing the data, log, and backup directories.
 
 | YAML key | Default | Behavior |
@@ -446,7 +454,7 @@ I2P settings are under `server.i2p`:
 
 The CLI stores `cli.yml` and profile files in the platform user configuration directory under `apimgr/gitmessages`. Select a profile with `--config`. Files are created with owner-only permissions. The server selection order is `--server`, `GITMESSAGES_SERVER_PRIMARY`, then `server.primary`. A valid `--server` argument is saved only when no valid server is already configured.
 
-The CLI config supports `language`, `display.mode` (`auto`, `gui`, or `tui`), `server.primary`, `server.token`, the discovered `server.api_version`, and `update.auto`, `update.check_interval`, and `update.channel`. The CLI queries `/api/autodiscover` on startup and records the server's active API version before using versioned routes. Language precedence is `--lang`, CLI config `language`, `LC_ALL`, `LANG`, then English (`en`); `language: auto` uses the environment. The default static CLI uses the TUI; optional `gitmessages-cli-gui-{os}-{arch}` builds enable GUI mode on Linux, macOS, and Windows. BSD builds use the terminal interface.
+The CLI config supports `language`, `display.mode` (`auto`, `gui`, or `tui`), `output.format` (`json`, `table`, or `plain`), boolean `output.color`, `server.primary`, `server.token`, the discovered `server.api_version`, and `update.auto`, `update.check_interval`, and `update.channel`. Output precedence is `--output`, `GITMESSAGES_OUTPUT_FORMAT`, `output.format`, then `table`; color precedence is `--color`, `GITMESSAGES_OUTPUT_COLOR`, boolean `output.color`, `NO_COLOR`, then terminal detection. The CLI queries `/api/autodiscover` on startup and records the server's active API version before using versioned routes. Language precedence is `--lang`, CLI config `language`, `LC_ALL`, `LANG`, then English (`en`); `language: auto` uses the environment. The default static CLI uses the TUI; optional `gitmessages-cli-gui-{os}-{arch}` builds enable GUI mode on Linux, macOS, and Windows. BSD builds use the terminal interface.
 
 The server's CLI binary distribution settings are `cli.binary_download.dir` (defaults to `{data_dir}/cli`) and `cli.binary_download.require_auth` (defaults to `false`), stored in `yaml.d/maintenance.yml`. Release binaries are provisioned by the operator, image, or package; the server does not build or download them. Downloads are public by default and require a valid Bearer token when `require_auth` is enabled. See [Integrations](integrations.md) for autodiscovery and download behavior.
 
