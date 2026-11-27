@@ -200,10 +200,10 @@ Backup policy is stored in `yaml.d/maintenance.yml`; compliance settings are sto
 | `server.backup.retention.keep_yearly` | `0` | Additional January 1 full backups retained. |
 | `server.backup.retention.max_total_size` | `10%` | Maximum backup storage as a volume percentage or byte size. |
 | `server.backup.disk_threshold` | `90` | Disk-usage percentage above which a scheduled backup is skipped. |
-| `server.restore.max_archive_size` | `1G` | Maximum disaster-recovery archive size accepted for restore. |
-| `server.restore.max_expanded_size` | `4G` | Maximum combined extracted size. |
-| `server.restore.max_files` | `10000` | Maximum number of archive entries. |
-| `server.restore.max_file_size` | `512M` | Maximum size of one extracted file. |
+| `server.restore.max_archive_size` | `20GB` | Maximum disaster-recovery archive size accepted for restore. |
+| `server.restore.max_expanded_size` | `50GB` | Maximum combined extracted size across a base and incremental backup. |
+| `server.restore.max_files` | `1000000` | Maximum number of archive entries across the restore set. |
+| `server.restore.max_path_length` | `4096` | Maximum archive entry path length in bytes. Exceeding a restore limit aborts with `ERR_RESTORE_LIMIT` before live data is touched. |
 | `server.compliance.gdpr` | `false` | Enables GDPR-specific compliance behavior; any enabled standard requires encrypted backups. |
 | `server.compliance.ccpa` | `false` | Enables CCPA-specific compliance behavior. |
 | `server.compliance.hipaa` | `false` | Enables HIPAA-specific compliance behavior. |

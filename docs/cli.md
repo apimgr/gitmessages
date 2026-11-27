@@ -17,6 +17,8 @@ The server also accepts `--service {start|stop|restart|reload|status|--install|-
 
 Installing a service asks before using detected administrator access. If escalation is declined, systemd and launchd can install a per-user service; other service managers require administrator access. Commands that target an installed system service also ask for elevation.
 
+Binding to a port below `1024` asks for elevation before startup, including daemon mode. If no escalation method is available or the request is declined, configure a port `1024` or higher.
+
 Email commands validate or send operator email using the configured SMTP relay. `email test --dry-run` previews and validates every embedded or overridden template without sending. `email test` sends the test template to `server.notifications.email.reply_to`; `--to ADDRESS` selects a one-off recipient. A real test send requires a working SMTP relay.
 
 ```sh
