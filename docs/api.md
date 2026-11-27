@@ -12,6 +12,7 @@ The canonical API prefix is `/api/{api_version}`; its default is `/api/v1`, and 
 | GET | `/api/{api_version}/templates` | List message templates |
 | GET | `/api/{api_version}/templates/random` | Return a random template |
 | GET | `/api/{api_version}/messages/random` | Return a random commit type example |
+| GET | `/api/{api_version}/messages` | Return the localized message-builder field descriptor |
 | POST | `/api/{api_version}/messages` | Validate and build a message from JSON |
 | GET | `/api/{api_version}/server/healthz` | Return service health |
 | GET | `/api/{api_version}/server/about` | Return service description |
