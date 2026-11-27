@@ -25,7 +25,7 @@ Disaster-recovery restore enforces the configured archive size, total expanded s
 
 For remote libSQL, `server.database.cache.enabled` maintains a local SQLite read cache at `server.database.cache.path`. The cache is refreshed on startup, after successful remote writes, and at `sync_interval`. When `offline_mode` is enabled, an unavailable remote can use only a cache refreshed within `max_age`; this mode is read-only. The cache contains a replica of database records and should be protected like the remote database. It is a performance/offline cache, not a backup.
 
-Archives use `.tar.gz`; when `server.backup.encryption_password` is set, they use `.tar.gz.enc` and AES-256-GCM encryption. Compliance mode requires that password before backups can run. Store the password separately from the archive. `backup test [file]` verifies an archive without restoring it; when the file is omitted, it selects the newest full or incremental archive by the UTC date in its filename, breaking date ties by file modification time. An explicitly selected incremental is verified together with its base.
+Archives use `.tar.gz`; when `server.backup.encryption_password` is set, they use `.tar.gz.enc` and AES-256-GCM encryption. Compliance mode requires that password before backups can run. Store the password separately from the archive. `backup test [file]` verifies an archive without restoring it; when the file is omitted, full archives are dated by their UTC filename date and fixed-name incrementals by their UTC modification date, with later modification time breaking ties. An explicitly selected incremental is verified together with its base.
 
 Restore an archive from the server host:
 

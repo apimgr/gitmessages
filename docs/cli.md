@@ -28,6 +28,8 @@ gitmessages email test --to operator@example.com
 
 Maintenance commands that read or change owner or compliance data require root or the operator token from `server.token`. Token prefixes can be found with `--maintenance token list`.
 
+`--maintenance backup [file]` always exports `app_secrets.json` and database-driver metadata. SQLite backups include `server.db`; remote libSQL/Turso backups do not include the remote database or its local cache. Restore without a filename selects the newest full backup. A remote restore applies archived secrets only when the remote database has no secret rows, and seeds it from a SQLite backup only when the database is empty. `--maintenance backup test [file]` defaults to the newest full or incremental archive. See [Backup and restore](operations.md#backup-and-restore) for archive contents, encryption, and restore authorization.
+
 PGP key management is available only through the maintenance CLI. `pgp generate`, `pgp rotate`, `pgp publish`, `pgp export public [path]`, `pgp export private <path>`, `pgp import <file>`, and `pgp delete` manage the project security keypair; private-key import/export and deletion require the sensitive-operation confirmation flow. Keyserver retries run through the scheduled `keyserver_retry` task.
 
 Secret rotation is limited to `installation_secret` and `encryption_key`. Both commands require the sensitive-operation confirmation flow; the old secret remains available for seven days and the old encryption key remains available for 30 days while dependent data is re-encrypted.
