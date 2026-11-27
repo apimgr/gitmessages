@@ -193,6 +193,42 @@ func (s *Store) Read() *sql.DB {
 	return s.read
 }
 
+// PrimaryRead returns the configured database handle, bypassing a local read cache.
+func (s *Store) PrimaryRead() *sql.DB {
+	if s == nil {
+		return nil
+	}
+	return s.read
+}
+
+// IsRemote reports whether this store's primary database is remote libSQL.
+func (s *Store) IsRemote() bool {
+	return s != nil && s.remote
+}
+
+// CanServeReads reports whether the primary database or an allowed fresh cache can answer queries.
+func (s *Store) CanServeReads(ctx context.Context) bool {
+	if s == nil || s.read == nil {
+		return false
+	}
+	probeContext, cancelProbe := context.WithTimeout(ctx, 500*time.Millisecond)
+	primaryErr := s.read.PingContext(probeContext)
+	cancelProbe()
+	if primaryErr == nil {
+		return true
+	}
+	if s.cache == nil {
+		return false
+	}
+	s.cacheMu.RLock()
+	cache, offlineMode, lastSync, maxAge := s.cache, s.cacheOfflineMode, s.cacheLastSync, s.cacheMaxAge
+	s.cacheMu.RUnlock()
+	if !offlineMode || cache == nil || lastSync.IsZero() || time.Since(lastSync) > maxAge {
+		return false
+	}
+	return cache.Read().PingContext(ctx) == nil
+}
+
 // Snapshot copies the live database to a new SQLite file through SQLite's online backup API.
 func (s *Store) Snapshot(ctx context.Context, destination string) (result error) {
 	if s == nil || s.write == nil || destination == "" {
@@ -340,6 +376,15 @@ func isBusy(err error) bool {
 
 // EnsureSchema creates the shared server tables idempotently.
 func (s *Store) EnsureSchema(ctx context.Context) error {
+	return s.ensureSchema(ctx, true)
+}
+
+// EnsureSchemaForRestore prepares tables without generating secrets before archive secrets are applied.
+func (s *Store) EnsureSchemaForRestore(ctx context.Context) error {
+	return s.ensureSchema(ctx, false)
+}
+
+func (s *Store) ensureSchema(ctx context.Context, initializeSecrets bool) error {
 	for _, statement := range schemaStatements {
 		if err := s.Write(ctx, func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, statement)
@@ -354,8 +399,10 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 	if err := s.migrateAppSecrets(ctx); err != nil {
 		return err
 	}
-	if err := s.initializeAppSecrets(ctx); err != nil {
-		return err
+	if initializeSecrets {
+		if err := s.initializeAppSecrets(ctx); err != nil {
+			return err
+		}
 	}
 	if err := s.migrateAPITokens(ctx); err != nil {
 		return err

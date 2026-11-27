@@ -158,9 +158,10 @@ func dispatchContactWebhook(cfg config.ContactConfig, role, trackingID, componen
 }
 
 func hasContactWebhook(cfg config.ContactConfig, role string) bool {
-	if role == "privacy" {
+	switch role {
+	case "privacy":
 		role = "general"
-	} else if role == "dmca" {
+	case "dmca":
 		role = "abuse"
 	}
 	return len(contactWebhookRecipients(cfg, role)) > 0
@@ -674,10 +675,7 @@ func renderContactForm(w http.ResponseWriter, r *http.Request, input *contact.Me
 		kind = input.Type
 	}
 	securityID := r.URL.Query().Get("security_id")
-	security := false
-	if service.ValidSecurityID(securityID, time.Now()) {
-		security = true
-	}
+	security := service.ValidSecurityID(securityID, time.Now())
 	if kind != "" && kind != "abuse" && kind != "dmca" && kind != "privacy" {
 		kind = ""
 	}
@@ -1262,48 +1260,48 @@ func securityThanksPage(w http.ResponseWriter, r *http.Request) {
 
 func securityReportPage(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.URL.Path, "/server/security/report/") {
-		http.NotFound(w, r)
-		return
-	}
-	if !method(w, r, http.MethodGet) {
+		renderSecurityReportNotFound(w, r)
 		return
 	}
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	if !method(w, r, http.MethodGet) {
+		return
+	}
 	id := strings.TrimPrefix(r.URL.Path, "/server/security/report/")
 	if id == "" || strings.Contains(id, "/") {
-		http.NotFound(w, r)
+		renderSecurityReportNotFound(w, r)
 		return
 	}
 	token := r.URL.Query().Get("token")
 	digest := sha256.Sum256([]byte(token))
 	store := getContactStore()
 	if store == nil {
-		http.NotFound(w, r)
+		renderSecurityReportNotFound(w, r)
 		return
 	}
 	var expected, status, comment string
 	var lastUsed, closed, disclosureDate sql.NullString
 	err := store.Read().QueryRowContext(r.Context(), "SELECT token_hash,status,researcher_comment,token_last_used,closed_at,disclosure_date FROM security_reports WHERE tracking_id = ?", id).Scan(&expected, &status, &comment, &lastUsed, &closed, &disclosureDate)
 	if err != nil {
-		http.NotFound(w, r)
+		renderSecurityReportNotFound(w, r)
 		return
 	}
 	actual := hex.EncodeToString(digest[:])
 	if token == "" || subtle.ConstantTimeCompare([]byte(expected), []byte(actual)) != 1 {
-		http.NotFound(w, r)
+		renderSecurityReportNotFound(w, r)
 		return
 	}
 	today := time.Now().UTC().Format("2006-01-02")
 	if lastUsed.Valid && lastUsed.String >= today {
-		http.NotFound(w, r)
+		renderSecurityReportNotFound(w, r)
 		return
 	}
 	if closed.Valid {
 		closedAt, parseErr := time.Parse(time.RFC3339, closed.String)
 		if parseErr == nil && time.Since(closedAt) > 30*24*time.Hour {
-			http.NotFound(w, r)
+			renderSecurityReportNotFound(w, r)
 			return
 		}
 	}
@@ -1317,14 +1315,14 @@ func securityReportPage(w http.ResponseWriter, r *http.Request) {
 		return updateErr
 	})
 	if err != nil || affected != 1 {
-		http.NotFound(w, r)
+		renderSecurityReportNotFound(w, r)
 		return
 	}
 	labels := map[string]string{"received": "contact.status_received", "triaged": "contact.status_triaged", "confirmed": "contact.status_confirmed", "patching": "contact.status_patching", "disclosed": "contact.status_disclosed", "wont_fix": "contact.status_wont_fix"}
 	labelKey := labels[status]
 	label := tr(r, labelKey)
 	if label == "" {
-		http.NotFound(w, r)
+		renderSecurityReportNotFound(w, r)
 		return
 	}
 	body := `<section class="section-card" aria-labelledby="security-status"><h2 id="security-status">` + template.HTMLEscapeString(tr(r, "contact.status_title")) + `</h2><p><strong>` + template.HTMLEscapeString(tr(r, "contact.status")) + `:</strong> ` + template.HTMLEscapeString(label) + `</p>`
@@ -1336,6 +1334,12 @@ func securityReportPage(w http.ResponseWriter, r *http.Request) {
 	}
 	body += `</section>`
 	page(w, r, tr(r, "contact.status_title"), template.HTML(body))
+}
+
+func renderSecurityReportNotFound(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotFound)
+	message := tr(r, "errors.not_found")
+	page(w, r, "404", template.HTML(`<section class="section-card" aria-labelledby="error-message"><h2 id="error-message">`+template.HTMLEscapeString(message)+`</h2></section>`))
 }
 
 func dpoPage(w http.ResponseWriter, r *http.Request) {

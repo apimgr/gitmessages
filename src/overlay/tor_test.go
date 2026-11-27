@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +26,7 @@ func TestTorConfigurationAndMissingBinary(t *testing.T) {
 	defer func() { _ = listener.Close() }()
 	manager.listener = listener
 	configuration := manager.torrc("/usr/bin/tor", "/tmp/control-port")
-	for _, required := range []string{"ControlPort 127.0.0.1:auto", "SocksPort 127.0.0.1:auto", "HiddenServiceVersion 3", "SafeLogging 1", "ExitRelay 0", "ExitPolicy reject *:*"} {
+	for _, required := range []string{"ControlPort 127.0.0.1:auto", "SocksPort 127.0.0.1:auto", "DisableNetwork 1", "HiddenServiceVersion 3", "SafeLogging 1", "ExitRelay 0", "ExitPolicy reject *:*"} {
 		if !strings.Contains(configuration, required) {
 			t.Errorf("torrc missing %q", required)
 		}
@@ -66,19 +67,29 @@ func TestTorManagerTracksHiddenServiceRequests(t *testing.T) {
 
 func TestTorControlFileAndConfigurationPaths(t *testing.T) {
 	directory := projectTestDir(t)
-	cookie := filepath.Join(directory, "auth cookie")
 	path := filepath.Join(directory, "control-port")
-	contents := "PORT=127.0.0.1:19001\nCOOKIEFILE=\"" + cookie + "\"\n"
+	contents := "PORT=127.0.0.1:19001\n"
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	address, gotCookie, err := waitTorControlFile(context.Background(), path, time.Second)
-	if err != nil || address != "127.0.0.1:19001" || gotCookie != cookie {
-		t.Fatalf("control address=%q cookie=%q err=%v", address, gotCookie, err)
+	address, err := waitTorControlFile(context.Background(), path, time.Second, nil)
+	if err != nil || address != "127.0.0.1:19001" {
+		t.Fatalf("control address=%q err=%v", address, err)
+	}
+	if err := os.WriteFile(path, []byte(contents+"COOKIEFILE=/tmp/cookie\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := waitTorControlFile(context.Background(), path, 10*time.Millisecond, nil); err == nil {
+		t.Fatal("control file with extra content was accepted")
+	}
+	processDone := make(chan error, 1)
+	processDone <- errors.New("exit status 1")
+	if _, err := waitTorControlFile(context.Background(), filepath.Join(directory, "missing"), time.Second, processDone); err == nil || !strings.Contains(err.Error(), "exit status 1") {
+		t.Fatalf("exited Tor process wait error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := waitTorControlFile(ctx, filepath.Join(directory, "missing"), time.Second); err == nil {
+	if _, err := waitTorControlFile(ctx, filepath.Join(directory, "missing"), time.Second, nil); err == nil {
 		t.Fatal("cancelled control-file wait succeeded")
 	}
 	if got := torrcPath(`path with "quote`); got != `"path with \"quote"` {

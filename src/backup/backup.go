@@ -100,13 +100,15 @@ type RestoreLimits struct {
 	MaxArchiveSize  int64
 	MaxExpandedSize int64
 	MaxFiles        int
-	MaxFileSize     int64
-	MaxRatio        int
+	MaxPathLength   int
 }
 
-// DefaultRestoreLimits returns the limits specified by AI.md PART 21.
+// ErrRestoreLimit identifies an operator-configured restore safety limit.
+var ErrRestoreLimit = errors.New("ERR_RESTORE_LIMIT")
+
+// DefaultRestoreLimits returns the limits specified by AI.md PART 22.
 func DefaultRestoreLimits() RestoreLimits {
-	return RestoreLimits{MaxArchiveSize: 1 << 30, MaxExpandedSize: 4 << 30, MaxFiles: 10000, MaxFileSize: 512 << 20, MaxRatio: 100}
+	return RestoreLimits{MaxArchiveSize: 20 << 30, MaxExpandedSize: 50 << 30, MaxFiles: 1000000, MaxPathLength: 4096}
 }
 
 // InputsFromPath returns regular files below source with archivePrefix applied.
@@ -275,7 +277,7 @@ func verify(ctx context.Context, archivePath, password string, limits RestoreLim
 		return Manifest{}, err
 	}
 	if expanded > limits.MaxExpandedSize {
-		return Manifest{}, errors.New("backup expanded size exceeds configured limit")
+		return Manifest{}, fmt.Errorf("%w: backup expanded size exceeds configured limit", ErrRestoreLimit)
 	}
 	if manifest.Encrypted != encrypted {
 		return Manifest{}, errors.New("backup encryption metadata does not match its format")
@@ -298,6 +300,9 @@ func verify(ctx context.Context, archivePath, password string, limits RestoreLim
 		}
 		baseHash, err := fileSHA256(basePath, limits.MaxArchiveSize)
 		if err != nil {
+			if errors.Is(err, ErrRestoreLimit) {
+				return Manifest{}, err
+			}
 			return Manifest{}, fmt.Errorf("ERR_BASE_MISSING: %w", err)
 		}
 		if !strings.EqualFold(baseHash, manifest.BaseSHA256) {
@@ -305,6 +310,9 @@ func verify(ctx context.Context, archivePath, password string, limits RestoreLim
 		}
 		baseManifest, err := verify(ctx, basePath, password, limits, false)
 		if err != nil || baseManifest.Type != "full" {
+			if errors.Is(err, ErrRestoreLimit) {
+				return Manifest{}, err
+			}
 			if err == nil {
 				err = errors.New("incremental base is not a full backup")
 			}
@@ -313,11 +321,12 @@ func verify(ctx context.Context, archivePath, password string, limits RestoreLim
 		if baseManifest.Encrypted != manifest.Encrypted {
 			return Manifest{}, errors.New("ERR_BASE_CORRUPT: base and incremental encryption settings differ")
 		}
-		if expanded+manifestExpandedSize(baseManifest) > limits.MaxExpandedSize {
-			return Manifest{}, errors.New("combined backup expanded size exceeds configured limit")
+		baseExpanded := manifestExpandedSize(baseManifest)
+		if baseExpanded > limits.MaxExpandedSize-expanded {
+			return Manifest{}, fmt.Errorf("%w: combined backup expanded size exceeds configured limit", ErrRestoreLimit)
 		}
 		if len(baseManifest.Files)+len(manifest.Files)+2 > limits.MaxFiles {
-			return Manifest{}, errors.New("combined backup contains more files than allowed")
+			return Manifest{}, fmt.Errorf("%w: combined backup contains more files than allowed", ErrRestoreLimit)
 		}
 	}
 	return manifest, nil
@@ -352,6 +361,9 @@ func Restore(ctx context.Context, archivePath, password, destination string, lim
 		basePath := filepath.Join(filepath.Dir(archivePath), manifest.BaseBackup)
 		baseData, err := readArchiveFile(basePath, limits.MaxArchiveSize)
 		if err != nil {
+			if errors.Is(err, ErrRestoreLimit) {
+				return Manifest{}, err
+			}
 			return Manifest{}, fmt.Errorf("ERR_BASE_MISSING: %w", err)
 		}
 		baseData, _, err = decryptIfNeeded(baseData, password)
@@ -364,13 +376,16 @@ func Restore(ctx context.Context, archivePath, password, destination string, lim
 		}
 		baseManifest, baseSize, err := extract(ctx, baseData, baseStage, limits)
 		if err != nil || baseManifest.Type != "full" {
+			if errors.Is(err, ErrRestoreLimit) {
+				return Manifest{}, err
+			}
 			if err == nil {
 				err = errors.New("incremental base is not a full backup")
 			}
 			return Manifest{}, fmt.Errorf("ERR_BASE_CORRUPT: %w", err)
 		}
 		if baseSize > limits.MaxExpandedSize {
-			return Manifest{}, errors.New("combined backup expanded size exceeds configured limit")
+			return Manifest{}, fmt.Errorf("%w: combined backup expanded size exceeds configured limit", ErrRestoreLimit)
 		}
 		incrementData, err := readArchiveFile(archivePath, limits.MaxArchiveSize)
 		if err != nil {
@@ -388,8 +403,8 @@ func Restore(ctx context.Context, archivePath, password, destination string, lim
 		if err != nil {
 			return Manifest{}, err
 		}
-		if baseSize+incrementSize > limits.MaxExpandedSize {
-			return Manifest{}, errors.New("combined backup expanded size exceeds configured limit")
+		if incrementSize > limits.MaxExpandedSize-baseSize {
+			return Manifest{}, fmt.Errorf("%w: combined backup expanded size exceeds configured limit", ErrRestoreLimit)
 		}
 		if err := overlayTree(baseStage, incrementStage); err != nil {
 			return Manifest{}, err
@@ -511,15 +526,6 @@ func createArchive(ctx context.Context, inputs []Input, manifest *Manifest) ([]b
 }
 
 func extract(ctx context.Context, archive []byte, destination string, limits RestoreLimits) (Manifest, int64, error) {
-	ratioLimit := int64(len(archive))
-	if ratioLimit < 1 {
-		ratioLimit = 1
-	}
-	if int64(limits.MaxRatio) > (1<<63-1)/ratioLimit {
-		ratioLimit = 1<<63 - 1
-	} else {
-		ratioLimit *= int64(limits.MaxRatio)
-	}
 	compressed := bytes.NewReader(archive)
 	gzipReader, err := gzip.NewReader(compressed)
 	if err != nil {
@@ -545,7 +551,10 @@ func extract(ctx context.Context, archive []byte, destination string, limits Res
 		}
 		count++
 		if count > limits.MaxFiles {
-			return Manifest{}, expanded, errors.New("backup contains more files than allowed")
+			return Manifest{}, expanded, fmt.Errorf("%w: backup contains more files than allowed", ErrRestoreLimit)
+		}
+		if len(header.Name) > limits.MaxPathLength {
+			return Manifest{}, expanded, fmt.Errorf("%w: backup path exceeds configured length", ErrRestoreLimit)
 		}
 		// Accept the zero-valued regular-file marker used by legacy tar archives.
 		if header.Typeflag != tar.TypeReg && header.Typeflag != 0 {
@@ -559,11 +568,8 @@ func extract(ctx context.Context, archive []byte, destination string, limits Res
 			return Manifest{}, expanded, fmt.Errorf("duplicate backup path %q", header.Name)
 		}
 		seenPaths[header.Name] = struct{}{}
-		if header.Size < 0 || header.Size > limits.MaxFileSize || header.Size > limits.MaxExpandedSize-expanded {
-			return Manifest{}, expanded, errors.New("backup file or expanded size exceeds configured limit")
-		}
-		if header.Size > ratioLimit-expanded {
-			return Manifest{}, expanded, errors.New("backup compression ratio exceeds configured limit")
+		if header.Size < 0 || header.Size > limits.MaxExpandedSize-expanded {
+			return Manifest{}, expanded, fmt.Errorf("%w: backup expanded size exceeds configured limit", ErrRestoreLimit)
 		}
 		expanded += header.Size
 		if header.Name == manifestName {
@@ -831,8 +837,11 @@ func readArchiveFile(path string, maxSize int64) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inspect backup archive: %w", err)
 	}
-	if !linkInfo.Mode().IsRegular() || linkInfo.Size() <= 0 || linkInfo.Size() > maxSize {
+	if !linkInfo.Mode().IsRegular() || linkInfo.Size() <= 0 {
 		return nil, errors.New("backup archive must be a regular non-empty file within the configured size limit")
+	}
+	if linkInfo.Size() > maxSize {
+		return nil, fmt.Errorf("%w: backup archive exceeds configured size limit", ErrRestoreLimit)
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -843,15 +852,18 @@ func readArchiveFile(path string, maxSize int64) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inspect opened backup archive: %w", err)
 	}
-	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maxSize {
+	if !info.Mode().IsRegular() || info.Size() <= 0 {
 		return nil, errors.New("backup archive must be a regular non-empty file within the configured size limit")
+	}
+	if info.Size() > maxSize {
+		return nil, fmt.Errorf("%w: backup archive exceeds configured size limit", ErrRestoreLimit)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read backup archive: %w", err)
 	}
 	if int64(len(data)) > maxSize {
-		return nil, errors.New("backup archive exceeds configured size limit")
+		return nil, fmt.Errorf("%w: backup archive exceeds configured size limit", ErrRestoreLimit)
 	}
 	return data, nil
 }
@@ -951,11 +963,8 @@ func normalizedLimits(limits RestoreLimits) RestoreLimits {
 	if limits.MaxFiles <= 0 {
 		limits.MaxFiles = defaults.MaxFiles
 	}
-	if limits.MaxFileSize <= 0 {
-		limits.MaxFileSize = defaults.MaxFileSize
-	}
-	if limits.MaxRatio <= 0 {
-		limits.MaxRatio = defaults.MaxRatio
+	if limits.MaxPathLength <= 0 {
+		limits.MaxPathLength = defaults.MaxPathLength
 	}
 	return limits
 }

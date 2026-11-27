@@ -125,7 +125,7 @@ func TestAboutPageIncludesRequiredGeoIPAttribution(t *testing.T) {
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, webTestRequest(http.MethodGet, "/server/about", nil))
 	const attribution = `<a href="https://db-ip.com/">IP Geolocation by DB-IP</a>`
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), attribution) || !strings.Contains(page.Body.String(), tr(webTestRequest(http.MethodGet, "/server/about", nil), "about.catalog_attribution")) {
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), attribution) || !strings.Contains(page.Body.String(), tr(webTestRequest(http.MethodGet, "/server/about", nil), "about.catalog_attribution")) || !strings.Contains(page.Body.String(), "Original content") {
 		t.Fatalf("About page returned %d or omitted GeoIP attribution", page.Code)
 	}
 
@@ -136,7 +136,7 @@ func TestAboutPageIncludesRequiredGeoIPAttribution(t *testing.T) {
 			Content string `json:"content"`
 		} `json:"data"`
 	}
-	if api.Code != http.StatusOK || json.Unmarshal(api.Body.Bytes(), &response) != nil || !strings.Contains(response.Data.Content, attribution) || !strings.Contains(response.Data.Content, "project-authored") {
+	if api.Code != http.StatusOK || json.Unmarshal(api.Body.Bytes(), &response) != nil || !strings.Contains(response.Data.Content, attribution) || !strings.Contains(response.Data.Content, "project-authored") || !strings.Contains(response.Data.Content, "## Original content") {
 		t.Fatalf("About API returned %d or omitted GeoIP attribution", api.Code)
 	}
 }

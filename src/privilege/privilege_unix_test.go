@@ -3,12 +3,70 @@
 package privilege
 
 import (
+	"context"
 	"errors"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func TestCanEscalateDetectsDoasAndDoesNotDetectSu(t *testing.T) {
+	lookPath := func(name string) (string, error) {
+		if name == "doas" || name == "su" {
+			return "/usr/bin/" + name, nil
+		}
+		return "", errors.New("not found")
+	}
+	command := func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
+	}
+	currentUser := func() (*user.User, error) { return nil, errors.New("no user") }
+	if !canEscalate("", "", 1000, lookPath, command, currentUser) {
+		t.Fatal("permitted doas should be detected")
+	}
+	lookPath = func(name string) (string, error) {
+		if name == "su" {
+			return "/bin/su", nil
+		}
+		return "", errors.New("not found")
+	}
+	if canEscalate("", "", 1000, lookPath, command, currentUser) {
+		t.Fatal("su availability must not count as detected escalation access")
+	}
+}
+
+func TestEscalationMethodUsesPlatformOrder(t *testing.T) {
+	lookPath := func(name string) (string, error) {
+		if name == "sudo" || name == "doas" {
+			return "/usr/bin/" + name, nil
+		}
+		return "", errors.New("not found")
+	}
+	command := func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, "true")
+	}
+	noUser := func() (*user.User, error) { return nil, errors.New("no user") }
+	for _, test := range []struct {
+		goos string
+		want string
+	}{
+		{goos: "linux", want: "/usr/bin/sudo"},
+		{goos: "freebsd", want: "/usr/bin/doas"},
+	} {
+		if got := escalationMethodFor(test.goos, "", "", 1000, lookPath, command, noUser); got != test.want {
+			t.Errorf("escalationMethodFor(%q) = %q, want %q", test.goos, got, test.want)
+		}
+	}
+}
+
+func TestShellQuoteEscapesSingleQuotes(t *testing.T) {
+	if got, want := shellQuote("a'b c"), "'a'\\''b c'"; got != want {
+		t.Fatalf("shellQuote() = %q, want %q", got, want)
+	}
+}
 
 func TestDropPrivilegesOrdersChangesAndVerifiesIdentity(t *testing.T) {
 	var calls []string

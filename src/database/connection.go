@@ -15,6 +15,16 @@ import (
 
 // OpenConfigured selects the configured SQLite or remote libSQL database.
 func OpenConfigured(settings config.DatabaseConfig, fallbackPath string, readers int) (*Store, error) {
+	return openConfigured(settings, fallbackPath, readers, true)
+}
+
+// OpenConfiguredForRestore prepares the configured database without generating secrets or opening a cache.
+func OpenConfiguredForRestore(settings config.DatabaseConfig, fallbackPath string, readers int) (*Store, error) {
+	settings.Cache.Enabled = false
+	return openConfigured(settings, fallbackPath, readers, false)
+}
+
+func openConfigured(settings config.DatabaseConfig, fallbackPath string, readers int, initializeSecrets bool) (*Store, error) {
 	maxOpen, maxIdle, maxLifetime, maxIdleTime := resolvedDatabasePool(settings.Pool)
 	driverName := strings.ToLower(strings.TrimSpace(settings.Driver))
 	if driverName == "sqlite2" || driverName == "sqlite3" || driverName == "" {
@@ -95,9 +105,15 @@ func OpenConfigured(settings config.DatabaseConfig, fallbackPath string, readers
 	}
 	schemaContext, cancelSchema := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancelSchema()
-	if err := store.EnsureSchema(schemaContext); err != nil {
+	var schemaErr error
+	if initializeSecrets {
+		schemaErr = store.EnsureSchema(schemaContext)
+	} else {
+		schemaErr = store.EnsureSchemaForRestore(schemaContext)
+	}
+	if schemaErr != nil {
 		_ = store.Close()
-		return nil, fmt.Errorf("initialize configured libSQL schema: %w", err)
+		return nil, fmt.Errorf("initialize configured libSQL schema: %w", schemaErr)
 	}
 	if settings.Cache.Enabled {
 		cache, cacheErr := openConfiguredLocalCache(settings.Cache, fallbackPath, maxOpen, maxIdle, maxLifetime, maxIdleTime)

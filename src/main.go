@@ -396,12 +396,16 @@ func main() {
 		}
 		*override.target = resolved
 	}
-	pidFile, err := resolvePIDFileOverride(*pidFileFlag, os.Getenv("PID_FILE"), dirs.PID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "invalid PID file path: %v\n", err)
-		os.Exit(2)
+	if paths.IsRunningInContainer() {
+		dirs.PID = ""
+	} else {
+		pidFile, err := resolvePIDFileOverride(*pidFileFlag, os.Getenv("PID_FILE"), dirs.PID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid PID file path: %v\n", err)
+			os.Exit(2)
+		}
+		dirs.PID = pidFile
 	}
-	dirs.PID = pidFile
 	configDir := dirs.Config
 
 	if *showStatus {
@@ -557,7 +561,14 @@ func main() {
 	if *address != "" {
 		selectedEarlyAddress = *address
 	}
-	if (*daemonFlag || earlyDaemonize) && *serviceCmd == "" && !paths.IsRunningInContainer() {
+	daemonRequested := (*daemonFlag || earlyDaemonize) && *serviceCmd == "" && !paths.IsRunningInContainer()
+	if daemonRequested && !startupIdentity.system && hasPrivilegedPort(selectedEarlyPort) {
+		if err := requestPrivilegeEscalation("A configured port requires elevated privileges"); err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	}
+	if daemonRequested {
 		if err := daemonizeProcess(); err != nil {
 			log.Fatalf("daemonize server: %v", err)
 		}
@@ -576,7 +587,10 @@ func main() {
 			}
 			if value < 1024 {
 				if !startupIdentity.system && !paths.IsRunningInContainer() {
-					log.Fatalf("port %d requires elevated privileges; use a port >= 1024 or install the service", value)
+					if err := requestPrivilegeEscalation(fmt.Sprintf("Port %d requires elevated privileges", value)); err != nil {
+						log.Fatal(err)
+					}
+					os.Exit(0)
 				}
 				if !startupIdentity.system {
 					continue
@@ -796,6 +810,7 @@ func main() {
 	maintenanceManager.Start(context.Background())
 	defer maintenanceManager.Stop()
 	web.SetMaintenanceProvider(maintenanceManager.Snapshot)
+	web.SetMaintenanceReadProvider(sharedDB.CanServeReads)
 	web.SetHealthStatsProvider(func() web.HealthStats { return healthStatsCache.snapshot(web.SnapshotHealthRequestCounters()) })
 	var restartReasonsMu sync.RWMutex
 	restartReasons := []string(nil)
@@ -972,7 +987,9 @@ func main() {
 	backgroundScheduler.Start()
 	defer func() {
 		backgroundScheduler.Stop()
-		flushHealthRequestCounters(sharedDB, healthStatsCache, context.Background())
+		if err := flushHealthRequestCounters(sharedDB, healthStatsCache, context.Background()); err != nil {
+			log.Printf("WARN flush health request counters failed: %v", err)
+		}
 	}()
 	web.SetOverlayStatus(func() map[string]any {
 		currentTor, currentI2P := activeOverlays.current()
@@ -2019,10 +2036,10 @@ Service Commands:
   --service --uninstall Remove system service
 
 Maintenance Commands:
-  --maintenance backup [file]   Back up configuration and server.db
+  --maintenance backup [file]   Back up configuration, secrets, and SQLite data when local
       --include-ssl             Include SSL files
       --include-data            Include data files
-  --maintenance restore [file]  Restore from backup (default: newest full backup)
+  --maintenance restore [file]  Restore from backup (default: newest full backup; remote rules apply)
   --maintenance update          Check for updates
   --maintenance pgp generate|rotate|publish|export|import|delete  Manage the security PGP key
   --maintenance secret rotate installation_secret|encryption_key   Rotate a project secret
@@ -2140,7 +2157,9 @@ func checkHealth(port string, baseURL ...string) error {
 		if state == "" {
 			state = "disabled"
 		}
-		if state == "running" && strings.TrimSpace(i2p.Provider) != "" {
+		rawState := state
+		state = statusLabel(state, language)
+		if rawState == "running" && strings.TrimSpace(i2p.Provider) != "" {
 			state += " (" + strings.TrimSpace(i2p.Provider) + ")"
 		}
 		fmt.Printf("%s: %s\n", i18n.T(language, "cli.status.i2p"), safeStatusText(state))
@@ -2159,6 +2178,12 @@ func statusLabel(status, language string) string {
 	switch status {
 	case "healthy":
 		return i18n.T(language, "health.value.running")
+	case "running", "disabled", "starting", "unavailable", "no_provider", "building":
+		key := "health.value." + strings.ReplaceAll(status, "-", "_")
+		translated := i18n.T(language, key)
+		if translated != key {
+			return translated
+		}
 	case "degraded":
 		return i18n.T(language, "health.value.degraded")
 	case "unhealthy":
@@ -2321,6 +2346,9 @@ func configurationFingerprint(configDir string) string {
 }
 
 func handleServiceCommand(cmd, configDir string, dirs paths.Directories) {
+	if isServiceManagementAction(cmd) && !prepareServiceCommand(cmd) {
+		return
+	}
 	switch cmd {
 	case "start":
 		serviceStart()
@@ -2333,9 +2361,24 @@ func handleServiceCommand(cmd, configDir string, dirs paths.Directories) {
 	case "status":
 		serviceStatus()
 	case "--install":
+		if !privilege.IsElevated() && privilege.CanEscalate() {
+			if err := requestPrivilegeEscalation("Installing a system service requires administrator privileges"); err == nil {
+				return
+			} else if !errors.Is(err, errPrivilegeEscalationDeclined) {
+				logServiceError(err)
+				return
+			}
+		}
+		if !privilege.IsElevated() && servicepkg.RequiresSystemPrivileges() {
+			logServiceError(errors.New("this service manager has no per-user service; administrator privileges are required"))
+			return
+		}
 		logServiceError(servicepkg.Install())
 	case "--uninstall":
 		if confirmServiceUninstall(os.Stdin, os.Stdout) {
+			if !privilege.IsElevated() && servicepkg.HasSystemService() && !prepareServiceCommand("uninstall") {
+				return
+			}
 			if err := servicepkg.Uninstall(); err != nil {
 				logServiceError(err)
 				return
@@ -2360,6 +2403,32 @@ func handleServiceCommand(cmd, configDir string, dirs paths.Directories) {
 		fmt.Printf("Unknown service command: %s\n", cmd)
 		os.Exit(1)
 	}
+}
+
+func isServiceManagementAction(command string) bool {
+	switch command {
+	case "start", "stop", "restart", "reload", "status", "--disable":
+		return true
+	default:
+		return false
+	}
+}
+
+func prepareServiceCommand(action string) bool {
+	if privilege.IsElevated() || !servicepkg.HasSystemService() {
+		return true
+	}
+	if !privilege.CanEscalate() {
+		logServiceError(fmt.Errorf("the installed system service %s requires administrator privileges", action))
+		return false
+	}
+	if err := requestPrivilegeEscalation(fmt.Sprintf("Managing the installed system service requires administrator privileges to %s", action)); err != nil {
+		if !errors.Is(err, errPrivilegeEscalationDeclined) {
+			logServiceError(err)
+		}
+		return false
+	}
+	return false
 }
 
 func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, backupDir, pidPath string, configuration *config.Config, includeSSL, includeData bool) {
@@ -2403,9 +2472,6 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, bac
 			log.Fatalf("compliance report failed: %v", err)
 		}
 	case "backup":
-		if configuration.Server.Database.Driver == "libsql" {
-			log.Fatalf("remote libSQL backups are unavailable")
-		}
 		if len(args) > 0 && args[0] == "test" {
 			if len(args) > 2 {
 				log.Fatalf("invalid backup test arguments")
@@ -2415,7 +2481,7 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, bac
 				backupFile = args[1]
 			}
 			if backupFile == "" {
-				selected, err := newestFullBackupFile(backupDir)
+				selected, err := newestBackupFile(backupDir)
 				if err != nil {
 					log.Fatalf("select backup for verification: %v", err)
 				}
@@ -2454,7 +2520,7 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, bac
 			}
 			backupFile = filepath.Join(backupDir, paths.ProjectName+"_backup_"+time.Now().UTC().Format("2006-01-02_150405")+extension)
 		}
-		store, err := database.OpenSQLite(filepath.Join(databaseDir, "server.db"), 1)
+		store, err := database.OpenConfigured(configuration.Server.Database, filepath.Join(databaseDir, "server.db"), 1)
 		if err != nil {
 			log.Fatalf("open database for backup: %v", err)
 		}
@@ -2483,9 +2549,6 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, bac
 			"encrypted":   strconv.FormatBool(manifest.Encrypted),
 		}))
 	case "restore":
-		if configuration.Server.Database.Driver == "libsql" {
-			log.Fatalf("remote libSQL restore is unavailable")
-		}
 		if len(args) > 1 {
 			fmt.Println(i18n.T(os.Getenv("GITMESSAGES_LANG"), "cli.restore_usage"))
 			os.Exit(2)
@@ -2501,8 +2564,18 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, bac
 		} else {
 			backupFile = args[0]
 		}
-		databaseEmpty, err := applicationDatabaseEmpty(filepath.Join(databaseDir, "server.db"))
+		restoreStore, err := database.OpenConfiguredForRestore(configuration.Server.Database, filepath.Join(databaseDir, "server.db"), 1)
 		if err != nil {
+			log.Fatalf("open configured database before restore: %v", err)
+		}
+		databaseEmpty := false
+		if restoreStore.IsRemote() {
+			databaseEmpty, err = restoreStore.RestoreDataEmpty(context.Background())
+		} else {
+			databaseEmpty, err = applicationDatabaseEmpty(filepath.Join(databaseDir, "server.db"))
+		}
+		if err != nil {
+			_ = restoreStore.Close()
 			log.Fatalf("inspect database before restore: %v", err)
 		}
 		currentUser, _ := user.Current()
@@ -2511,14 +2584,17 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, bac
 		if !databaseEmpty && !privilege.IsElevated() && serviceUser {
 			suppliedToken, err = promptOperatorToken(os.Stdin, os.Stderr)
 			if err != nil {
+				_ = restoreStore.Close()
 				log.Fatalf("read operator token: %v", err)
 			}
 		}
 		if err := authorizeApplicationRestore(configuration.Server.Token, suppliedToken, databaseEmpty, privilege.IsElevated(), serviceUser, os.Stdin, os.Stderr); err != nil {
+			_ = restoreStore.Close()
 			log.Fatalf("restore authorization failed: %v", err)
 		}
 		if defaultRestore {
 			if err := confirmDefaultRestore(os.Stdin, os.Stderr); err != nil {
+				_ = restoreStore.Close()
 				log.Fatalf("restore confirmation failed: %v", err)
 			}
 		}
@@ -2526,14 +2602,21 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, bac
 		if strings.HasSuffix(strings.ToLower(backupFile), ".enc") {
 			password, err = promptBackupPassword(os.Stdin, os.Stderr)
 			if err != nil {
+				_ = restoreStore.Close()
 				log.Fatalf("read backup password: %v", err)
 			}
 		}
-		if err := restoreApplicationBackup(context.Background(), backupFile, configDir, dataDir, databaseDir, pidPath, configuration.Server.Address, configuration.Server.Port, configuration.Server.Restore, password); err != nil {
+		if !restoreStore.IsRemote() {
+			_ = restoreStore.Close()
+			restoreStore = nil
+		}
+		if err := restoreApplicationBackup(context.Background(), backupFile, configDir, dataDir, databaseDir, pidPath, configuration.Server.Address, configuration.Server.Port, configuration.Server.Restore, password, restoreStore); err != nil {
+			_ = restoreStore.Close()
 			log.Fatalf("restore failed: %v", err)
 		}
+		_ = restoreStore.Close()
 		if info, err := os.Stat(backupFile); err == nil {
-			if restoredStore, openErr := database.OpenSQLite(filepath.Join(databaseDir, "server.db"), 1); openErr == nil {
+			if restoredStore, openErr := database.OpenConfigured(configuration.Server.Database, filepath.Join(databaseDir, "server.db"), 1); openErr == nil {
 				if auditErr := recordBackupEvent(context.Background(), restoredStore, "backup.restored", backupFile, info.Size(), strings.HasSuffix(strings.ToLower(backupFile), ".enc"), true, "verified"); auditErr != nil {
 					log.Printf("WARN backup.audit_write_failed error=%q", auditErr)
 				}
@@ -2745,6 +2828,37 @@ func logServiceError(err error) {
 		fmt.Fprintf(os.Stderr, "service command failed: %v\n", err)
 	}
 }
+
+func requestPrivilegeEscalation(action string) error {
+	if !privilege.CanEscalate() {
+		return fmt.Errorf("%s; no supported privilege escalation method is available. Use a port >= 1024 or run with administrator approval", action)
+	}
+	fmt.Printf("%s. Re-run with elevated privileges? [Y/n] ", action)
+	response, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("read privilege escalation choice: %w", err)
+	}
+	if errors.Is(err, io.EOF) && response == "" {
+		return errors.New("privilege escalation requires an interactive confirmation")
+	}
+	response = strings.TrimSpace(response)
+	if response != "" && !strings.EqualFold(response, "y") && !strings.EqualFold(response, "yes") {
+		return errPrivilegeEscalationDeclined
+	}
+	return privilege.ExecElevated(os.Args)
+}
+
+func hasPrivilegedPort(port string) bool {
+	for _, part := range strings.Split(port, ",") {
+		value, err := strconv.Atoi(strings.TrimSpace(part))
+		if err == nil && value > 0 && value < 1024 {
+			return true
+		}
+	}
+	return false
+}
+
+var errPrivilegeEscalationDeclined = errors.New("privilege escalation declined")
 
 func serviceInstall(configDir, goos, systemdFile, launchdFile string, command func(string, ...string), output io.Writer) {
 	if err := installServiceFor(goos, configDir, systemdFile, launchdFile, command, output); err != nil {

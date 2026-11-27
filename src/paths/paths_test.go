@@ -408,3 +408,49 @@ func TestWritePIDFileModeAndContainerSkip(t *testing.T) {
 func TestIsRunningInContainer(t *testing.T) {
 	_ = IsRunningInContainer()
 }
+
+func TestDetectContainerSignals(t *testing.T) {
+	tests := []struct {
+		name, containerEnv, kubernetesEnv, pid1, parent, cgroup, marker string
+		want                                                            bool
+	}{
+		{name: "docker marker", marker: "/.dockerenv", want: true},
+		{name: "podman marker", marker: "/run/.containerenv", want: true},
+		{name: "lxc marker", marker: "/dev/lxc", want: true},
+		{name: "container environment", containerEnv: "systemd-nspawn", want: true},
+		{name: "kubernetes", kubernetesEnv: "10.0.0.1", want: true},
+		{name: "pid 1 container init", pid1: "s6-svscan", want: true},
+		{name: "parent container init", parent: "runsv", want: true},
+		{name: "project wrapper", parent: ProjectName, want: true},
+		{name: "container cgroup", cgroup: "0::/docker/abc", want: true},
+		{name: "host", pid1: "systemd", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := detectContainerSignals(test.containerEnv, test.kubernetesEnv, test.pid1, test.parent, test.cgroup, func(path string) bool { return path == test.marker && test.marker != "" })
+			if got != test.want {
+				t.Errorf("detectContainerSignals() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestIsSystemManagerHost(t *testing.T) {
+	for _, test := range []struct {
+		name, invocationID, rcServiceName, pid1 string
+		openRC, want                            bool
+	}{
+		{name: "systemd service", invocationID: "unit", want: true},
+		{name: "OpenRC service", rcServiceName: "gitmessages", want: true},
+		{name: "systemd system container", pid1: "systemd", want: true},
+		{name: "OpenRC init", pid1: "openrc-init", want: true},
+		{name: "OpenRC init with marker", pid1: "init", openRC: true, want: true},
+		{name: "application container", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isSystemManagerHost(test.invocationID, test.rcServiceName, test.pid1, test.openRC); got != test.want {
+				t.Errorf("isSystemManagerHost() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}

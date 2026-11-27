@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/apimgr/gitmessages/src/auth"
+	backuppkg "github.com/apimgr/gitmessages/src/backup"
 	"github.com/apimgr/gitmessages/src/common/i18n"
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
@@ -29,6 +30,39 @@ import (
 	"github.com/apimgr/gitmessages/src/securitydata"
 	"github.com/apimgr/gitmessages/src/web"
 )
+
+func TestServiceManagementActionClassification(t *testing.T) {
+	for _, test := range []struct {
+		command string
+		want    bool
+	}{
+		{command: "start", want: true},
+		{command: "stop", want: true},
+		{command: "--disable", want: true},
+		{command: "--help", want: false},
+		{command: "unknown", want: false},
+	} {
+		if got := isServiceManagementAction(test.command); got != test.want {
+			t.Errorf("isServiceManagementAction(%q) = %t, want %t", test.command, got, test.want)
+		}
+	}
+}
+
+func TestHasPrivilegedPort(t *testing.T) {
+	for _, test := range []struct {
+		port string
+		want bool
+	}{
+		{port: "80", want: true},
+		{port: "8080,443", want: true},
+		{port: "8080,8443", want: false},
+		{port: "0,70000,invalid", want: false},
+	} {
+		if got := hasPrivilegedPort(test.port); got != test.want {
+			t.Errorf("hasPrivilegedPort(%q) = %t, want %t", test.port, got, test.want)
+		}
+	}
+}
 
 func TestConfigureOutputFallsBackToEnglish(t *testing.T) {
 	previous, existed := os.LookupEnv("GITMESSAGES_LANG")
@@ -84,7 +118,7 @@ func TestCheckHealthReportsI2PLifecycleState(t *testing.T) {
 	if checkErr != nil || readErr != nil {
 		t.Fatalf("checkHealth() = %v, read output: %v", checkErr, readErr)
 	}
-	for _, expected := range []string{"Server Status: Running", "Uptime: 2 days 5 hours", "Tor Hidden Service: Connected", "I2P Eepsite: running (i2pd)", "Address: example.b32.i2p"} {
+	for _, expected := range []string{"Server Status: Running", "Uptime: 2 days 5 hours", "Tor Hidden Service: Connected", "I2P Eepsite: Running (i2pd)", "Address: example.b32.i2p"} {
 		if !strings.Contains(string(output), expected) {
 			t.Errorf("status output %q omitted %q", output, expected)
 		}
@@ -105,8 +139,23 @@ func TestHumanStatusUptime(t *testing.T) {
 	}
 }
 
+func TestStatusLabelTranslatesI2PStates(t *testing.T) {
+	for state, want := range map[string]string{
+		"disabled":    "Disabled",
+		"starting":    "Starting",
+		"running":     "Running",
+		"unavailable": "Unavailable",
+		"no_provider": "No provider",
+		"building":    "Building",
+	} {
+		if got := statusLabel(state, "en"); got != want {
+			t.Errorf("statusLabel(%q) = %q, want %q", state, got, want)
+		}
+	}
+}
+
 func TestStatusTranslationsExistForEveryLocale(t *testing.T) {
-	keys := []string{"cli.status.server", "cli.status.port", "cli.status.tor", "cli.status.i2p", "cli.status.address", "cli.status.connected", "cli.status.disconnected", "cli.status.health_failed", "cli.status.health_unavailable", "cli.status.day", "cli.status.days", "cli.status.hour", "cli.status.hours", "cli.status.minute", "cli.status.minutes", "cli.status.second", "cli.status.seconds"}
+	keys := []string{"cli.status.server", "cli.status.port", "cli.status.tor", "cli.status.i2p", "cli.status.address", "cli.status.connected", "cli.status.disconnected", "cli.status.health_failed", "cli.status.health_unavailable", "cli.status.day", "cli.status.days", "cli.status.hour", "cli.status.hours", "cli.status.minute", "cli.status.minutes", "cli.status.second", "cli.status.seconds", "health.value.disabled", "health.value.starting", "health.value.running", "health.value.unavailable", "health.value.no_provider", "health.value.building"}
 	for _, language := range i18n.Supported() {
 		for _, key := range keys {
 			if got := i18n.T(language, key); got == key {
@@ -806,6 +855,21 @@ func TestMaintenanceBackupTestVerifiesExplicitAndNewestBackup(t *testing.T) {
 	if _, err := createApplicationBackup(t.Context(), store, config.DefaultConfig(), configDir, dataDir, backupDir, backupPath, false, true); err != nil {
 		_ = store.Close()
 		t.Fatalf("create source backup: %v", err)
+	}
+	extracted := filepath.Join(root, "backup-inspection")
+	if _, err := backuppkg.Restore(t.Context(), backupPath, "", extracted, backuppkg.DefaultRestoreLimits()); err != nil {
+		_ = store.Close()
+		t.Fatalf("extract source backup for content assertions: %v", err)
+	}
+	for name, want := range map[string]string{
+		"info":             "database_driver=sqlite",
+		"app_secrets.json": `"name":"installation_secret"`,
+	} {
+		content, err := os.ReadFile(filepath.Join(extracted, name))
+		if err != nil || !strings.Contains(string(content), want) {
+			_ = store.Close()
+			t.Fatalf("backup %s content = %q, %v; want %q", name, content, err, want)
+		}
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)

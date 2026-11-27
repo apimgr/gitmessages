@@ -235,14 +235,61 @@ func EnsureDirMode(path string, permission os.FileMode) error {
 }
 
 func IsRunningInContainer() bool {
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		return true
-	}
-	data, err := os.ReadFile("/proc/1/comm")
-	if err != nil {
+	pid1 := processName(1)
+	if isSystemManagerHost(os.Getenv("INVOCATION_ID"), os.Getenv("RC_SVCNAME"), pid1, pathExists("/run/openrc")) {
 		return false
 	}
-	return string(data) == "tini\n" || string(data) == "tini" || string(data) == "dumb-init\n"
+	return detectContainerSignals(os.Getenv("container"), os.Getenv("KUBERNETES_SERVICE_HOST"), pid1, processName(os.Getppid()), readFile("/proc/1/cgroup"), pathExists)
+}
+
+func detectContainerSignals(containerEnv, kubernetesEnv, pid1, parentName, cgroup string, exists func(string) bool) bool {
+	for _, marker := range []string{"/.dockerenv", "/run/.containerenv", "/dev/lxc"} {
+		if exists(marker) {
+			return true
+		}
+	}
+	if strings.TrimSpace(containerEnv) != "" || strings.TrimSpace(kubernetesEnv) != "" {
+		return true
+	}
+	containerInit := map[string]bool{"tini": true, "dumb-init": true, "s6-svscan": true, "runsv": true, "runsvdir": true, "catatonit": true}
+	if containerInit[strings.ToLower(strings.TrimSpace(pid1))] || containerInit[strings.ToLower(strings.TrimSpace(parentName))] {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(parentName), ProjectName) {
+		return true
+	}
+	cgroup = strings.ToLower(cgroup)
+	for _, marker := range []string{"docker", "containerd", "kubepods", "libpod", "lxc"} {
+		if strings.Contains(cgroup, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSystemManagerHost(invocationID, rcServiceName, pid1 string, openRCRunning bool) bool {
+	pid1 = strings.TrimSpace(pid1)
+	return strings.TrimSpace(invocationID) != "" || strings.TrimSpace(rcServiceName) != "" || pid1 == "systemd" || pid1 == "openrc-init" || pid1 == "init" && openRCRunning
+}
+
+func processName(pid int) string {
+	if pid < 1 || runtime.GOOS == "windows" {
+		return ""
+	}
+	return strings.TrimSpace(readFile(filepath.Join("/proc", fmt.Sprint(pid), "comm")))
+}
+
+func readFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func GetBackupDir() string {

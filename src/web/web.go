@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	cryptorand "crypto/rand"
 	"embed"
 	"encoding/hex"
@@ -51,38 +52,39 @@ func APIBasePath() string {
 }
 
 var (
-	serverVersion          = "dev"
-	serverCommit           = "unknown"
-	serverBuildDate        = ""
-	serverStartedAt        = time.Now().UTC()
-	panicLoggerMu          sync.RWMutex
-	panicLogger            *log.Logger
-	overlayStatusMu        sync.RWMutex
-	overlayStatusProvider  func() map[string]any
-	apiBasePathMu          sync.RWMutex
-	apiBasePath            = "/api/" + config.DefaultAPIVersion
-	corsOriginsMu          sync.RWMutex
-	corsOrigins            = []string{"*"}
-	defaultThemeMu         sync.RWMutex
-	defaultTheme           = "dark"
-	metricsExporterMu      sync.RWMutex
-	activeMetricsExporter  *metrics.Exporter
-	maintenanceMu          sync.RWMutex
-	maintenanceProvider    func() (maintenance.Info, bool)
-	healthProviderMu       sync.RWMutex
-	healthStatsProvider    func() HealthStats
-	healthRestartProvider  func() []string
-	healthShutdownProvider func() bool
-	activeRequests         atomic.Int64
-	requestCounterMu       sync.Mutex
-	pendingRequestTotal    int64
-	pendingRequestHours    = make(map[int64]int64)
-	rateLimitCounter       cache.Counter
-	rateLimitCounterMu     sync.RWMutex
-	copyCodeSequence       atomic.Uint64
-	debugRequestCount      = expvar.NewInt("requests_total")
-	debugRequestSeconds    = expvar.NewFloat("requests_duration_seconds")
-	debugErrorCount        = expvar.NewInt("errors_total")
+	serverVersion           = "dev"
+	serverCommit            = "unknown"
+	serverBuildDate         = ""
+	serverStartedAt         = time.Now().UTC()
+	panicLoggerMu           sync.RWMutex
+	panicLogger             *log.Logger
+	overlayStatusMu         sync.RWMutex
+	overlayStatusProvider   func() map[string]any
+	apiBasePathMu           sync.RWMutex
+	apiBasePath             = "/api/" + config.DefaultAPIVersion
+	corsOriginsMu           sync.RWMutex
+	corsOrigins             = []string{"*"}
+	defaultThemeMu          sync.RWMutex
+	defaultTheme            = "dark"
+	metricsExporterMu       sync.RWMutex
+	activeMetricsExporter   *metrics.Exporter
+	maintenanceMu           sync.RWMutex
+	maintenanceProvider     func() (maintenance.Info, bool)
+	maintenanceReadProvider func(context.Context) bool
+	healthProviderMu        sync.RWMutex
+	healthStatsProvider     func() HealthStats
+	healthRestartProvider   func() []string
+	healthShutdownProvider  func() bool
+	activeRequests          atomic.Int64
+	requestCounterMu        sync.Mutex
+	pendingRequestTotal     int64
+	pendingRequestHours     = make(map[int64]int64)
+	rateLimitCounter        cache.Counter
+	rateLimitCounterMu      sync.RWMutex
+	copyCodeSequence        atomic.Uint64
+	debugRequestCount       = expvar.NewInt("requests_total")
+	debugRequestSeconds     = expvar.NewFloat("requests_duration_seconds")
+	debugErrorCount         = expvar.NewInt("errors_total")
 )
 
 //go:embed assets/*.css
@@ -199,6 +201,23 @@ func SetMaintenanceProvider(provider func() (maintenance.Info, bool)) {
 	maintenanceMu.Lock()
 	maintenanceProvider = provider
 	maintenanceMu.Unlock()
+}
+
+// SetMaintenanceReadProvider reports whether the database or an allowed cache can answer reads.
+func SetMaintenanceReadProvider(provider func(context.Context) bool) {
+	maintenanceMu.Lock()
+	maintenanceReadProvider = provider
+	maintenanceMu.Unlock()
+}
+
+func canServeMaintenanceReads(ctx context.Context) (bool, bool) {
+	maintenanceMu.RLock()
+	provider := maintenanceReadProvider
+	maintenanceMu.RUnlock()
+	if provider == nil {
+		return true, false
+	}
+	return provider(ctx), true
 }
 
 func currentMaintenance() (maintenance.Info, bool) {
@@ -1391,7 +1410,7 @@ func apiAbout(w http.ResponseWriter, r *http.Request) {
 		content = fmt.Sprintf("# %s\n\n> %s\n\n%s\n\n## %s\n\n- %s\n- %s\n- %s\n- %s\n- %s\n- %s\n\n## %s\n\n- [GitHub](https://github.com/apimgr/gitmessages)\n- [Documentation](https://apimgr-gitmessages.readthedocs.io/)\n- [REST API](/server/docs/swagger)\n- [GraphQL](/server/docs/graphql)", name, tagline, description, tr(r, "about.features"), tr(r, "about.feature.catalog"), tr(r, "about.feature.templates"), tr(r, "about.feature.builder"), tr(r, "about.feature.api"), tr(r, "about.feature.cli"), tr(r, "about.feature.networks"), tr(r, "about.links"))
 		format = "markdown"
 	}
-	content += "\n\n## " + tr(r, "about.attribution") + "\n\n" + tr(r, "about.catalog_attribution") + "\n\n<a href=\"https://db-ip.com/\">IP Geolocation by DB-IP</a>"
+	content += "\n\n## " + tr(r, "about.original_content") + "\n\n" + tr(r, "about.catalog_attribution") + "\n\n## " + tr(r, "about.attribution") + "\n\n<a href=\"https://db-ip.com/\">IP Geolocation by DB-IP</a>"
 	writeSuccess(w, r, map[string]string{"title": name, "content": content, "format": format})
 }
 
@@ -1936,7 +1955,8 @@ func aboutPage(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-features"><h2 id="about-features">%s</h2><ul><li>%s</li><li>%s</li><li>%s</li><li>%s</li><li>%s</li><li>%s</li></ul></section>`, template.HTMLEscapeString(tr(r, "about.features")), template.HTMLEscapeString(tr(r, "about.feature.catalog")), template.HTMLEscapeString(tr(r, "about.feature.templates")), template.HTMLEscapeString(tr(r, "about.feature.builder")), template.HTMLEscapeString(tr(r, "about.feature.api")), template.HTMLEscapeString(tr(r, "about.feature.cli")), template.HTMLEscapeString(tr(r, "about.feature.networks")))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-version"><h2 id="about-version">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "about.version")), template.HTMLEscapeString(serverVersion))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-links"><h2 id="about-links">%s</h2><ul><li><a href="https://github.com/apimgr/gitmessages">%s</a></li><li><a href="https://apimgr-gitmessages.readthedocs.io/">%s</a></li><li><a href="/server/docs/swagger">%s</a></li><li><a href="/server/docs/graphql">%s</a></li></ul></section>`, template.HTMLEscapeString(tr(r, "about.links")), template.HTMLEscapeString(tr(r, "about.github")), template.HTMLEscapeString(tr(r, "about.documentation")), template.HTMLEscapeString(tr(r, "api.rest")), template.HTMLEscapeString(tr(r, "graphql.title")))
-	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-attribution"><h2 id="about-attribution">%s</h2><p>%s</p><p><a href="https://db-ip.com/">IP Geolocation by DB-IP</a></p></section>`, template.HTMLEscapeString(tr(r, "about.attribution")), template.HTMLEscapeString(tr(r, "about.catalog_attribution")))
+	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-original-content"><h2 id="about-original-content">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "about.original_content")), template.HTMLEscapeString(tr(r, "about.catalog_attribution")))
+	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="about-attribution"><h2 id="about-attribution">%s</h2><p><a href="https://db-ip.com/">IP Geolocation by DB-IP</a></p></section>`, template.HTMLEscapeString(tr(r, "about.attribution")))
 	body.WriteString(string(operatorCard(r, "about", "operator-about")))
 	page(w, r, seoBrandingTitle(), template.HTML(body.String()))
 }

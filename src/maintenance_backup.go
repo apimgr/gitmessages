@@ -57,12 +57,29 @@ func createApplicationBackupAt(ctx context.Context, store *database.Store, confi
 		return backuppkg.Manifest{}, fmt.Errorf("create backup snapshot workspace: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(workingDir) }()
-	snapshotPath := filepath.Join(workingDir, "server.db")
-	if err := store.Snapshot(ctx, snapshotPath); err != nil {
-		return backuppkg.Manifest{}, fmt.Errorf("snapshot server database: %w", err)
+	if store.IsRemote() {
+		probeContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+		pingErr := store.PrimaryRead().PingContext(probeContext)
+		cancel()
+		if pingErr != nil {
+			return backuppkg.Manifest{}, fmt.Errorf("remote database is unavailable for backup: %w", pingErr)
+		}
 	}
-	if err := verifySQLiteBackup(snapshotPath); err != nil {
-		return backuppkg.Manifest{}, fmt.Errorf("verify database snapshot: %w", err)
+	driverName := strings.ToLower(strings.TrimSpace(configuration.Server.Database.Driver))
+	if driverName == "" || driverName == "sqlite2" || driverName == "sqlite3" {
+		driverName = "sqlite"
+	}
+	if store.IsRemote() && driverName != "libsql" && driverName != "turso" {
+		driverName = "libsql"
+	}
+	snapshotPath := filepath.Join(workingDir, "server.db")
+	if !store.IsRemote() {
+		if err := store.Snapshot(ctx, snapshotPath); err != nil {
+			return backuppkg.Manifest{}, fmt.Errorf("snapshot server database: %w", err)
+		}
+		if err := verifySQLiteBackup(snapshotPath); err != nil {
+			return backuppkg.Manifest{}, fmt.Errorf("verify database snapshot: %w", err)
+		}
 	}
 	inputs := make([]backuppkg.Input, 0)
 	add := func(source, archivePrefix string, required bool) error {
@@ -79,6 +96,32 @@ func createApplicationBackupAt(ctx context.Context, store *database.Store, confi
 	if err := add(filepath.Join(configDir, "server.yml"), "", true); err != nil {
 		return backuppkg.Manifest{}, err
 	}
+	secretRecords, err := readApplicationSecrets(ctx, store.PrimaryRead())
+	if err != nil {
+		return backuppkg.Manifest{}, fmt.Errorf("export application secrets: %w", err)
+	}
+	secretPath := filepath.Join(workingDir, "app_secrets.json")
+	secretJSON, err := json.Marshal(secretRecords)
+	if err != nil {
+		return backuppkg.Manifest{}, fmt.Errorf("encode application secrets: %w", err)
+	}
+	if err := os.WriteFile(secretPath, secretJSON, 0o600); err != nil {
+		return backuppkg.Manifest{}, fmt.Errorf("write application secrets export: %w", err)
+	}
+	secretInputs, err := backuppkg.InputsFromPath(secretPath, "")
+	if err != nil {
+		return backuppkg.Manifest{}, fmt.Errorf("collect application secrets export: %w", err)
+	}
+	inputs = append(inputs, secretInputs...)
+	infoPath := filepath.Join(workingDir, "info")
+	if err := os.WriteFile(infoPath, []byte("database_driver="+driverName+"\n"), 0o600); err != nil {
+		return backuppkg.Manifest{}, fmt.Errorf("write backup driver info: %w", err)
+	}
+	infoInputs, err := backuppkg.InputsFromPath(infoPath, "")
+	if err != nil {
+		return backuppkg.Manifest{}, fmt.Errorf("collect backup driver info: %w", err)
+	}
+	inputs = append(inputs, infoInputs...)
 	for _, item := range []struct{ path, prefix string }{
 		{filepath.Join(configDir, "yaml.d"), "yaml.d"},
 		{filepath.Join(configDir, "secrets.yml"), ""},
@@ -118,7 +161,9 @@ func createApplicationBackupAt(ctx context.Context, store *database.Store, confi
 		}
 		inputs = append(inputs, entries...)
 	}
-	inputs = append(inputs, backuppkg.Input{Path: snapshotPath, ArchivePath: "server.db"})
+	if !store.IsRemote() {
+		inputs = append(inputs, backuppkg.Input{Path: snapshotPath, ArchivePath: "server.db"})
+	}
 	if includeData {
 		if err := add(dataDir, "data", false); err != nil {
 			return backuppkg.Manifest{}, err
@@ -133,6 +178,30 @@ func createApplicationBackupAt(ctx context.Context, store *database.Store, confi
 		return backuppkg.Manifest{}, err
 	}
 	return manifest, nil
+}
+
+type applicationSecretRecord struct {
+	Name      string `json:"name"`
+	Value     string `json:"value"`
+	Version   int    `json:"version"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+func readApplicationSecrets(ctx context.Context, db *sql.DB) ([]applicationSecretRecord, error) {
+	rows, err := db.QueryContext(ctx, `SELECT name,value,version,updated_at FROM app_secrets ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	records := make([]applicationSecretRecord, 0)
+	for rows.Next() {
+		var record applicationSecretRecord
+		if err := rows.Scan(&record.Name, &record.Value, &record.Version, &record.UpdatedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
 }
 
 func connectionTLSBackupPath(configDir, filename string) (string, string, error) {
@@ -173,7 +242,7 @@ func connectionTLSBackupPath(configDir, filename string) (string, string, error)
 
 func verifyApplicationBackup(ctx context.Context, backupFile, backupDir, password string, limits config.RestoreConfig) (backuppkg.Manifest, error) {
 	if backupFile == "" {
-		selected, err := newestFullBackupFile(backupDir)
+		selected, err := newestBackupFile(backupDir)
 		if err != nil {
 			return backuppkg.Manifest{}, err
 		}
@@ -197,16 +266,98 @@ func verifyApplicationBackup(ctx context.Context, backupFile, backupDir, passwor
 		return backuppkg.Manifest{}, errors.New("backup does not contain server.yml")
 	}
 	databasePath := filepath.Join(extracted, "server.db")
-	if err := verifySQLiteBackup(databasePath); err != nil {
-		return backuppkg.Manifest{}, fmt.Errorf("verify backup database: %w", err)
+	driver, err := backupDatabaseDriver(extracted)
+	if err != nil {
+		return backuppkg.Manifest{}, err
 	}
-	if err := verifyBackupPGPKeypair(databasePath, extracted); err != nil {
+	var installationSecret []byte
+	if driver == "sqlite" {
+		if err := verifySQLiteBackup(databasePath); err != nil {
+			return backuppkg.Manifest{}, fmt.Errorf("verify backup database: %w", err)
+		}
+		store, err := sql.Open("sqlite", databasePath)
+		if err != nil {
+			return backuppkg.Manifest{}, err
+		}
+		var encoded string
+		err = store.QueryRowContext(ctx, `SELECT value FROM app_secrets WHERE name='installation_secret'`).Scan(&encoded)
+		_ = store.Close()
+		if err != nil {
+			return backuppkg.Manifest{}, fmt.Errorf("read backup installation secret: %w", err)
+		}
+		installationSecret, err = base64.StdEncoding.DecodeString(encoded)
+		if err != nil || len(installationSecret) != 32 {
+			return backuppkg.Manifest{}, errors.New("backup installation secret is invalid")
+		}
+	}
+	secretRecords, err := readBackupSecrets(filepath.Join(extracted, "app_secrets.json"))
+	if err != nil {
+		return backuppkg.Manifest{}, err
+	}
+	if driver != "sqlite" {
+		for _, record := range secretRecords {
+			if record.Name == "installation_secret" {
+				installationSecret, err = base64.StdEncoding.DecodeString(record.Value)
+				if err != nil || len(installationSecret) != 32 {
+					return backuppkg.Manifest{}, errors.New("backup installation secret is invalid")
+				}
+				break
+			}
+		}
+	}
+	if err := verifyBackupPGPKeypairWithSecret(installationSecret, extracted); err != nil {
 		return backuppkg.Manifest{}, fmt.Errorf("verify backup PGP keypair: %w", err)
 	}
 	return manifest, nil
 }
 
-func verifyBackupPGPKeypair(databasePath, extracted string) error {
+func backupDatabaseDriver(extracted string) (string, error) {
+	info, err := os.ReadFile(filepath.Join(extracted, "info"))
+	if errors.Is(err, os.ErrNotExist) {
+		if _, statErr := os.Stat(filepath.Join(extracted, "server.db")); statErr == nil {
+			return "sqlite", nil
+		}
+		return "", errors.New("backup is missing database driver info")
+	}
+	if err != nil {
+		return "", fmt.Errorf("read backup driver info: %w", err)
+	}
+	value := strings.TrimSuffix(string(info), "\n")
+	if strings.Contains(value, "\n") || !strings.HasPrefix(value, "database_driver=") {
+		return "", errors.New("backup database driver info is invalid")
+	}
+	driver := strings.TrimPrefix(value, "database_driver=")
+	if driver != "sqlite" && driver != "libsql" && driver != "turso" {
+		return "", errors.New("backup database driver is unsupported")
+	}
+	_, statErr := os.Stat(filepath.Join(extracted, "server.db"))
+	if driver == "sqlite" && statErr != nil || driver != "sqlite" && statErr == nil {
+		return "", errors.New("backup database contents do not match its driver info")
+	}
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return "", statErr
+	}
+	return driver, nil
+}
+
+func readBackupSecrets(path string) ([]applicationSecretRecord, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read backup app_secrets.json: %w", err)
+	}
+	var records []applicationSecretRecord
+	if err := json.Unmarshal(content, &records); err != nil || records == nil {
+		return nil, errors.New("backup app_secrets.json is invalid")
+	}
+	for _, record := range records {
+		if strings.TrimSpace(record.Name) == "" || record.Version < 1 {
+			return nil, errors.New("backup app_secrets.json contains an invalid record")
+		}
+	}
+	return records, nil
+}
+
+func verifyBackupPGPKeypairWithSecret(secret []byte, extracted string) error {
 	publicPath := filepath.Join(extracted, "security", "pgp.pub.asc")
 	privatePath := filepath.Join(extracted, "security", "pgp.priv.asc.enc")
 	public, publicErr := os.ReadFile(publicPath)
@@ -217,17 +368,7 @@ func verifyBackupPGPKeypair(databasePath, extracted string) error {
 	if publicErr != nil || privateErr != nil {
 		return errors.Join(publicErr, privateErr, errors.New("backup must contain both PGP key files"))
 	}
-	store, err := sql.Open("sqlite", databasePath)
-	if err != nil {
-		return fmt.Errorf("open backup secrets database: %w", err)
-	}
-	defer func() { _ = store.Close() }()
-	var encoded string
-	if err := store.QueryRow(`SELECT value FROM app_secrets WHERE name='installation_secret'`).Scan(&encoded); err != nil {
-		return fmt.Errorf("read backup installation secret: %w", err)
-	}
-	secret, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil || len(secret) != 32 {
+	if len(secret) != 32 {
 		return errors.New("backup installation secret is invalid")
 	}
 	decrypted, err := pgp.DecryptPrivate(private, secret)
@@ -253,8 +394,8 @@ func newestBackupFile(backupDir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read backup directory: %w", err)
 	}
-	var newestFullPath, newestIncrementalPath string
-	var newestFullDate, newestFullModTime, newestIncrementalModTime time.Time
+	var newestPath string
+	var newestDate, newestModTime time.Time
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !isBackupArchive(name) || !strings.HasPrefix(name, paths.ProjectName+"_") && !strings.HasPrefix(name, paths.ProjectName+"-") {
@@ -265,23 +406,17 @@ func newestBackupFile(backupDir string) (string, error) {
 			return "", err
 		}
 		path := filepath.Join(backupDir, name)
-		if backupDate, ok := fullBackupDate(name); ok {
-			if newestFullPath == "" || backupDate.After(newestFullDate) || backupDate.Equal(newestFullDate) && info.ModTime().After(newestFullModTime) {
-				newestFullPath, newestFullDate, newestFullModTime = path, backupDate, info.ModTime()
-			}
-			continue
+		backupDate, ok := fullBackupDate(name)
+		if !ok && (strings.HasSuffix(name, "-daily.tar.gz") || strings.HasSuffix(name, "-daily.tar.gz.enc") || strings.HasSuffix(name, "-hourly.tar.gz") || strings.HasSuffix(name, "-hourly.tar.gz.enc")) {
+			backupDate = info.ModTime().UTC().Truncate(24 * time.Hour)
+			ok = true
 		}
-		if strings.HasSuffix(name, "-daily.tar.gz") || strings.HasSuffix(name, "-daily.tar.gz.enc") || strings.HasSuffix(name, "-hourly.tar.gz") || strings.HasSuffix(name, "-hourly.tar.gz.enc") {
-			if newestIncrementalPath == "" || info.ModTime().After(newestIncrementalModTime) {
-				newestIncrementalPath, newestIncrementalModTime = path, info.ModTime()
-			}
+		if ok && (newestPath == "" || backupDate.After(newestDate) || backupDate.Equal(newestDate) && info.ModTime().After(newestModTime)) {
+			newestPath, newestDate, newestModTime = path, backupDate, info.ModTime()
 		}
 	}
-	if newestFullPath != "" {
-		return newestFullPath, nil
-	}
-	if newestIncrementalPath != "" {
-		return newestIncrementalPath, nil
+	if newestPath != "" {
+		return newestPath, nil
 	}
 	return "", errors.New("no backup archive was found")
 }
@@ -289,11 +424,30 @@ func newestBackupFile(backupDir string) (string, error) {
 // newestFullBackupFile selects the newest full archive without falling back to
 // an incremental archive, which cannot restore independently.
 func newestFullBackupFile(backupDir string) (string, error) {
-	selected, err := newestBackupFile(backupDir)
+	entries, err := os.ReadDir(backupDir)
 	if err != nil {
 		return "", err
 	}
-	if _, ok := fullBackupDate(filepath.Base(selected)); !ok {
+	var selected string
+	var selectedDate, selectedModTime time.Time
+	for _, entry := range entries {
+		if entry.IsDir() || !isBackupArchive(entry.Name()) || !strings.HasPrefix(entry.Name(), paths.ProjectName+"_backup_") {
+			continue
+		}
+		date, ok := fullBackupDate(entry.Name())
+		if !ok {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return "", err
+		}
+		if selected == "" || date.After(selectedDate) || date.Equal(selectedDate) && info.ModTime().After(selectedModTime) {
+			selected = filepath.Join(backupDir, entry.Name())
+			selectedDate, selectedModTime = date, info.ModTime()
+		}
+	}
+	if selected == "" {
 		return "", errors.New("no full backup archive was found")
 	}
 	return selected, nil
@@ -365,14 +519,11 @@ func parseBackupRestoreLimits(configuration config.RestoreConfig) backuppkg.Rest
 	if value, err := parseBackupSize(configuration.MaxExpandedSize); err == nil && value > 0 {
 		defaults.MaxExpandedSize = value
 	}
-	if value, err := parseBackupSize(configuration.MaxFileSize); err == nil && value > 0 {
-		defaults.MaxFileSize = value
-	}
 	if configuration.MaxFiles > 0 {
 		defaults.MaxFiles = configuration.MaxFiles
 	}
-	if configuration.MaxRatio > 0 {
-		defaults.MaxRatio = configuration.MaxRatio
+	if configuration.MaxPathLength > 0 {
+		defaults.MaxPathLength = configuration.MaxPathLength
 	}
 	return defaults
 }

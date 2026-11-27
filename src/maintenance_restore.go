@@ -23,7 +23,7 @@ import (
 )
 
 // restoreApplicationBackup verifies and validates an archive before replacing live state.
-func restoreApplicationBackup(ctx context.Context, archivePath, configDir, dataDir, databaseDir, pidPath, address, port string, limits config.RestoreConfig, password string) error {
+func restoreApplicationBackup(ctx context.Context, archivePath, configDir, dataDir, databaseDir, pidPath, address, port string, limits config.RestoreConfig, password string, targetStore ...*database.Store) error {
 	if ctx == nil {
 		return errors.New("restore context is required")
 	}
@@ -50,8 +50,21 @@ func restoreApplicationBackup(ctx context.Context, archivePath, configDir, dataD
 	if manifest.Type != "full" && manifest.Type != "incremental" {
 		return errors.New("unsupported backup type")
 	}
-	if err := verifyRestoreSQLite(filepath.Join(extracted, "server.db")); err != nil {
-		return fmt.Errorf("validate restored database: %w", err)
+	driver, err := backupDatabaseDriver(extracted)
+	if err != nil {
+		return err
+	}
+	databasePath := filepath.Join(extracted, "server.db")
+	if driver == "sqlite" {
+		if err := verifyRestoreSQLite(databasePath); err != nil {
+			return fmt.Errorf("validate restored database: %w", err)
+		}
+	} else if len(targetStore) == 0 || targetStore[0] == nil || !targetStore[0].IsRemote() {
+		return errors.New("a remote database backup requires a configured remote database")
+	}
+	secretRecords, err := readBackupSecrets(filepath.Join(extracted, "app_secrets.json"))
+	if err != nil {
+		return err
 	}
 	configSource := filepath.Join(workspace, "new-config")
 	if err := os.Mkdir(configSource, 0o700); err != nil {
@@ -62,7 +75,7 @@ func restoreApplicationBackup(ctx context.Context, archivePath, configDir, dataD
 		return err
 	}
 	for _, entry := range entries {
-		if entry.Name() == "server.db" || entry.Name() == "data" || entry.Name() == "manifest.json" {
+		if entry.Name() == "server.db" || entry.Name() == "app_secrets.json" || entry.Name() == "info" || entry.Name() == "data" || entry.Name() == "manifest.json" {
 			continue
 		}
 		if err := copyRestoreEntry(filepath.Join(extracted, entry.Name()), filepath.Join(configSource, entry.Name())); err != nil {
@@ -81,7 +94,7 @@ func restoreApplicationBackup(ctx context.Context, archivePath, configDir, dataD
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if !isWithinDir(dataDir, databaseDir) {
+	if driver == "sqlite" && !isWithinDir(dataDir, databaseDir) {
 		dbSource := filepath.Join(workspace, "new-database")
 		if err := os.Mkdir(dbSource, 0o700); err != nil {
 			return err
@@ -90,7 +103,7 @@ func restoreApplicationBackup(ctx context.Context, archivePath, configDir, dataD
 			return fmt.Errorf("stage restored database: %w", err)
 		}
 		targets = append(targets, restoreTarget{destination: databaseDir, source: dbSource})
-	} else if dataDir != "" {
+	} else if driver == "sqlite" && dataDir != "" {
 		relative, err := filepath.Rel(dataDir, filepath.Join(databaseDir, "server.db"))
 		if err != nil || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			return errors.New("database path is not safely contained in data directory")
@@ -114,7 +127,44 @@ func restoreApplicationBackup(ctx context.Context, archivePath, configDir, dataD
 			targets = append(targets, restoreTarget{destination: databaseDir, source: dbSource})
 		}
 	}
+	if len(targetStore) > 0 && targetStore[0] != nil && targetStore[0].IsRemote() {
+		if driver == "sqlite" {
+			empty, err := targetStore[0].RestoreDataEmpty(ctx)
+			if err != nil {
+				return err
+			}
+			if empty {
+				if err := targetStore[0].SeedFromSQLite(ctx, databasePath); err != nil {
+					return fmt.Errorf("seed empty remote database from SQLite backup: %w", err)
+				}
+			}
+		}
+		if err := applyApplicationSecretsIfAbsent(ctx, targetStore[0], secretRecords); err != nil {
+			return err
+		}
+	}
 	return replaceRestoreTargets(targets, workspace)
+}
+
+func applyApplicationSecretsIfAbsent(ctx context.Context, store *database.Store, records []applicationSecretRecord) error {
+	if store == nil || !store.IsRemote() {
+		return errors.New("remote database is required to apply archived application secrets")
+	}
+	return store.Write(ctx, func(tx *sql.Tx) error {
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM app_secrets`).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return nil
+		}
+		for _, record := range records {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO app_secrets(name,value,version,updated_at) VALUES(?,?,?,?)`, record.Name, record.Value, record.Version, record.UpdatedAt); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // authorizeApplicationRestore handles operator authorization separately from archive passwords.

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/apimgr/gitmessages/src/common/i18n"
+	"github.com/apimgr/gitmessages/src/paths"
 	"golang.org/x/text/language"
 	"gopkg.in/yaml.v3"
 )
@@ -75,6 +76,7 @@ type ServerConfig struct {
 	Scheduler      SchedulerConfig      `yaml:"scheduler"`
 	Backup         BackupConfig         `yaml:"backup"`
 	Restore        RestoreConfig        `yaml:"restore"`
+	Import         map[string]any       `yaml:"import"`
 	Compliance     ComplianceConfig     `yaml:"compliance"`
 	Tokens         TokenConfig          `yaml:"tokens"`
 	Pages          PagesConfig          `yaml:"pages"`
@@ -710,8 +712,7 @@ type RestoreConfig struct {
 	MaxArchiveSize  string `yaml:"max_archive_size"`
 	MaxExpandedSize string `yaml:"max_expanded_size"`
 	MaxFiles        int    `yaml:"max_files"`
-	MaxFileSize     string `yaml:"max_file_size"`
-	MaxRatio        int    `yaml:"max_ratio"`
+	MaxPathLength   int    `yaml:"max_path_length"`
 }
 
 type ComplianceConfig struct {
@@ -957,7 +958,7 @@ func DefaultConfig() *Config {
 				Retention:     BackupRetentionConfig{MaxBackups: 1, MaxTotalSize: "10%"},
 				DiskThreshold: 90,
 			},
-			Restore:  RestoreConfig{MaxArchiveSize: "1G", MaxExpandedSize: "4G", MaxFiles: 10000, MaxFileSize: "512M", MaxRatio: 100},
+			Restore:  RestoreConfig{MaxArchiveSize: "20GB", MaxExpandedSize: "50GB", MaxFiles: 1000000, MaxPathLength: 4096},
 			Security: SecurityConfig{Reports: SecurityReportsConfig{RetentionDays: 365}, Blocklists: BlocklistsConfig{Enabled: true, ExtraSources: []BlocklistSourceConfig{}}},
 			RateLimit: RateLimitConfig{
 				Read:         RateLimitBucketConfig{Requests: 120, Window: 60},
@@ -1160,46 +1161,7 @@ func validPort(port string) bool {
 }
 
 func runningInContainer() bool {
-	pid1 := ""
-	if data, err := os.ReadFile("/proc/1/comm"); err == nil {
-		pid1 = strings.TrimSpace(string(data))
-	}
-	if isSystemManagerHost(os.Getenv("INVOCATION_ID"), os.Getenv("RC_SVCNAME"), pid1, pathExists("/run/openrc")) {
-		return false
-	}
-	for _, marker := range []string{"/.dockerenv", "/run/.containerenv", "/dev/lxc"} {
-		if _, err := os.Stat(marker); err == nil {
-			return true
-		}
-	}
-	if strings.TrimSpace(os.Getenv("container")) != "" || strings.TrimSpace(os.Getenv("KUBERNETES_SERVICE_HOST")) != "" {
-		return true
-	}
-	if pid1 != "" {
-		name := strings.ToLower(pid1)
-		if name == "tini" || name == "dumb-init" || name == "s6-svscan" || name == "runsv" || name == "runsvdir" || name == "catatonit" {
-			return true
-		}
-	}
-	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
-		text := strings.ToLower(string(data))
-		for _, marker := range []string{"docker", "containerd", "kubepods", "libpod", "lxc"} {
-			if strings.Contains(text, marker) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func isSystemManagerHost(invocationID, rcServiceName, pid1 string, openRCRunning bool) bool {
-	pid1 = strings.TrimSpace(pid1)
-	return strings.TrimSpace(invocationID) != "" || strings.TrimSpace(rcServiceName) != "" || pid1 == "systemd" || pid1 == "openrc-init" || pid1 == "init" && openRCRunning
-}
-
-func pathExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+	return paths.IsRunningInContainer()
 }
 
 // migrateYamlToYml migrates old .yaml files to .yml
@@ -2213,7 +2175,7 @@ func migrateAreaFiles(configFile string) {
 		sectionMap[key] = value
 	}
 	areaForServer := map[string]string{
-		"update": "maintenance.yml", "auto_update": "maintenance.yml", "backup": "maintenance.yml", "restore": "maintenance.yml", "scheduler": "maintenance.yml",
+		"update": "maintenance.yml", "auto_update": "maintenance.yml", "backup": "maintenance.yml", "restore": "maintenance.yml", "import": "maintenance.yml", "scheduler": "maintenance.yml",
 		"metrics": "metrics.yml", "tor": "tor.yml", "i2p": "i2p.yml", "logs": "logs.yml", "notifications": "notifications.yml",
 		"privacy": "privacy.yml", "compliance": "privacy.yml", "tracking": "privacy.yml", "security": "security.yml", "rate_limit": "security.yml", "geoip": "security.yml", "limits": "security.yml", "tokens": "security.yml",
 		"pages": "pages.yml", "contact": "contact.yml", "cors": "web.yml", "csrf": "web.yml", "compression": "web.yml", "healthz": "web.yml", "i18n": "web.yml", "url_detection": "web.yml",

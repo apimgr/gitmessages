@@ -223,8 +223,13 @@ func deliverWithClient(ctx context.Context, transport, endpoint, secret, role st
 	if err != nil {
 		return errors.New("webhook request failed")
 	}
-	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	if _, err := io.Copy(io.Discard, io.LimitReader(response.Body, 4096)); err != nil {
+		_ = response.Body.Close()
+		return errors.New("read webhook response failed")
+	}
+	if err := response.Body.Close(); err != nil {
+		return errors.New("close webhook response failed")
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("endpoint returned HTTP %d", response.StatusCode)
 	}

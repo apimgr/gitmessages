@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -93,6 +94,21 @@ func TestCreateVerifyAndRestore(t *testing.T) {
 		if err != nil || string(got) != want {
 			t.Fatalf("restored %s = %q, %v; want %q", path, got, err, want)
 		}
+	}
+}
+
+func TestRestoreAllowsHighCompressionRatioWithinSizeLimits(t *testing.T) {
+	root := backupTestDir(t)
+	source := filepath.Join(root, "compressed.txt")
+	if err := os.WriteFile(source, bytes.Repeat([]byte("a"), 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(root, "backup.tar.gz")
+	if _, err := Create(context.Background(), CreateOptions{Destination: archivePath, Inputs: []Input{{Path: source, ArchivePath: "compressed.txt"}}}); err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+	if _, err := Verify(context.Background(), archivePath, "", DefaultRestoreLimits()); err != nil {
+		t.Fatalf("Verify() rejected an archive within size limits: %v", err)
 	}
 }
 
@@ -297,8 +313,20 @@ func TestRestoreRejectsExistingDestinationAndConfiguredLimits(t *testing.T) {
 	}
 	limits := DefaultRestoreLimits()
 	limits.MaxExpandedSize = 1
-	if _, err := Verify(context.Background(), archivePath, "", limits); err == nil {
+	if _, err := Verify(context.Background(), archivePath, "", limits); !errors.Is(err, ErrRestoreLimit) {
 		t.Fatal("Verify() accepted an archive over the expanded-size limit")
+	}
+	limits = DefaultRestoreLimits()
+	limits.MaxPathLength = 2
+	if _, err := Verify(context.Background(), archivePath, "", limits); !errors.Is(err, ErrRestoreLimit) {
+		t.Fatalf("Verify() path limit error = %v, want ERR_RESTORE_LIMIT", err)
+	}
+}
+
+func TestDefaultRestoreLimitsMatchSpecification(t *testing.T) {
+	limits := DefaultRestoreLimits()
+	if limits.MaxArchiveSize != 20<<30 || limits.MaxExpandedSize != 50<<30 || limits.MaxFiles != 1000000 || limits.MaxPathLength != 4096 {
+		t.Fatalf("DefaultRestoreLimits() = %+v, does not match AI.md", limits)
 	}
 }
 

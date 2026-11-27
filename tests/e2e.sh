@@ -20,7 +20,8 @@ mkdir -p "$tmp_parent"
 test_dir=$(mktemp -d "$tmp_parent/${internal_name}-XXXXXX")
 chmod 0700 "$test_dir"
 mkdir -p "$test_dir/source" "$test_dir/binaries" "$test_dir/runtime"
-chmod 0700 "$test_dir/runtime"
+# The server drops to its service account, which must traverse this mount point.
+chmod 0755 "$test_dir/runtime"
 mkdir -p "$test_dir/runtime/artifacts"
 chmod 0700 "$test_dir/runtime/artifacts"
 tar -C "$project_dir" --exclude=.git --exclude=binaries --exclude=releases -cf - . | tar -C "$test_dir/source" -xf -

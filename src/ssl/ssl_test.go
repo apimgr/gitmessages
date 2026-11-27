@@ -53,7 +53,9 @@ func TestReloadLetsEncryptConfigInvalidatesACMEManager(t *testing.T) {
 	manager.certManager = &autocert.Manager{}
 	manager.certDomains = []string{"old.example.test"}
 	credentials := map[string]string{"TOKEN": "new"}
-	manager.ReloadLetsEncrypt(LetsEncryptConfig{Enabled: true, Email: "new@example.test", Challenge: "dns-01", DNSCredentials: credentials})
+	if err := manager.ReloadLetsEncrypt(LetsEncryptConfig{Enabled: true, Email: "new@example.test", Challenge: "dns-01", DNSCredentials: credentials}); err != nil {
+		t.Fatalf("reload Let's Encrypt configuration: %v", err)
+	}
 	credentials["TOKEN"] = "mutated"
 	if manager.config.MinVersion != "TLS1.2" || manager.config.LetsEncrypt.Email != "new@example.test" || manager.config.LetsEncrypt.DNSCredentials["TOKEN"] != "new" {
 		t.Fatalf("reload changed TLS listener settings or retained a caller-owned credential map: %+v", manager.config)

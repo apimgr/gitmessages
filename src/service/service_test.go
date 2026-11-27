@@ -10,6 +10,27 @@ import (
 	"testing"
 )
 
+func TestRequiresSystemPrivilegesForInstall(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		system  bool
+		manager ServiceType
+		want    bool
+	}{
+		{name: "root install", system: true, manager: ServiceOpenRC, want: false},
+		{name: "systemd user service", manager: ServiceSystemd, want: false},
+		{name: "launch agent", manager: ServiceLaunchd, want: false},
+		{name: "OpenRC system service", manager: ServiceOpenRC, want: true},
+		{name: "unknown manager", manager: ServiceUnknown, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := requiresSystemPrivileges(test.system, test.manager); got != test.want {
+				t.Fatalf("requiresSystemPrivileges(%t, %v) = %t, want %t", test.system, test.manager, got, test.want)
+			}
+		})
+	}
+}
+
 func managerDetector(paths, commands map[string]bool) (func(string) (os.FileInfo, error), func(string) (string, error)) {
 	stat := func(path string) (os.FileInfo, error) {
 		if paths[path] {

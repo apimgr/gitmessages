@@ -934,7 +934,7 @@ func validTokenID(value string) bool {
 		if index == 8 || index == 13 || index == 18 || index == 23 {
 			continue
 		}
-		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
 			return false
 		}
 		if index == 19 && character != '8' && character != '9' && character != 'a' && character != 'b' {

@@ -126,6 +126,10 @@ jobs:
             org.opencontainers.image.source=${{ forgejo.server_url }}/${{ forgejo.repository }}
             org.opencontainers.image.documentation=${{ forgejo.server_url }}/${{ forgejo.repository }}
             org.opencontainers.image.licenses=MIT
+            maintainer=apimgr
+            org.opencontainers.image.schema-version=${{ env.VERSION }}
+            org.opencontainers.image.vcs-type=Git
+            com.github.containers.toolbox=false
           annotations: |
             manifest:org.opencontainers.image.vendor=apimgr
             manifest:org.opencontainers.image.authors=apimgr
@@ -139,6 +143,17 @@ jobs:
             manifest:org.opencontainers.image.source=${{ forgejo.server_url }}/${{ forgejo.repository }}
             manifest:org.opencontainers.image.documentation=${{ forgejo.server_url }}/${{ forgejo.repository }}
             manifest:org.opencontainers.image.licenses=MIT
+            manifest:maintainer=apimgr
+            manifest:org.opencontainers.image.schema-version=${{ env.VERSION }}
+            manifest:org.opencontainers.image.vcs-type=Git
+            manifest:com.github.containers.toolbox=false
+
+      - name: Image check
+        env:
+          REQUIRE_OVERLAY: "0"
+        run: |
+          docker pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.COMMIT_ID }}"
+          bash tests/image-check.sh "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.COMMIT_ID }}"
 
   build-devel:
     runs-on: ubuntu-26.04
@@ -177,6 +192,7 @@ jobs:
           COMMIT_ID=$(git rev-parse --short=7 HEAD)
           echo "IMAGE_NAME=$IMAGE_NAME" >> $FORGEJO_ENV
           echo "COMMIT_ID=$COMMIT_ID" >> $FORGEJO_ENV
+          echo "VERSION=$COMMIT_ID" >> $FORGEJO_ENV
           echo "BASE_IMAGE=${{ env.REGISTRY }}/${IMAGE_NAME}:${COMMIT_ID}" >> $FORGEJO_ENV
           # OFFICIAL_SITE (optional): site.txt wins; otherwise use repository secrets or leave empty
           if [ -f site.txt ]; then
@@ -215,6 +231,11 @@ jobs:
             org.opencontainers.image.source=${{ forgejo.server_url }}/${{ forgejo.repository }}
             org.opencontainers.image.documentation=${{ forgejo.server_url }}/${{ forgejo.repository }}
             org.opencontainers.image.licenses=MIT
+            maintainer=apimgr
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.schema-version=${{ env.VERSION }}
+            org.opencontainers.image.vcs-type=Git
+            com.github.containers.toolbox=false
           annotations: |
             manifest:org.opencontainers.image.vendor=apimgr
             manifest:org.opencontainers.image.authors=apimgr
@@ -227,3 +248,15 @@ jobs:
             manifest:org.opencontainers.image.source=${{ forgejo.server_url }}/${{ forgejo.repository }}
             manifest:org.opencontainers.image.documentation=${{ forgejo.server_url }}/${{ forgejo.repository }}
             manifest:org.opencontainers.image.licenses=MIT
+            manifest:maintainer=apimgr
+            manifest:org.opencontainers.image.version=${{ env.VERSION }}
+            manifest:org.opencontainers.image.schema-version=${{ env.VERSION }}
+            manifest:org.opencontainers.image.vcs-type=Git
+            manifest:com.github.containers.toolbox=false
+
+      - name: Image check
+        env:
+          REQUIRE_OVERLAY: "0"
+        run: |
+          docker pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:devel"
+          bash tests/image-check.sh "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:devel"

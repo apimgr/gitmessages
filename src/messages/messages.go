@@ -19,6 +19,11 @@ type Manager struct {
 	mu          sync.RWMutex
 }
 
+type catalogRecord struct {
+	Text   string `json:"text"`
+	Source string `json:"source"`
+}
+
 // New creates a new message manager and loads all messages
 func New() (*Manager, error) {
 	m := &Manager{
@@ -40,8 +45,16 @@ func (m *Manager) loadMessages() error {
 		return fmt.Errorf("failed to read messages.json: %w", err)
 	}
 
-	if err := json.Unmarshal(data, &m.messages); err != nil {
+	var records []catalogRecord
+	if err := json.Unmarshal(data, &records); err != nil {
 		return fmt.Errorf("failed to parse messages.json: %w", err)
+	}
+	m.messages = make([]string, 0, len(records))
+	for index, record := range records {
+		if record.Source != "original" || record.Text == "" {
+			return fmt.Errorf("invalid catalog provenance at record %d", index)
+		}
+		m.messages = append(m.messages, record.Text)
 	}
 
 	return nil

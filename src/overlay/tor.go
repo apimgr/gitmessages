@@ -35,6 +35,7 @@ type TorStatus struct {
 
 type TorManager struct {
 	mu          sync.RWMutex
+	restartMu   sync.Mutex
 	configDir   string
 	dataDir     string
 	logsDir     string
@@ -46,11 +47,13 @@ type TorManager struct {
 	logFile     *os.File
 	processDone chan error
 	controller  *control.Conn
+	eventCancel context.CancelFunc
 	ctx         context.Context
 	cancel      context.CancelFunc
 }
 
 var onionAddressPattern = regexp.MustCompile(`^[a-z2-7]{56}\.onion$`)
+var torControlPortPattern = regexp.MustCompile(`^PORT=(127\.0\.0\.1:[0-9]{1,5})\n$`)
 
 func NewTorManager(configDir, dataDir, logsDir string, settings config.TorConfig, handler http.Handler) *TorManager {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -138,8 +141,16 @@ func (manager *TorManager) Start() error {
 
 // Restart replaces the process and its canceled lifetime context.
 func (manager *TorManager) Restart() error {
+	manager.restartMu.Lock()
+	defer manager.restartMu.Unlock()
+	manager.mu.RLock()
+	starting := manager.command != nil && manager.status.Status == "starting"
+	manager.mu.RUnlock()
+	if starting {
+		return nil
+	}
 	if err := manager.Close(); err != nil {
-		return err
+		log.Printf("WARN Tor restart cleanup failed: %v", err)
 	}
 	manager.mu.Lock()
 	manager.ctx, manager.cancel = context.WithCancel(context.Background())
@@ -172,12 +183,13 @@ func (manager *TorManager) torrc(binary, controlPath string) string {
 	backendPort := manager.listener.Addr().(*net.TCPAddr).Port
 	lines := []string{
 		"DataDirectory " + torrcPath(filepath.Join(manager.dataDir, "tor")),
-		"Log notice file " + torrcPath(filepath.Join(manager.logsDir, "tor.log")),
+		"Log notice stdout",
 		socks,
 		"ControlPort 127.0.0.1:auto",
 		"ControlPortWriteToFile " + torrcPath(controlPath),
 		"CookieAuthentication 1",
 		"CookieAuthFile " + torrcPath(filepath.Join(manager.dataDir, "tor", "control_auth_cookie")),
+		"DisableNetwork 1",
 		fmt.Sprintf("__OwningControllerProcess %d", os.Getpid()),
 		fmt.Sprintf("SafeLogging %d", safeLogging),
 		"ExitRelay 0", "ExitPolicy reject *:*", "DirPort 0",
@@ -203,39 +215,43 @@ func torrcPath(path string) string {
 	return "\"" + strings.ReplaceAll(path, "\"", "\\\"") + "\""
 }
 
-func waitTorControlFile(ctx context.Context, path string, timeout time.Duration) (string, string, error) {
+func waitTorControlFile(ctx context.Context, path string, timeout time.Duration, processDone chan error) (string, error) {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		if processDone != nil {
+			select {
+			case err := <-processDone:
+				processDone <- err
+				return "", fmt.Errorf("tor exited before opening the control port: %v", err)
+			default:
+			}
+		}
 		data, err := os.ReadFile(path)
 		if err == nil {
-			var port, cookie string
-			for _, line := range strings.Split(string(data), "\n") {
-				if strings.HasPrefix(line, "PORT=127.0.0.1:") {
-					port = strings.TrimPrefix(line, "PORT=127.0.0.1:")
+			if match := torControlPortPattern.FindSubmatch(data); match != nil {
+				address := string(match[1])
+				host, port, splitErr := net.SplitHostPort(address)
+				portNumber, parseErr := strconv.Atoi(port)
+				if splitErr == nil && host == "127.0.0.1" && parseErr == nil && portNumber > 0 && portNumber <= 65535 {
+					return address, nil
 				}
-				if strings.HasPrefix(line, "COOKIEFILE=") {
-					cookie = strings.Trim(strings.TrimPrefix(line, "COOKIEFILE="), `"`)
-				}
-			}
-			if portNumber, parseErr := strconv.Atoi(port); parseErr == nil && portNumber > 0 && portNumber < 65536 && cookie != "" {
-				return "127.0.0.1:" + port, cookie, nil
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return "", "", ctx.Err()
+			return "", ctx.Err()
 		case <-deadline.C:
-			return "", "", fmt.Errorf("tor control port was not ready within %s", timeout)
+			return "", fmt.Errorf("control_port file not ready after %s", timeout)
 		case <-ticker.C:
 		}
 	}
 }
 
 func (manager *TorManager) initializeControl(path string) {
-	address, _, err := waitTorControlFile(manager.ctx, path, time.Duration(manager.config.StartupTimeout)*time.Second)
+	address, err := waitTorControlFile(manager.ctx, path, time.Duration(manager.config.StartupTimeout)*time.Second, manager.processDone)
 	if err != nil {
 		manager.fail(err)
 		return
@@ -256,6 +272,19 @@ func (manager *TorManager) initializeControl(path string) {
 		manager.fail(fmt.Errorf("take ownership of Tor process: %w", err))
 		return
 	}
+	events := make(chan control.Event, 256)
+	if err := controller.AddEventListener(events, control.EventCodeStatusClient, control.EventCodeHSDesc); err != nil {
+		_ = controller.Close()
+		manager.fail(fmt.Errorf("subscribe to Tor status events: %w", err))
+		return
+	}
+	if err := controller.SetConf(control.NewKeyVal("DisableNetwork", "0")); err != nil {
+		_ = controller.Close()
+		manager.fail(fmt.Errorf("enable Tor network: %w", err))
+		return
+	}
+	information, bootstrapErr := controller.GetInfo("status/bootstrap-phase")
+	bootstrapComplete := bootstrapErr == nil && len(information) > 0 && strings.Contains(information[0].Val, "PROGRESS=100")
 	manager.mu.Lock()
 	if manager.ctx.Err() != nil {
 		manager.mu.Unlock()
@@ -264,33 +293,41 @@ func (manager *TorManager) initializeControl(path string) {
 	}
 	manager.controller = controller
 	manager.mu.Unlock()
-	manager.watchBootstrap(controller, filepath.Join(manager.dataDir, "tor", "site", "hostname"), time.Duration(manager.config.BootstrapTimeout)*time.Second)
+	eventContext, cancelEvents := context.WithCancel(manager.ctx)
+	manager.mu.Lock()
+	manager.eventCancel = cancelEvents
+	manager.mu.Unlock()
+	go func() {
+		if err := controller.HandleEvents(eventContext); err != nil && eventContext.Err() == nil {
+			log.Printf("WARN Tor control connection lost, restarting: %v", err)
+			if restartErr := manager.Restart(); restartErr != nil {
+				log.Printf("WARN Tor restart failed: %v", restartErr)
+			}
+		}
+	}()
+	manager.watchBootstrap(controller, events, filepath.Join(manager.dataDir, "tor", "site", "hostname"), time.Duration(manager.config.BootstrapTimeout)*time.Second, bootstrapComplete)
+	if manager.Status().Status == "healthy" {
+		go manager.watchCircuitStatus(controller)
+		go manager.watchDescriptorUpload(eventContext, events)
+	}
 }
 
-func (manager *TorManager) watchBootstrap(controller *control.Conn, hostnamePath string, timeout time.Duration) {
+func (manager *TorManager) watchBootstrap(controller *control.Conn, events <-chan control.Event, hostnamePath string, timeout time.Duration, bootstrapComplete bool) {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
 	for {
-		information, err := controller.GetInfo("status/bootstrap-phase")
-		if err == nil && len(information) > 0 && strings.Contains(information[0].Val, "PROGRESS=100") {
-			data, readErr := os.ReadFile(hostnamePath)
-			if readErr == nil {
-				hostname := strings.TrimSpace(string(data))
-				if onionAddressPattern.MatchString(hostname) {
-					circuitEstablished, circuitKnown := torCircuitEstablished(controller)
-					manager.mu.Lock()
-					manager.status.Status = "healthy"
-					manager.status.Hostname = hostname
-					if circuitKnown {
-						manager.status.CircuitEstablished = circuitEstablished
-					}
-					manager.mu.Unlock()
-					go manager.watchCircuitStatus(controller)
-					log.Printf("Tor hidden service healthy: %s", hostname)
-					return
+		if bootstrapComplete {
+			if hostname, ok := readTorHostname(hostnamePath); ok {
+				circuitEstablished, circuitKnown := torCircuitEstablished(controller)
+				manager.mu.Lock()
+				manager.status.Status = "healthy"
+				manager.status.Hostname = hostname
+				if circuitKnown {
+					manager.status.CircuitEstablished = circuitEstablished
 				}
+				manager.mu.Unlock()
+				log.Printf("Tor hidden service healthy: %s", hostname)
+				return
 			}
 		}
 		select {
@@ -299,7 +336,46 @@ func (manager *TorManager) watchBootstrap(controller *control.Conn, hostnamePath
 		case <-deadline.C:
 			manager.fail(fmt.Errorf("tor hidden service did not bootstrap within %s", timeout))
 			return
-		case <-ticker.C:
+		case event := <-events:
+			if status, ok := event.(*control.StatusEvent); ok && status.Type == control.EventCodeStatusClient && status.Action == "BOOTSTRAP" && status.Arguments["PROGRESS"] == "100" {
+				bootstrapComplete = true
+			} else if status, ok := event.(*control.StatusEvent); ok && (status.Severity == "WARN" || status.Severity == "ERR") {
+				log.Printf("DEBUG Tor %s event while bootstrapping: %s", status.Severity, status.Raw)
+			}
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+func readTorHostname(path string) (string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	hostname := strings.TrimSpace(string(data))
+	return hostname, onionAddressPattern.MatchString(hostname)
+}
+
+func (manager *TorManager) watchDescriptorUpload(ctx context.Context, events <-chan control.Event) {
+	deadline := time.NewTimer(60 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			log.Printf("WARN Tor hidden-service descriptor upload was not confirmed within 60s")
+			return
+		case event := <-events:
+			if descriptor, ok := event.(*control.HSDescEvent); ok {
+				switch descriptor.Action {
+				case "UPLOADED":
+					log.Printf("Tor hidden-service descriptor uploaded")
+					return
+				case "FAILED":
+					log.Printf("WARN Tor hidden-service descriptor upload failed: %s", descriptor.Reason)
+				}
+			}
 		}
 	}
 }
@@ -336,13 +412,19 @@ func (manager *TorManager) serveBackend() {
 }
 
 func (manager *TorManager) fail(err error) {
+	log.Printf("WARN Tor unavailable: %v", err)
 	manager.mu.Lock()
 	manager.status.Status = "unavailable"
 	manager.status.Error = err.Error()
 	command := manager.command
 	server := manager.server
 	listener := manager.listener
+	cancelEvents := manager.eventCancel
+	manager.eventCancel = nil
 	manager.mu.Unlock()
+	if cancelEvents != nil {
+		cancelEvents()
+	}
 	if server != nil {
 		_ = server.Close()
 	}
@@ -357,6 +439,9 @@ func (manager *TorManager) fail(err error) {
 func (manager *TorManager) watchProcess(command *exec.Cmd) {
 	err := command.Wait()
 	manager.processDone <- err
+	if err != nil {
+		log.Printf("WARN Tor process exited: %v", err)
+	}
 	manager.mu.Lock()
 	if manager.command != command {
 		manager.mu.Unlock()
@@ -398,6 +483,8 @@ func (manager *TorManager) Close() error {
 	done := manager.processDone
 	controller := manager.controller
 	manager.controller = nil
+	cancelEvents := manager.eventCancel
+	manager.eventCancel = nil
 	manager.command = nil
 	listener := manager.listener
 	server := manager.server
@@ -405,6 +492,9 @@ func (manager *TorManager) Close() error {
 	manager.status.Running = false
 	manager.status.CircuitEstablished = false
 	manager.mu.Unlock()
+	if cancelEvents != nil {
+		cancelEvents()
+	}
 	var result error
 	if controller != nil {
 		if err := controller.Close(); err != nil {

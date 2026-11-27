@@ -604,7 +604,9 @@ func checkCLIUpdate(server, lang string, config *clientConfig, discovery *cliDis
 	asset, available := discovery.CLIVersions[platform]
 	if !available || asset.Version == "" {
 		if requested == "check" || requested == "yes" {
-			fmt.Fprintln(os.Stdout, "No CLI update is available.")
+			if _, err := fmt.Fprintln(os.Stdout, "No CLI update is available."); err != nil {
+				return fmt.Errorf("write CLI update status: %w", err)
+			}
 		}
 		if discovery.CLIMinVersion != "" && compareCLIVersions(Version, discovery.CLIMinVersion) < 0 {
 			return minimumCLIVersionError(discovery.CLIMinVersion)
@@ -617,12 +619,16 @@ func checkCLIUpdate(server, lang string, config *clientConfig, discovery *cliDis
 	comparison := compareCLIVersions(Version, asset.Version)
 	if comparison >= 0 {
 		if requested == "check" || requested == "yes" {
-			fmt.Fprintln(os.Stdout, "No CLI update is available.")
+			if _, err := fmt.Fprintln(os.Stdout, "No CLI update is available."); err != nil {
+				return fmt.Errorf("write CLI update status: %w", err)
+			}
 		}
 		return nil
 	}
 	if requested == "check" {
-		fmt.Fprintf(os.Stdout, "CLI update available: %s → %s\n", Version, asset.Version)
+		if _, err := fmt.Fprintf(os.Stdout, "CLI update available: %s → %s\n", Version, asset.Version); err != nil {
+			return fmt.Errorf("write CLI update status: %w", err)
+		}
 		if discovery.CLIMinVersion != "" && compareCLIVersions(Version, discovery.CLIMinVersion) < 0 {
 			return minimumCLIVersionError(discovery.CLIMinVersion)
 		}

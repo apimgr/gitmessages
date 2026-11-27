@@ -12,9 +12,12 @@ fi
 
 mode=${1:-all}
 case "$mode" in
-  systemd|openrc) modes=$mode ;;
+  systemd | openrc) modes=$mode ;;
   all) modes='systemd openrc' ;;
-  *) printf 'Usage: %s [systemd|openrc|all]\n' "$0" >&2; exit 2 ;;
+  *)
+    printf 'Usage: %s [systemd|openrc|all]\n' "$0" >&2
+    exit 2
+    ;;
 esac
 
 project_dir=$(git rev-parse --show-toplevel)
@@ -198,6 +201,13 @@ if [[ $PHASE == initial ]]; then
 
   printf '=== %s service install ===\n' "$INIT_MODE"
   "$PROJECT_NAME" --service --install
+  # Incus shares the host volume, so keep host disk pressure out of service lifecycle checks.
+  mkdir -p "$config_root/yaml.d"
+  printf 'server:\n  maintenance:\n    cleanup:\n      disk_threshold: 100\n' > "$config_root/yaml.d/01-incus-test-environment.yml"
+  chown "$INTERNAL_NAME:$INTERNAL_NAME" "$config_root/yaml.d" "$config_root/yaml.d/01-incus-test-environment.yml"
+  chmod 0700 "$config_root/yaml.d"
+  chmod 0600 "$config_root/yaml.d/01-incus-test-environment.yml"
+  "$PROJECT_NAME" --service restart
   check 'service definition installed' test -f "$unit_file"
   if [[ $INIT_MODE == openrc ]]; then
     check 'OpenRC script uses openrc-run' grep -q '^#!/sbin/openrc-run' "$unit_file"
@@ -298,7 +308,7 @@ remote() {
   timeout "${REMOTE_TIMEOUT:-1200}" incus exec "$instance" -- env INIT_MODE="$init" PHASE="$phase" PROJECT_NAME="$project_name" \
     INTERNAL_NAME="$internal_name" INTERNAL_ORG="$internal_org" \
     REQUIRE_OVERLAY="${REQUIRE_OVERLAY:-0}" TOR_WAIT="${TOR_WAIT:-300}" I2P_WAIT="${I2P_WAIT:-600}" \
-    bash -s < "$test_dir/remote.sh"
+    bash -s <"$test_dir/remote.sh"
 }
 
 run_client_tests() {

@@ -138,8 +138,7 @@ func TestGetAll(t *testing.T) {
 	}
 }
 
-// TestGetAllJSON verifies the raw embedded JSON parses to a non-empty
-// string slice, matching what loadMessages produces.
+// TestGetAllJSON verifies every bundled record carries declared original provenance.
 func TestGetAllJSON(t *testing.T) {
 	m, err := New()
 	if err != nil {
@@ -149,12 +148,17 @@ func TestGetAllJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAllJSON() error: %v", err)
 	}
-	var out []string
+	var out []catalogRecord
 	if err := json.Unmarshal(data, &out); err != nil {
 		t.Fatalf("GetAllJSON() did not return valid JSON array: %v", err)
 	}
 	if len(out) != m.Count() {
 		t.Fatalf("GetAllJSON() length %d != Count() %d", len(out), m.Count())
+	}
+	for index, record := range out {
+		if record.Source != "original" || record.Text == "" {
+			t.Errorf("record %d has invalid provenance or empty text: %+v", index, record)
+		}
 	}
 }
 

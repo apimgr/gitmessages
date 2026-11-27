@@ -22,6 +22,11 @@ func TestOpenConfiguredSQLiteUsesSavedFileURL(t *testing.T) {
 	if err := store.Read().QueryRow("SELECT COUNT(*) FROM app_secrets").Scan(&count); err != nil {
 		t.Fatalf("read configured database schema: %v", err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if !store.CanServeReads(ctx) {
+		t.Fatal("available SQLite database was reported unable to serve reads")
+	}
 }
 
 func TestOpenConfiguredSQLiteUsesFallbackPath(t *testing.T) {

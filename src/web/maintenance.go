@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -298,11 +299,9 @@ func healthSectionStart(r *http.Request, name string) string {
 }
 
 func writeHealthHTMLField(output *strings.Builder, r *http.Request, key, value string) {
-	label := key
+	label := tr(r, "health.field."+key)
 	if strings.HasPrefix(key, "health.") {
 		label = tr(r, key)
-	} else {
-		label = tr(r, "health.field."+key)
 	}
 	if strings.HasPrefix(key, "stats.") {
 		label = healthKeyLabel(r, "health.stat.unknown", strings.TrimPrefix(key, "stats."))
@@ -465,11 +464,9 @@ func humanHealthText(r *http.Request, value healthResponse) string {
 }
 
 func writeHealthTextField(output *strings.Builder, r *http.Request, key, value string) {
-	label := key
+	label := tr(r, "health.field."+key)
 	if strings.HasPrefix(key, "health.") {
 		label = tr(r, key)
-	} else {
-		label = tr(r, "health.field."+key)
 	}
 	if strings.HasPrefix(key, "stats.") {
 		label = healthKeyLabel(r, "health.stat.unknown", strings.TrimPrefix(key, "stats."))
@@ -630,17 +627,31 @@ func writeHealthResponse(w http.ResponseWriter, r *http.Request) {
 
 func maintenanceMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isWriteMethod(r.Method) {
+		if isHealthEndpoint(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
 		info, active := currentMaintenance()
-		if !active {
+		if isWriteMethod(r.Method) && active {
+			writeMaintenanceError(w, r, info)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+		available, configured := canServeMaintenanceReads(ctx)
+		cancel()
+		if available || !configured {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if !active {
+			info = maintenance.Info{Reason: "database_connection", Message: "Database connection failed"}
+		}
 		writeMaintenanceError(w, r, info)
 	})
+}
+
+func isHealthEndpoint(path string) bool {
+	return path == "/server/healthz" || path == "/healthz" || path == "/api/healthz" || strings.HasSuffix(path, "/server/healthz") || strings.HasSuffix(path, "/server/healthz.txt") || path == "/api/healthz.txt"
 }
 
 func isWriteMethod(method string) bool {

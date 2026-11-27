@@ -165,6 +165,55 @@ func isSystemInstall() bool {
 	return err == nil && current.Uid == "0"
 }
 
+// RequiresSystemPrivileges reports whether installation has no supported per-user service manager.
+func RequiresSystemPrivileges() bool {
+	return requiresSystemPrivileges(isSystemInstall(), DetectServiceManager())
+}
+
+// HasSystemService reports whether a system-level service definition is installed.
+func HasSystemService() bool {
+	switch DetectServiceManager() {
+	case ServiceSystemd:
+		for _, directory := range []string{"/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"} {
+			if fileExists(filepath.Join(directory, appName+".service")) {
+				return true
+			}
+		}
+		return false
+	case ServiceOpenRC, ServiceSysV:
+		return fileExists(filepath.Join("/etc/init.d", appName))
+	case ServiceRunit:
+		return fileExists(filepath.Join("/etc/service", appName)) || fileExists(filepath.Join("/etc/sv", appName))
+	case ServiceS6:
+		return fileExists(filepath.Join("/etc/s6/sv", appName))
+	case ServiceLaunchd:
+		return fileExists(filepath.Join("/Library/LaunchDaemons", fmt.Sprintf("com.%s.%s.plist", orgName, appName)))
+	case ServiceWindows:
+		return exec.Command("sc.exe", "query", appName).Run() == nil
+	case ServiceBSDRC:
+		return fileExists(filepath.Join("/etc/rc.d", appName)) || fileExists(filepath.Join("/usr/local/etc/rc.d", appName))
+	default:
+		return false
+	}
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func requiresSystemPrivileges(systemInstall bool, serviceType ServiceType) bool {
+	if systemInstall {
+		return false
+	}
+	switch serviceType {
+	case ServiceSystemd, ServiceLaunchd:
+		return false
+	default:
+		return true
+	}
+}
+
 func systemdCommand(args ...string) *exec.Cmd {
 	if !isSystemInstall() {
 		args = append([]string{"--user"}, args...)

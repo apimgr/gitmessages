@@ -14,6 +14,9 @@ import (
 // zero-config first-run experience is caught immediately.
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
+	if cfg.Server.Restore.MaxArchiveSize != "20GB" || cfg.Server.Restore.MaxExpandedSize != "50GB" || cfg.Server.Restore.MaxFiles != 1000000 || cfg.Server.Restore.MaxPathLength != 4096 {
+		t.Errorf("restore defaults do not match AI.md: %+v", cfg.Server.Restore)
+	}
 	if cfg.Server.Compliance.AnyEnabled() {
 		t.Fatal("compliance standards must be disabled by default")
 	}
@@ -921,7 +924,7 @@ func TestGenerateConfigYAML_ValidYAML(t *testing.T) {
 func TestLoadMigratesAreaSettings(t *testing.T) {
 	tmp := projectTestDir(t)
 	path := filepath.Join(tmp, "server.yml")
-	legacy := "server:\n  port: \"8080\"\n  update:\n    branch: beta\nweb:\n  ui:\n    theme: light\n  robots:\n    allow: [\"/\"]\n"
+	legacy := "server:\n  port: \"8080\"\n  update:\n    branch: beta\n  import:\n    max_archive_size: 1G\nweb:\n  ui:\n    theme: light\n  robots:\n    allow: [\"/\"]\n"
 	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -936,6 +939,10 @@ func TestLoadMigratesAreaSettings(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(tmp, "yaml.d", file)); err != nil {
 			t.Errorf("expected migrated area file %s: %v", file, err)
 		}
+	}
+	maintenanceArea, err := os.ReadFile(filepath.Join(tmp, "yaml.d", "maintenance.yml"))
+	if err != nil || !strings.Contains(string(maintenanceArea), "import:") || !strings.Contains(string(maintenanceArea), "max_archive_size: 1G") {
+		t.Fatalf("server.import was not moved to maintenance.yml: %s, %v", maintenanceArea, err)
 	}
 	if _, err := os.Stat(path + ".bak"); err != nil {
 		t.Fatalf("migration did not create backup: %v", err)

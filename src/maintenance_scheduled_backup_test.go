@@ -130,8 +130,31 @@ func TestNewestBackupFileSelectionUsesFullDateAndIncrementalModificationTime(t *
 	if err != nil || selected != hourly {
 		t.Fatalf("newest incremental selection = %q, %v; want %q by modification time", selected, err, hourly)
 	}
-	if selected, err := newestFullBackupFile(backupDir); err == nil || selected != "" {
-		t.Fatalf("newestFullBackupFile() = %q, %v; want no full backup error", selected, err)
+	full := filepath.Join(backupDir, paths.ProjectName+"_backup_2025-01-01.tar.gz.enc")
+	if err := os.WriteFile(full, []byte("archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(full, baseTime, baseTime); err != nil {
+		t.Fatal(err)
+	}
+	selected, err = newestBackupFile(backupDir)
+	if err != nil || selected != hourly {
+		t.Fatalf("newest archive with incremental = %q, %v; want %q by date and modification time", selected, err, hourly)
+	}
+	selected, err = newestFullBackupFile(backupDir)
+	if err != nil || selected != full {
+		t.Fatalf("newest full archive = %q, %v; want %q", selected, err, full)
+	}
+	newerFull := filepath.Join(backupDir, paths.ProjectName+"_backup_2025-01-02.tar.gz.enc")
+	if err := os.WriteFile(newerFull, []byte("archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(newerFull, baseTime, baseTime); err != nil {
+		t.Fatal(err)
+	}
+	selected, err = newestBackupFile(backupDir)
+	if err != nil || selected != newerFull {
+		t.Fatalf("newest archive with later full date = %q, %v; want %q", selected, err, newerFull)
 	}
 }
 

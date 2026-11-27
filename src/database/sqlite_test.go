@@ -302,6 +302,59 @@ func TestSnapshotIncludesCommittedDatabaseState(t *testing.T) {
 	}
 }
 
+func TestSeedFromSQLiteCopiesApplicationStateIntoEmptyStore(t *testing.T) {
+	root := projectTestDir(t)
+	source, err := OpenSQLite(filepath.Join(root, "source", "server.db"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Write(context.Background(), func(tx *sql.Tx) error {
+		_, err := tx.Exec(`INSERT INTO audit_log(category,action,target_type,target_id,details) VALUES('test','restore','item','42','{}')`)
+		return err
+	}); err != nil {
+		_ = source.Close()
+		t.Fatal(err)
+	}
+	snapshot := filepath.Join(root, "snapshot.db")
+	if err := source.Snapshot(context.Background(), snapshot); err != nil {
+		_ = source.Close()
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	destination, err := OpenSQLite(filepath.Join(root, "destination", "server.db"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = destination.Close() }()
+	empty, err := destination.RestoreDataEmpty(context.Background())
+	if err != nil || empty {
+		t.Fatalf("initialized store RestoreDataEmpty() = %t, %v; want false while secrets exist", empty, err)
+	}
+	if err := destination.Write(context.Background(), func(tx *sql.Tx) error {
+		_, err := tx.Exec(`DELETE FROM app_secrets`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	empty, err = destination.RestoreDataEmpty(context.Background())
+	if err != nil || !empty {
+		t.Fatalf("new store RestoreDataEmpty() = %t, %v; want true", empty, err)
+	}
+	if err := destination.SeedFromSQLite(context.Background(), snapshot); err != nil {
+		t.Fatalf("SeedFromSQLite(): %v", err)
+	}
+	var action string
+	if err := destination.Read().QueryRow(`SELECT action FROM audit_log WHERE target_id='42'`).Scan(&action); err != nil || action != "restore" {
+		t.Fatalf("seeded audit action = %q, %v; want restore", action, err)
+	}
+	empty, err = destination.RestoreDataEmpty(context.Background())
+	if err != nil || empty {
+		t.Fatalf("seeded store RestoreDataEmpty() = %t, %v; want false", empty, err)
+	}
+}
+
 func TestWriteRejectsNilCallbackAndCloseNil(t *testing.T) {
 	if err := (*Store)(nil).Close(); err != nil {
 		t.Fatalf("closing nil store: %v", err)

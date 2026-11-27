@@ -68,16 +68,20 @@ func (store *Store) ReadHealthRequestStats(ctx context.Context, now time.Time) (
 	if err != nil {
 		return HealthRequestStats{}, err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var hourStart, count int64
 		if err := rows.Scan(&hourStart, &count); err != nil {
+			_ = rows.Close()
 			return HealthRequestStats{}, err
 		}
 		stats.Hours = append(stats.Hours, HealthRequestHourBucket{HourStart: time.Unix(hourStart, 0).UTC(), Count: count})
 		stats.Last24Hour += count
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return HealthRequestStats{}, err
+	}
+	if err := rows.Close(); err != nil {
 		return HealthRequestStats{}, err
 	}
 	return stats, nil

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -74,6 +75,32 @@ func TestMaintenanceMiddlewareRejectsWritesAndAllowsReads(t *testing.T) {
 	details, ok := body["details"].(map[string]any)
 	if !ok || details["reason"] != "database_connection" || details["self_healing"] != true {
 		t.Fatalf("maintenance details = %v", body["details"])
+	}
+}
+
+func TestMaintenanceMiddlewareKeepsHealthAvailableWithoutDatabase(t *testing.T) {
+	SetMaintenanceProvider(func() (maintenance.Info, bool) { return testMaintenanceInfo(), true })
+	SetMaintenanceReadProvider(func(context.Context) bool { return false })
+	t.Cleanup(func() {
+		SetMaintenanceProvider(nil)
+		SetMaintenanceReadProvider(nil)
+	})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	handler := maintenanceMiddleware(next)
+
+	for _, path := range []string{"/api/v1/server/healthz", "/server/healthz", "/api/v1/server/healthz.txt"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusNoContent {
+			t.Errorf("health endpoint %s status = %d, want 204", path, response.Code)
+		}
+	}
+	for _, path := range []string{"/api/v1/types", "/server/about"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusServiceUnavailable {
+			t.Errorf("non-health endpoint %s status = %d, want 503", path, response.Code)
+		}
 	}
 }
 

@@ -593,6 +593,28 @@ func TestUnknownRouteReturnsThemedNotFoundPage(t *testing.T) {
 	}
 }
 
+func TestUnknownSecurityReportDoesNotDiscloseReportExistence(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, e2eServerURL()+"/server/security/report/e2e-missing", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusNotFound || !strings.Contains(string(body), `class="theme-`) || !strings.Contains(string(body), `<main`) {
+		t.Fatalf("unknown security report returned %d without the themed 404 page", response.StatusCode)
+	}
+	if response.Header.Get("Referrer-Policy") != "no-referrer" || response.Header.Get("Cache-Control") != "no-store" || response.Header.Get("X-Robots-Tag") != "noindex, nofollow" {
+		t.Fatalf("security report privacy headers = %q, %q, %q", response.Header.Get("Referrer-Policy"), response.Header.Get("Cache-Control"), response.Header.Get("X-Robots-Tag"))
+	}
+}
+
 func TestPreferenceFormIncludesAndEnforcesCSRF(t *testing.T) {
 	response, err := http.Get(e2eServerURL() + "/server/preferences")
 	if err != nil {
