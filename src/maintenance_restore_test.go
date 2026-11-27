@@ -14,6 +14,7 @@ import (
 	"github.com/apimgr/gitmessages/src/auth"
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
+	"github.com/apimgr/gitmessages/src/pgp"
 
 	"github.com/apimgr/gitmessages/src/paths"
 )
@@ -132,6 +133,55 @@ func TestRestoreApplicationBackupReplacesConfigDataAndDatabase(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(databaseDir, "sentinel")); !os.IsNotExist(err) {
 		t.Fatalf("old database content remains after restore: %v", err)
 	}
+}
+
+func TestValidateRemoteBackupPGPKeypairPreservesLiveRemoteState(t *testing.T) {
+	installationSecret := bytes.Repeat([]byte{0x31}, 32)
+	otherSecret := bytes.Repeat([]byte{0x42}, 32)
+	extracted, pair := createRestoreTestPGPArchive(t, installationSecret)
+	records := []applicationSecretRecord{{
+		Name:      "installation_secret",
+		Value:     base64.StdEncoding.EncodeToString(installationSecret),
+		Version:   1,
+		UpdatedAt: time.Date(2026, time.November, 27, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	}}
+
+	if err := validateRemoteBackupPGPKeypair(extracted, records, false, nil, ""); err != nil {
+		t.Fatalf("new remote database rejected the archived keypair: %v", err)
+	}
+	if err := validateRemoteBackupPGPKeypair(extracted, records, false, nil, pair.Metadata.Fingerprint); err != nil {
+		t.Fatalf("matching PGP metadata without remote secrets rejected the archived keypair: %v", err)
+	}
+	if err := validateRemoteBackupPGPKeypair(extracted, records, false, nil, "0000"); err == nil || !strings.Contains(err.Error(), "remote data is preserved") {
+		t.Fatalf("incompatible PGP metadata without remote secrets error = %v", err)
+	}
+	if err := validateRemoteBackupPGPKeypair(extracted, records, true, installationSecret, pair.Metadata.Fingerprint); err != nil {
+		t.Fatalf("matching remote state rejected the archived keypair: %v", err)
+	}
+	if err := validateRemoteBackupPGPKeypair(extracted, records, true, otherSecret, pair.Metadata.Fingerprint); err == nil || !strings.Contains(err.Error(), "remote secrets are preserved") {
+		t.Fatalf("incompatible installation secret error = %v", err)
+	}
+	if err := validateRemoteBackupPGPKeypair(extracted, records, true, installationSecret, "0000"); err == nil || !strings.Contains(err.Error(), "remote data is preserved") {
+		t.Fatalf("incompatible PGP fingerprint error = %v", err)
+	}
+}
+
+func createRestoreTestPGPArchive(t *testing.T, installationSecret []byte) (string, pgp.KeyPair) {
+	t.Helper()
+	directory := filepath.Join(maintenanceTestDir(t), "extracted", "security")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pair, err := pgp.Generate("Restore Test", "restore@example.test", installationSecret, time.Date(2026, time.November, 27, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("generate restore test PGP keypair: %v", err)
+	}
+	for name, content := range map[string][]byte{"pgp.pub.asc": pair.Public, "pgp.priv.asc.enc": pair.EncryptedPrivate} {
+		if err := os.WriteFile(filepath.Join(directory, name), content, 0o600); err != nil {
+			t.Fatalf("write restore test key %s: %v", name, err)
+		}
+	}
+	return filepath.Dir(directory), pair
 }
 
 func TestApplicationBackupIncludesServerSSLOnlyWhenRequested(t *testing.T) {

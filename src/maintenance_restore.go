@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/database"
 	"github.com/apimgr/gitmessages/src/paths"
+	"github.com/apimgr/gitmessages/src/pgp"
 	"golang.org/x/term"
 )
 
@@ -65,6 +67,11 @@ func restoreApplicationBackup(ctx context.Context, archivePath, configDir, dataD
 	secretRecords, err := readBackupSecrets(filepath.Join(extracted, "app_secrets.json"))
 	if err != nil {
 		return err
+	}
+	if len(targetStore) > 0 && targetStore[0] != nil && targetStore[0].IsRemote() {
+		if err := validateRemoteRestorePGPKeypair(ctx, targetStore[0], extracted, secretRecords); err != nil {
+			return err
+		}
 	}
 	configSource := filepath.Join(workspace, "new-config")
 	if err := os.Mkdir(configSource, 0o700); err != nil {
@@ -144,6 +151,86 @@ func restoreApplicationBackup(ctx context.Context, archivePath, configDir, dataD
 		}
 	}
 	return replaceRestoreTargets(targets, workspace)
+}
+
+func validateRemoteRestorePGPKeypair(ctx context.Context, store *database.Store, extracted string, records []applicationSecretRecord) error {
+	if store == nil || !store.IsRemote() {
+		return errors.New("remote database is required to validate the archived PGP keypair")
+	}
+	var secretCount int
+	if err := store.Read().QueryRowContext(ctx, `SELECT COUNT(*) FROM app_secrets`).Scan(&secretCount); err != nil {
+		return fmt.Errorf("inspect remote application secrets before restore: %w", err)
+	}
+	remoteHasSecrets := secretCount > 0
+	var remoteSecret []byte
+	var remoteFingerprint string
+	if remoteHasSecrets {
+		var encodedSecret string
+		if err := store.Read().QueryRowContext(ctx, `SELECT value FROM app_secrets WHERE name='installation_secret'`).Scan(&encodedSecret); err != nil {
+			return fmt.Errorf("read live remote installation secret before restore: %w", err)
+		}
+		decodedSecret, err := base64.StdEncoding.DecodeString(encodedSecret)
+		if err != nil || len(decodedSecret) != 32 {
+			return errors.New("live remote installation secret is invalid")
+		}
+		remoteSecret = decodedSecret
+	}
+	if err := store.Read().QueryRowContext(ctx, `SELECT fingerprint FROM pgp_key_metadata WHERE id=1`).Scan(&remoteFingerprint); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("read live remote PGP fingerprint before restore: %w", err)
+	}
+	return validateRemoteBackupPGPKeypair(extracted, records, remoteHasSecrets, remoteSecret, remoteFingerprint)
+}
+
+func validateRemoteBackupPGPKeypair(extracted string, records []applicationSecretRecord, remoteHasSecrets bool, remoteSecret []byte, remoteFingerprint string) error {
+	backupSecret, err := backupInstallationSecret(records)
+	if err != nil {
+		return err
+	}
+	installationSecret := backupSecret
+	if remoteHasSecrets {
+		if len(remoteSecret) != 32 {
+			return errors.New("live remote installation secret is invalid")
+		}
+		installationSecret = remoteSecret
+	}
+	if err := verifyBackupPGPKeypairWithSecret(installationSecret, extracted); err != nil {
+		if remoteHasSecrets {
+			return fmt.Errorf("backup PGP keypair is incompatible with the live remote installation secret; remote secrets are preserved: %w", err)
+		}
+		return fmt.Errorf("validate backup PGP keypair: %w", err)
+	}
+	public, err := os.ReadFile(filepath.Join(extracted, "security", "pgp.pub.asc"))
+	if errors.Is(err, os.ErrNotExist) {
+		if remoteFingerprint != "" {
+			return errors.New("backup omits the PGP key recorded by the live remote database; remote data is preserved")
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read backup PGP public key: %w", err)
+	}
+	metadata, err := pgp.MetadataForPublic(public)
+	if err != nil {
+		return fmt.Errorf("read backup PGP public-key fingerprint: %w", err)
+	}
+	if remoteFingerprint != "" && !strings.EqualFold(remoteFingerprint, metadata.Fingerprint) {
+		return errors.New("backup PGP key does not match the key recorded by the live remote database; remote data is preserved")
+	}
+	return nil
+}
+
+func backupInstallationSecret(records []applicationSecretRecord) ([]byte, error) {
+	for _, record := range records {
+		if record.Name != "installation_secret" {
+			continue
+		}
+		secret, err := base64.StdEncoding.DecodeString(record.Value)
+		if err != nil || len(secret) != 32 {
+			return nil, errors.New("backup installation secret is invalid")
+		}
+		return secret, nil
+	}
+	return nil, errors.New("backup is missing installation_secret")
 }
 
 func applyApplicationSecretsIfAbsent(ctx context.Context, store *database.Store, records []applicationSecretRecord) error {
