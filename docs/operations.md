@@ -4,7 +4,7 @@ This guide covers routine maintenance for a running Git Messages server. Configu
 
 ## Startup output
 
-When the server runs in a foreground terminal, it prints a width-aware startup banner with the version, build, mode, and configured public URL. `--color` and `NO_COLOR` control banner styling; log records remain plain text. Containers, daemons, and headless runs use log output without the terminal banner. On first run, the server logs the path where it created `server.yml`.
+When the server runs in a foreground terminal, it prints a width-aware startup banner with the version, mode, and configured public URL. Running Tor, I2P, and SMTP addresses appear when configured. A newly generated operator token appears once in the banner as the setup token. `--color` and `NO_COLOR` control banner styling; log records remain plain text. Containers, daemons, and headless runs use log output without the terminal banner. On first run, the server logs the path where it created `server.yml`.
 
 ## Backups
 
