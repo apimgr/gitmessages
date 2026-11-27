@@ -9,6 +9,7 @@ import (
 
 	"github.com/apimgr/gitmessages/src/metrics"
 	"github.com/apimgr/gitmessages/src/mode"
+	serverbanner "github.com/apimgr/gitmessages/src/server/banner"
 )
 
 func configureStructuredLogger(configuredLevel string) error {
@@ -35,7 +36,7 @@ func configureStructuredLogger(configuredLevel string) error {
 		return fmt.Errorf("unsupported log level %q", configuredLevel)
 	}
 
-	output := io.MultiWriter(os.Stderr, metrics.LogWriter())
+	output := serverbanner.SynchronizedConsoleWriter(io.MultiWriter(os.Stderr, metrics.LogWriter()))
 	slog.SetDefault(slog.New(slog.NewTextHandler(output, &slog.HandlerOptions{Level: minimum})))
 	return nil
 }

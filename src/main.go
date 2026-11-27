@@ -248,7 +248,7 @@ func validateTLSChallenge(listeners []serverListener, letsEncrypt config.LetsEnc
 func init() {
 	log.SetPrefix("gitmessages: ")
 	log.SetFlags(log.Lshortfile)
-	log.SetOutput(io.MultiWriter(os.Stderr, metrics.LogWriter()))
+	log.SetOutput(serverbanner.SynchronizedConsoleWriter(io.MultiWriter(os.Stderr, metrics.LogWriter())))
 }
 
 func main() {
@@ -809,12 +809,14 @@ func main() {
 	securityContext, cancelSecurity := context.WithCancel(context.Background())
 	defer cancelSecurity()
 	go initializeSecurityData(securityContext, securityManager, cfg, securityLogger)
+	setupToken := ""
 	if generated := config.ConsumeGeneratedSecrets(); len(generated) > 0 {
 		operatorTokenRegenerated := false
 		if err := sharedDB.Write(context.Background(), func(tx *sql.Tx) error {
 			for _, name := range generated {
 				if name == "server.token" {
 					operatorTokenRegenerated = true
+					setupToken = cfg.Server.Token
 				}
 				if _, err := tx.Exec(`INSERT INTO audit_log(level, category, action, details) VALUES ('info','config','config.secret_generated',?)`, fmt.Sprintf(`{"key":%q}`, name)); err != nil {
 					return err
@@ -958,12 +960,6 @@ func main() {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if torAddress != "" {
-		urls = append(urls, startupOverlayURL(torAddress, cfg.Server.BaseURL))
-	}
-	if i2pAddress != "" {
-		urls = append(urls, startupOverlayURL(i2pAddress, cfg.Server.BaseURL))
-	}
 	var forceColor *bool
 	if *colorFlag != "auto" {
 		forced := *colorFlag == "yes"
@@ -973,10 +969,15 @@ func main() {
 	if appName == "" {
 		appName = "Git Messages"
 	}
+	smtpAddress := ""
+	if host := strings.TrimSpace(cfg.Server.Notifications.Email.SMTP.Host); host != "" {
+		smtpAddress = net.JoinHostPort(host, strconv.Itoa(cfg.Server.Notifications.Email.SMTP.Port))
+	}
 	serverbanner.PrintServerStartupBanner(serverbanner.ServerBannerInfo{
 		AppName: appName, Version: Version, AppMode: string(mode.Get()),
 		StartupDatetime: serverbanner.FormatStartupDatetime(time.Now(), os.Getenv("TZ")),
-		URLs:            urls, OnionAddress: torAddress, I2PAddress: i2pAddress,
+		URLs:            urls, OnionAddress: startupOverlayURL(torAddress, cfg.Server.BaseURL),
+		I2PAddress: startupOverlayURL(i2pAddress, cfg.Server.BaseURL), SMTPAddress: smtpAddress, SetupToken: setupToken,
 		ForceColor: forceColor, Lang: os.Getenv("GITMESSAGES_LANG"),
 	})
 	reloadConfiguration := func() {

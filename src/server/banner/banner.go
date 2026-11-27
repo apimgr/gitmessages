@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/apimgr/gitmessages/src/common/display"
@@ -16,6 +17,23 @@ import (
 	"golang.org/x/term"
 	_ "time/tzdata"
 )
+
+var consoleWriteMu sync.Mutex
+
+type synchronizedConsoleWriter struct {
+	writer io.Writer
+}
+
+// SynchronizedConsoleWriter serializes logger output with the startup banner.
+func SynchronizedConsoleWriter(writer io.Writer) io.Writer {
+	return synchronizedConsoleWriter{writer: writer}
+}
+
+func (writer synchronizedConsoleWriter) Write(value []byte) (int, error) {
+	consoleWriteMu.Lock()
+	defer consoleWriteMu.Unlock()
+	return writer.writer.Write(value)
+}
 
 // ServerBannerInfo contains the values resolved by server startup for its banner.
 type ServerBannerInfo struct {
@@ -52,46 +70,50 @@ func PrintServerStartupBanner(info ServerBannerInfo) {
 		startupDatetime = FormatStartupDatetime(time.Now(), os.Getenv("TZ"))
 	}
 	var output bytes.Buffer
-	printServerStartupBanner(&output, info.AppName, info.Version, info.AppMode, info.URLs, info.Lang, startupDatetime, width,
+	printServerStartupBanner(&output, info, startupDatetime, width,
 		display.ColorEnabled(&environment, colorMode), display.EmojiEnabled(&environment, colorMode))
+	consoleWriteMu.Lock()
+	defer consoleWriteMu.Unlock()
 	_, _ = os.Stdout.Write(output.Bytes())
 }
 
-func printServerStartupBanner(output io.Writer, appName, version, appMode string, urls []string, lang, startupDatetime string, width int, useColors, useEmojis bool) {
+func printServerStartupBanner(output io.Writer, info ServerBannerInfo, startupDatetime string, width int, useColors, useEmojis bool) {
 	if width < 1 {
 		width = 80
 	}
 	if !useEmojis {
-		fmt.Fprintf(output, "%s v%s\n", appName, version)
-		fmt.Fprintf(output, "%s: %s\n", i18n.T(lang, "cli.running_in_mode_label"), appMode)
-		for _, address := range urls {
-			fmt.Fprintf(output, "  %s: %s\n", i18n.T(lang, "cli.listening_on_label"), address)
+		fmt.Fprintf(output, "%s v%s\n", info.AppName, info.Version)
+		fmt.Fprintf(output, "%s: %s\n", i18n.T(info.Lang, "cli.running_in_mode_label"), info.AppMode)
+		printServerBannerOverlays(output, info, false)
+		for _, address := range info.URLs {
+			fmt.Fprintf(output, "  %s: %s\n", i18n.T(info.Lang, "cli.listening_on_label"), address)
 		}
-		fmt.Fprintf(output, "%s %s\n", i18n.T(lang, "cli.server_started_on_label"), startupDatetime)
+		fmt.Fprintf(output, "%s %s\n", i18n.T(info.Lang, "cli.server_started_on_label"), startupDatetime)
 		fmt.Fprintln(output)
 		return
 	}
 
 	switch {
 	case width >= 80:
-		printServerBannerFull(output, appName, version, appMode, urls, lang, startupDatetime, useColors)
+		printServerBannerFull(output, info, startupDatetime, useColors)
 	case width >= 60:
-		printServerBannerCompact(output, appName, version, appMode, urls, lang, startupDatetime, useColors)
+		printServerBannerCompact(output, info, startupDatetime, useColors)
 	case width >= 40:
-		fmt.Fprintf(output, "%s %s\n", appName, version)
-		for _, address := range urls {
+		fmt.Fprintf(output, "%s %s\n", info.AppName, info.Version)
+		printServerBannerOverlays(output, info, false)
+		for _, address := range info.URLs {
 			fmt.Fprintln(output, extractHostPort(address))
 		}
 	default:
-		if len(urls) == 0 {
-			fmt.Fprintln(output, appName)
+		if len(info.URLs) == 0 {
+			fmt.Fprintln(output, info.AppName)
 			return
 		}
-		fmt.Fprintf(output, "%s %s\n", appName, extractHostPort(urls[0]))
+		fmt.Fprintf(output, "%s %s\n", info.AppName, extractHostPort(info.URLs[0]))
 	}
 }
 
-func printServerBannerFull(output io.Writer, appName, version, appMode string, urls []string, lang, startupDatetime string, useColors bool) {
+func printServerBannerFull(output io.Writer, info ServerBannerInfo, startupDatetime string, useColors bool) {
 	art := []string{
 		"  ____ _ _     __  __                                  ",
 		" / ___(_) |_  |  \\/  | ___  ___ ___  __ _  __ _  ___ ",
@@ -109,30 +131,53 @@ func printServerBannerFull(output io.Writer, appName, version, appMode string, u
 	}
 	fmt.Fprintln(output)
 	if useColors {
-		fmt.Fprintf(output, "🚀 \x1b[1;36m%s\x1b[0m v%s\n", appName, version)
+		fmt.Fprintf(output, "🚀 \x1b[1;36m%s\x1b[0m v%s\n", info.AppName, info.Version)
 	} else {
-		fmt.Fprintf(output, "🚀 %s v%s\n", appName, version)
+		fmt.Fprintf(output, "🚀 %s v%s\n", info.AppName, info.Version)
 	}
-	printServerBannerAppModeLine(output, appMode, true, lang)
+	printServerBannerAppModeLine(output, info.AppMode, true, info.Lang)
 	fmt.Fprintln(output)
-	for _, address := range urls {
-		fmt.Fprintf(output, "  🌐 %s: %s\n", i18n.T(lang, "cli.listening_on_label"), address)
+	printServerBannerOverlays(output, info, true)
+	for _, address := range info.URLs {
+		fmt.Fprintf(output, "  🌐 %s: %s\n", i18n.T(info.Lang, "cli.listening_on_label"), address)
 	}
-	fmt.Fprintf(output, "✅ %s %s\n", i18n.T(lang, "cli.server_started_on_label"), startupDatetime)
+	fmt.Fprintf(output, "✅ %s %s\n", i18n.T(info.Lang, "cli.server_started_on_label"), startupDatetime)
 	fmt.Fprintln(output)
 }
 
-func printServerBannerCompact(output io.Writer, appName, version, appMode string, urls []string, lang, startupDatetime string, useColors bool) {
+func printServerBannerCompact(output io.Writer, info ServerBannerInfo, startupDatetime string, useColors bool) {
 	if useColors {
-		fmt.Fprintf(output, "🚀 \x1b[1;36m%s\x1b[0m v%s\n", appName, version)
+		fmt.Fprintf(output, "🚀 \x1b[1;36m%s\x1b[0m v%s\n", info.AppName, info.Version)
 	} else {
-		fmt.Fprintf(output, "🚀 %s v%s\n", appName, version)
+		fmt.Fprintf(output, "🚀 %s v%s\n", info.AppName, info.Version)
 	}
-	printServerBannerAppModeLine(output, appMode, true, lang)
-	for _, address := range urls {
-		fmt.Fprintf(output, "🌐 %s: %s\n", i18n.T(lang, "cli.listening_on_label"), address)
+	printServerBannerAppModeLine(output, info.AppMode, true, info.Lang)
+	printServerBannerOverlays(output, info, true)
+	for _, address := range info.URLs {
+		fmt.Fprintf(output, "🌐 %s: %s\n", i18n.T(info.Lang, "cli.listening_on_label"), address)
 	}
-	fmt.Fprintf(output, "✅ %s %s\n", i18n.T(lang, "cli.server_started_on_label"), startupDatetime)
+	fmt.Fprintf(output, "✅ %s %s\n", i18n.T(info.Lang, "cli.server_started_on_label"), startupDatetime)
+}
+
+func printServerBannerOverlays(output io.Writer, info ServerBannerInfo, useIcons bool) {
+	icon := func(value string) string {
+		if useIcons {
+			return value + " "
+		}
+		return ""
+	}
+	if info.OnionAddress != "" {
+		fmt.Fprintf(output, "%sTor: %s\n", icon("🧅"), info.OnionAddress)
+	}
+	if info.I2PAddress != "" {
+		fmt.Fprintf(output, "%sI2P: %s\n", icon("🔗"), info.I2PAddress)
+	}
+	if info.SMTPAddress != "" {
+		fmt.Fprintf(output, "%sSMTP: %s\n", icon("📧"), info.SMTPAddress)
+	}
+	if info.SetupToken != "" {
+		fmt.Fprintf(output, "%sSetup token: %s\n", icon("🔑"), info.SetupToken)
+	}
 }
 
 func FormatStartupDatetime(startedAt time.Time, timezone string) string {

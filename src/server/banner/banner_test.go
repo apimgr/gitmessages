@@ -27,7 +27,8 @@ func TestPrintServerStartupBannerResponsiveModes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
-			printServerStartupBanner(&output, "Git Messages", "1.2.3", "production", urls, "en", FormatStartupDatetime(startedAt, "America/New_York"), test.width, false, !test.plain)
+			info := ServerBannerInfo{AppName: "Git Messages", Version: "1.2.3", AppMode: "production", URLs: urls, Lang: "en"}
+			printServerStartupBanner(&output, info, FormatStartupDatetime(startedAt, "America/New_York"), test.width, false, !test.plain)
 			got := output.String()
 			for _, value := range test.want {
 				if !strings.Contains(got, value) {
@@ -40,6 +41,33 @@ func TestPrintServerStartupBannerResponsiveModes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPrintServerStartupBannerIncludesConfiguredServices(t *testing.T) {
+	var output bytes.Buffer
+	info := ServerBannerInfo{
+		AppName: "Git Messages", Version: "1.2.3", AppMode: "production", Lang: "en",
+		URLs: []string{"https://example.test"}, OnionAddress: "example.onion",
+		I2PAddress: "example.i2p", SMTPAddress: "smtp.example.test:587", SetupToken: "one-time-token",
+	}
+	printServerStartupBanner(&output, info, "November 26, 2026 at 16:00:00 EST", 100, false, true)
+	for _, want := range []string{"Tor: example.onion", "I2P: example.i2p", "SMTP: smtp.example.test:587", "Setup token: one-time-token"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("banner does not contain %q:\n%s", want, output.String())
+		}
+	}
+}
+
+func TestMinimalServerBannerOmitsIconsForConfiguredServices(t *testing.T) {
+	var output bytes.Buffer
+	info := ServerBannerInfo{
+		AppName: "Git Messages", Version: "1.2.3", AppMode: "production", Lang: "en",
+		URLs: []string{"https://example.test"}, OnionAddress: "http://example.onion",
+	}
+	printServerStartupBanner(&output, info, "", 45, false, true)
+	if strings.Contains(output.String(), "🧅") || !strings.Contains(output.String(), "Tor: http://example.onion") {
+		t.Fatalf("minimal banner should show plain service labels without icons:\n%s", output.String())
 	}
 }
 
