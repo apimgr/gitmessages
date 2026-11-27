@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -706,18 +705,18 @@ func TestOwnerTokenLifecycleAndMCPAuthorization(t *testing.T) {
 	var linked struct {
 		Data struct {
 			Token struct {
-				ID int64 `json:"id"`
+				ID string `json:"id"`
 			} `json:"token"`
-			Value string `json:"value"`
+			Value string `json:"linked_token"`
 		} `json:"data"`
 	}
-	status, body = requestJSON(http.MethodPost, "/api/v1/server/preferences/tokens", ownerToken, map[string]string{"name": "e2e linked", "expiry": "7d"})
-	if status != http.StatusCreated || json.Unmarshal(body, &linked) != nil || linked.Data.Token.ID == 0 || linked.Data.Value == "" {
+	status, body = requestJSON(http.MethodPost, "/api/v1/server/preferences/tokens", ownerToken, map[string]string{"name": "e2e linked", "scope": "read", "expires": "7d"})
+	if status != http.StatusCreated || json.Unmarshal(body, &linked) != nil || linked.Data.Token.ID == "" || linked.Data.Value == "" {
 		t.Fatalf("linked token creation returned status %d", status)
 	}
 	linkedToken := linked.Data.Value
-	linkedPath := "/api/v1/server/preferences/tokens/" + strconv.FormatInt(linked.Data.Token.ID, 10)
-	if status, _ = requestJSON(http.MethodPatch, linkedPath, ownerToken, map[string]string{"name": "e2e renamed", "expiry": "never"}); status != http.StatusOK {
+	linkedPath := "/api/v1/server/preferences/tokens/" + linked.Data.Token.ID
+	if status, _ = requestJSON(http.MethodPatch, linkedPath, ownerToken, map[string]string{"name": "e2e renamed", "expires": "never"}); status != http.StatusOK {
 		t.Fatalf("linked token update returned %d", status)
 	}
 	if status, _ = requestJSON(http.MethodGet, "/api/v1/server/preferences/tokens", linkedToken, nil); status != http.StatusForbidden {
@@ -728,7 +727,7 @@ func TestOwnerTokenLifecycleAndMCPAuthorization(t *testing.T) {
 	}
 	var rotatedPrimary struct {
 		Data struct {
-			Token string `json:"token"`
+			Token string `json:"owner_token"`
 		} `json:"data"`
 	}
 	status, body = requestJSON(http.MethodPost, "/api/v1/server/preferences/tokens/primary/rotate", ownerToken, nil)
@@ -742,12 +741,12 @@ func TestOwnerTokenLifecycleAndMCPAuthorization(t *testing.T) {
 	if status, _ = requestJSON(http.MethodGet, "/api/v1/server/preferences/tokens", ownerToken, nil); status != http.StatusOK {
 		t.Fatalf("rotated primary token returned %d", status)
 	}
-	if status, body = requestJSON(http.MethodPost, "/api/v1/server/preferences/tokens/"+strconv.FormatInt(linked.Data.Token.ID, 10)+"/rotate", ownerToken, nil); status != http.StatusOK {
+	if status, body = requestJSON(http.MethodPost, "/api/v1/server/preferences/tokens/"+linked.Data.Token.ID+"/rotate", ownerToken, nil); status != http.StatusOK {
 		t.Fatalf("linked token rotation returned %d", status)
 	}
 	var rotatedLinked struct {
 		Data struct {
-			Value string `json:"value"`
+			Value string `json:"linked_token"`
 		} `json:"data"`
 	}
 	if json.Unmarshal(body, &rotatedLinked) != nil || rotatedLinked.Data.Value == "" {
@@ -759,7 +758,7 @@ func TestOwnerTokenLifecycleAndMCPAuthorization(t *testing.T) {
 	if status, _ = requestJSON(http.MethodGet, "/api/v1/server/preferences/tokens", rotatedLinked.Data.Value, nil); status != http.StatusForbidden {
 		t.Fatalf("replacement linked token did not retain restricted scope: %d", status)
 	}
-	if status, _ = requestJSON(http.MethodDelete, linkedPath+"/revoke", ownerToken, nil); status != http.StatusOK {
+	if status, _ = requestJSON(http.MethodDelete, linkedPath, ownerToken, nil); status != http.StatusOK {
 		t.Fatalf("linked token revocation returned %d", status)
 	}
 	if status, _ = requestJSON(http.MethodGet, "/api/v1/server/preferences/tokens", rotatedLinked.Data.Value, nil); status != http.StatusUnauthorized {

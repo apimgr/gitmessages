@@ -75,3 +75,27 @@ func TestMetricsRoutesAreGetOnly(t *testing.T) {
 		t.Fatalf("POST /server/metrics status = %d, want 405", response.Code)
 	}
 }
+
+func TestMetricsRoutesUseInternalRouteRegistry(t *testing.T) {
+	cfg := config.DefaultConfig().Server.Metrics
+	cfg.Enabled = true
+	cfg.Root.Enabled = true
+	exporter := metrics.New(cfg, "dev", "unknown", "N/A")
+	definitions := metricsRouteDefinitions(httptest.NewRequest(http.MethodGet, "/", nil), cfg, exporter)
+	mux := newRouteMux()
+	registry := &routeRegistry{mux: mux}
+	for _, definition := range definitions {
+		registry.Add(definition)
+		if definition.Auth != "service" || !definition.Internal || definition.Listed || definition.OperationID == "" {
+			t.Errorf("metrics route metadata = %+v, want internal service route", definition)
+		}
+	}
+	if len(mux.routeList()) != len(definitions) || len(definitions) != 16 {
+		t.Fatalf("registered metrics routes = %d, definitions = %d; want 16", len(mux.routeList()), len(definitions))
+	}
+	for _, route := range mux.routeList() {
+		if !route.Internal || route.DebugOnly {
+			t.Errorf("metrics route inventory entry = %+v, want Internal and not DebugOnly", route)
+		}
+	}
+}

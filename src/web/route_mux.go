@@ -24,6 +24,45 @@ type routeMux struct {
 	routes []routeInfo
 }
 
+type routeRegistry struct {
+	mux     *routeMux
+	routes  map[string][]Route
+	mounted map[string]bool
+}
+
+func (registry *routeRegistry) Add(route Route) {
+	if registry.routes == nil {
+		registry.routes = make(map[string][]Route)
+		registry.mounted = make(map[string]bool)
+	}
+	registry.routes[route.Path] = append(registry.routes[route.Path], route)
+	if !registry.mounted[route.Path] {
+		registry.mounted[route.Path] = true
+		registry.mux.ServeMux.HandleFunc(route.Path, registry.dispatch(route.Path))
+	}
+	registry.mux.recordRoute(route.Method+" "+route.Path, route.Internal, route.DebugOnly)
+}
+
+func (registry *routeRegistry) dispatch(path string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		routes := registry.routes[path]
+		for _, route := range routes {
+			if route.Method == r.Method || r.Method == http.MethodHead && route.Method == http.MethodGet {
+				if !requireWriteScope(w, r, route) {
+					return
+				}
+				route.Handler(w, r)
+				return
+			}
+		}
+		if len(routes) > 0 {
+			routes[0].Handler(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	}
+}
+
 func newRouteMux() *routeMux {
 	return &routeMux{ServeMux: http.NewServeMux()}
 }

@@ -170,8 +170,6 @@ func registerTokenRoutes(mux routeRegistrar) {
 	mux.HandleFunc("/server/preferences/token/revoke", tokenWebAction("primary-revoke"))
 	mux.HandleFunc("/server/preferences/tokens/", tokenLinkedWebAction)
 	mux.HandleFunc("/tokens.js", tokenCopyScript)
-	mux.HandleFunc(APIBasePath()+"/server/preferences/tokens", tokenAPI)
-	mux.HandleFunc(APIBasePath()+"/server/preferences/tokens/", tokenAPI)
 }
 
 func tokenPageOrAction(w http.ResponseWriter, r *http.Request) {
@@ -194,12 +192,12 @@ func tokenPageOrAction(w http.ResponseWriter, r *http.Request) {
 			writeHTTPError(w, r, err.Error(), http.StatusBadRequest)
 			return
 		}
-		_, token, err := store.CreateLinked(r.Context(), identity.OwnerID, r.FormValue("name"), expires)
+		_, token, err := store.CreateLinkedWithScope(r.Context(), identity.OwnerID, r.FormValue("name"), r.FormValue("scope"), expires)
 		if err != nil {
 			writeHTTPError(w, r, "Unable to create linked token", http.StatusBadRequest)
 			return
 		}
-		if !setTokenFlash(w, r, strconv.FormatInt(token.ID, 10), "tokens.toast_created") {
+		if !setTokenFlash(w, r, token.ID, "tokens.toast_created") {
 			writeHTTPError(w, r, "Token view is unavailable", http.StatusServiceUnavailable)
 			return
 		}
@@ -224,13 +222,13 @@ func tokenPageOrAction(w http.ResponseWriter, r *http.Request) {
 			writeHTTPError(w, r, "Unable to load tokens", http.StatusInternalServerError)
 			return
 		}
-		var tokenID int64
+		var tokenID string
 		if flash.card == "primary" {
 			tokenID = primaryToken(tokens).ID
 		} else {
-			tokenID, _ = strconv.ParseInt(flash.card, 10, 64)
+			tokenID = flash.card
 		}
-		if tokenID > 0 {
+		if tokenID != "" {
 			if token, revealErr := store.Reveal(r.Context(), identity.OwnerID, tokenID); revealErr == nil {
 				toast := strings.TrimPrefix(flash.toast, "tokens.")
 				w.Header().Set("Cache-Control", "no-store")
@@ -279,14 +277,14 @@ func tokenPageOrAction(w http.ResponseWriter, r *http.Request) {
 		if token.ExpiresAt != nil {
 			expiryDate = token.ExpiresAt.Format("2006-01-02")
 		}
-		body.WriteString(`<li id="token-` + strconv.FormatInt(token.ID, 10) + `"><h3>` + html.EscapeString(token.Name) + `</h3><p><span class="status-badge">` + html.EscapeString(tokenStatusText(r, token.Status)) + `</span> · <code>` + html.EscapeString(masked) + `</code></p><dl><dt>` + html.EscapeString(tokenText(r, "created")) + `</dt><dd>` + token.CreatedAt.Format(time.RFC3339) + `</dd><dt>` + html.EscapeString(tokenText(r, "last_used")) + `</dt><dd>` + tokenDate(r, token.LastUsedAt) + `</dd><dt>` + html.EscapeString(tokenText(r, "expires")) + `</dt><dd>` + tokenDate(r, token.ExpiresAt) + `</dd></dl><form method="post" action="/server/preferences/tokens/` + strconv.FormatInt(token.ID, 10) + `/reveal"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrf) + `"><button>` + html.EscapeString(tokenText(r, "reveal")) + `</button></form><form method="post" id="rotate-form-` + strconv.FormatInt(token.ID, 10) + `" action="/server/preferences/tokens/` + strconv.FormatInt(token.ID, 10) + `/rotate"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrf) + `"><button type="button" popovertarget="rotate-linked-` + strconv.FormatInt(token.ID, 10) + `">` + html.EscapeString(tokenText(r, "rotate")) + `</button><div id="rotate-linked-` + strconv.FormatInt(token.ID, 10) + `" popover><p>` + html.EscapeString(tokenText(r, "ask_rotate")) + `</p><button type="submit" form="rotate-form-` + strconv.FormatInt(token.ID, 10) + `">` + html.EscapeString(tokenText(r, "confirm_rotate")) + `</button></div></form><details><summary>` + html.EscapeString(tokenText(r, "edit")) + `</summary><form method="post" action="/server/preferences/tokens/` + strconv.FormatInt(token.ID, 10) + `/update"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrf) + `"><label>` + html.EscapeString(tokenText(r, "name")) + `<input name="name" maxlength="64" value="` + html.EscapeString(token.Name) + `" required></label><label>` + html.EscapeString(tokenText(r, "expires_on")) + `<input type="date" name="expiry" value="` + expiryDate + `"></label><button>` + html.EscapeString(tokenText(r, "save")) + `</button></form></details><form method="post" action="/server/preferences/tokens/` + strconv.FormatInt(token.ID, 10) + `/revoke"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrf) + `"><button type="button" popovertarget="revoke-linked-` + strconv.FormatInt(token.ID, 10) + `">` + html.EscapeString(tokenText(r, "revoke")) + `</button><div id="revoke-linked-` + strconv.FormatInt(token.ID, 10) + `" popover><p>` + html.EscapeString(tokenText(r, "ask_revoke")) + `</p><button type="submit">` + html.EscapeString(tokenText(r, "confirm_revoke")) + `</button></div></form></li>`)
+		body.WriteString(`<li id="token-` + html.EscapeString(token.ID) + `"><h3>` + html.EscapeString(token.Name) + `</h3><p><span class="status-badge">` + html.EscapeString(tokenStatusText(r, token.Status)) + `</span> · <code>` + html.EscapeString(masked) + `</code></p><dl><dt>` + html.EscapeString(tokenText(r, "created")) + `</dt><dd>` + token.CreatedAt.Format(time.RFC3339) + `</dd><dt>` + html.EscapeString(tokenText(r, "last_used")) + `</dt><dd>` + tokenDate(r, token.LastUsedAt) + `</dd><dt>` + html.EscapeString(tokenText(r, "expires")) + `</dt><dd>` + tokenDate(r, token.ExpiresAt) + `</dd></dl><form method="post" action="/server/preferences/tokens/` + html.EscapeString(token.ID) + `/reveal"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrf) + `"><button>` + html.EscapeString(tokenText(r, "reveal")) + `</button></form><form method="post" id="rotate-form-` + html.EscapeString(token.ID) + `" action="/server/preferences/tokens/` + html.EscapeString(token.ID) + `/rotate"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrf) + `"><button type="button" popovertarget="rotate-linked-` + html.EscapeString(token.ID) + `">` + html.EscapeString(tokenText(r, "rotate")) + `</button><div id="rotate-linked-` + html.EscapeString(token.ID) + `" popover><p>` + html.EscapeString(tokenText(r, "ask_rotate")) + `</p><button type="submit" form="rotate-form-` + html.EscapeString(token.ID) + `">` + html.EscapeString(tokenText(r, "confirm_rotate")) + `</button></div></form><details><summary>` + html.EscapeString(tokenText(r, "edit")) + `</summary><form method="post" action="/server/preferences/tokens/` + html.EscapeString(token.ID) + `/update"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrf) + `"><label>` + html.EscapeString(tokenText(r, "name")) + `<input name="name" maxlength="64" value="` + html.EscapeString(token.Name) + `" required></label><label>` + html.EscapeString(tokenText(r, "expires_on")) + `<input type="date" name="expiry" value="` + expiryDate + `"></label><button>` + html.EscapeString(tokenText(r, "save")) + `</button></form></details><form method="post" action="/server/preferences/tokens/` + html.EscapeString(token.ID) + `/revoke"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrf) + `"><button type="button" popovertarget="revoke-linked-` + html.EscapeString(token.ID) + `">` + html.EscapeString(tokenText(r, "revoke")) + `</button><div id="revoke-linked-` + html.EscapeString(token.ID) + `" popover><p>` + html.EscapeString(tokenText(r, "ask_revoke")) + `</p><button type="submit">` + html.EscapeString(tokenText(r, "confirm_revoke")) + `</button></div></form></li>`)
 	}
 	body.WriteString(`</ul>`)
 	if linkedCount == 0 {
 		body.WriteString(`<div class="empty-state"><p class="empty-state-message">` + html.EscapeString(tokenText(r, "empty")) + `</p><a href="#linked-token-create">` + html.EscapeString(tokenText(r, "create_linked")) + `</a></div>`)
 	}
 	body.WriteString(`</section>`)
-	body.WriteString(tokenSection("linked-token-create", tokenText(r, "create_linked"), `<form method="post" action="/server/preferences/tokens"><input type="hidden" name="csrf_token" value="`+html.EscapeString(csrf)+`"><label>`+html.EscapeString(tokenText(r, "name"))+`<input name="name" maxlength="64" required><small>`+html.EscapeString(tokenText(r, "example"))+`</small></label><label>`+html.EscapeString(tokenText(r, "expiry"))+`<select name="expiry"><option value="never">`+html.EscapeString(tokenText(r, "never"))+`</option><option value="7d">`+html.EscapeString(tokenText(r, "7d"))+`</option><option value="30d">`+html.EscapeString(tokenText(r, "30d"))+`</option><option value="90d">`+html.EscapeString(tokenText(r, "90d"))+`</option><option value="1y">`+html.EscapeString(tokenText(r, "1y"))+`</option><option value="custom">`+html.EscapeString(tokenText(r, "custom"))+`</option></select></label><details><summary>`+html.EscapeString(tokenText(r, "custom_expiry"))+`</summary><label>`+html.EscapeString(tokenText(r, "expires_on"))+`<input type="date" name="expiry_date"></label></details><button type="submit">`+html.EscapeString(tokenText(r, "create"))+`</button></form>`))
+	body.WriteString(tokenSection("linked-token-create", tokenText(r, "create_linked"), `<form method="post" action="/server/preferences/tokens"><input type="hidden" name="csrf_token" value="`+html.EscapeString(csrf)+`"><label>`+html.EscapeString(tokenText(r, "name"))+`<input name="name" maxlength="64" required><small>`+html.EscapeString(tokenText(r, "example"))+`</small></label><label>`+html.EscapeString(tokenText(r, "scope"))+`<select name="scope"><option value="read-write">read-write</option><option value="read">read</option></select></label><label>`+html.EscapeString(tokenText(r, "expiry"))+`<select name="expiry"><option value="never">`+html.EscapeString(tokenText(r, "never"))+`</option><option value="7d">`+html.EscapeString(tokenText(r, "7d"))+`</option><option value="30d">`+html.EscapeString(tokenText(r, "30d"))+`</option><option value="90d">`+html.EscapeString(tokenText(r, "90d"))+`</option><option value="1y">`+html.EscapeString(tokenText(r, "1y"))+`</option><option value="custom">`+html.EscapeString(tokenText(r, "custom"))+`</option></select></label><details><summary>`+html.EscapeString(tokenText(r, "custom_expiry"))+`</summary><label>`+html.EscapeString(tokenText(r, "expires_on"))+`<input type="date" name="expiry_date"></label></details><button type="submit">`+html.EscapeString(tokenText(r, "create"))+`</button></form>`))
 	body.WriteString(tokenSection("saved-token-browser", tokenText(r, "browser"), `<form method="post" action="/server/preferences/token/forget"><input type="hidden" name="csrf_token" value="`+html.EscapeString(csrf)+`"><button type="button" popovertarget="forget-token">`+html.EscapeString(tokenText(r, "forget"))+`</button><div id="forget-token" popover><p>`+html.EscapeString(tokenText(r, "ask_forget"))+`</p><button type="submit">`+html.EscapeString(tokenText(r, "confirm_forget"))+`</button></div></form><p>`+html.EscapeString(i18n.Format(r.Header.Get("X-GitMessages-Language"), "tokens.preserved", map[string]string{"resources": "items"}))+`</p>`))
 	body.WriteString(`<section class="section-card" aria-labelledby="revoke-primary-title"><h2 id="revoke-primary-title">` + html.EscapeString(tokenText(r, "revoke_primary")) + `</h2><p>` + html.EscapeString(i18n.Format(r.Header.Get("X-GitMessages-Language"), "tokens.primary_revoke_summary", map[string]string{"linked": strconv.Itoa(linkedCount), "resources": "0 items"})) + `</p><button class="btn-danger" type="button" popovertarget="revoke-primary">` + html.EscapeString(tokenText(r, "revoke_primary")) + `</button><div id="revoke-primary" popover><p>` + html.EscapeString(i18n.Format(r.Header.Get("X-GitMessages-Language"), "tokens.confirm_last4", map[string]string{"last4": primary.Last4})) + `</p><form method="post" action="/server/preferences/token/revoke"><input type="hidden" name="csrf_token" value="` + html.EscapeString(csrf) + `"><label>` + html.EscapeString(tokenText(r, "confirm_last4_label")) + `<input name="confirm" inputmode="text" autocomplete="off" minlength="4" maxlength="4" required></label><button class="btn-danger" type="submit">` + html.EscapeString(tokenText(r, "delete_everything")) + `</button></form></div></section>`)
 	page(w, r, tokenPageTitle(r), templateHTML(body.String()))
@@ -448,8 +446,8 @@ func tokenLinkedWebAction(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	id, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil || id < 1 {
+	id := parts[0]
+	if !validTokenID(id) {
 		http.NotFound(w, r)
 		return
 	}
@@ -459,11 +457,11 @@ func tokenLinkedWebAction(w http.ResponseWriter, r *http.Request) {
 	}
 	switch parts[1] {
 	case "reveal":
-		if !setTokenFlash(w, r, strconv.FormatInt(id, 10), "") {
+		if !setTokenFlash(w, r, id, "") {
 			writeHTTPError(w, r, "Token view is unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		http.Redirect(w, r, "/server/preferences/tokens#token-"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+		http.Redirect(w, r, "/server/preferences/tokens#token-"+id, http.StatusSeeOther)
 	case "rotate":
 		_, _, err := store.Rotate(r.Context(), identity.OwnerID, id)
 		if err != nil {
@@ -474,19 +472,19 @@ func tokenLinkedWebAction(w http.ResponseWriter, r *http.Request) {
 			writeHTTPError(w, r, "Unable to rotate CSRF secret", http.StatusInternalServerError)
 			return
 		}
-		if !setTokenFlash(w, r, strconv.FormatInt(id, 10), "tokens.toast_rotated") {
+		if !setTokenFlash(w, r, id, "tokens.toast_rotated") {
 			writeHTTPError(w, r, "Token view is unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		http.Redirect(w, r, "/server/preferences/tokens#token-"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+		http.Redirect(w, r, "/server/preferences/tokens#token-"+id, http.StatusSeeOther)
 	case "revoke":
 		if err := store.RevokeLinked(r.Context(), identity.OwnerID, id); err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		setTokenFlash(w, r, strconv.FormatInt(id, 10), "tokens.toast_revoked")
+		setTokenFlash(w, r, id, "tokens.toast_revoked")
 		clearCSRFCookie(w, r)
-		http.Redirect(w, r, "/server/preferences/tokens#token-"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+		http.Redirect(w, r, "/server/preferences/tokens#token-"+id, http.StatusSeeOther)
 	case "update":
 		if err := r.ParseForm(); err != nil {
 			writeHTTPError(w, r, "Invalid form", 400)
@@ -501,8 +499,8 @@ func tokenLinkedWebAction(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		setTokenFlash(w, r, strconv.FormatInt(id, 10), "tokens.toast_renamed")
-		http.Redirect(w, r, "/server/preferences/tokens#token-"+strconv.FormatInt(id, 10), http.StatusSeeOther)
+		setTokenFlash(w, r, id, "tokens.toast_renamed")
+		http.Redirect(w, r, "/server/preferences/tokens#token-"+id, http.StatusSeeOther)
 	default:
 		http.NotFound(w, r)
 	}
@@ -511,7 +509,7 @@ func tokenLinkedWebAction(w http.ResponseWriter, r *http.Request) {
 func tokenAPI(w http.ResponseWriter, r *http.Request) {
 	store := currentAuthStore()
 	if store == nil {
-		tokenJSONError(w, 503, "UNAVAILABLE", "Token management is unavailable")
+		tokenJSONError(w, r, 503, "UNAVAILABLE", "Token management is unavailable")
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, APIBasePath()+"/server/preferences/tokens")
@@ -527,11 +525,18 @@ func tokenAPI(w http.ResponseWriter, r *http.Request) {
 			}
 			tokens, err := store.List(r.Context(), identity.OwnerID)
 			if err != nil {
-				tokenJSONError(w, 500, "INTERNAL_ERROR", "Unable to load tokens")
+				tokenJSONError(w, r, 500, "INTERNAL_ERROR", "Unable to load tokens")
 				return
 			}
+			primary := primaryToken(tokens)
+			linked := make([]map[string]any, 0, len(tokens)-1)
+			for _, token := range tokens {
+				if token.Kind == "linked" {
+					linked = append(linked, publicTokenData(token))
+				}
+			}
 			w.Header().Set("Cache-Control", "no-store")
-			writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": tokens})
+			writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]any{"primary": publicTokenData(primary), "linked": linked, "max_linked": config.Get().Server.Tokens.MaxLinked}})
 			return
 		}
 		if r.Method == http.MethodPost {
@@ -541,40 +546,47 @@ func tokenAPI(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			var input struct {
-				Name   string `json:"name"`
-				Expiry string `json:"expiry"`
+				Name      string `json:"name"`
+				Scope     string `json:"scope"`
+				Expires   string `json:"expires"`
+				ExpiresOn string `json:"expires_on"`
 			}
-			if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&input) != nil {
-				tokenJSONError(w, 400, "VALIDATION_FAILED", "Invalid request body")
+			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&input) != nil {
+				tokenJSONError(w, r, 400, "VALIDATION_FAILED", "Invalid request body")
 				return
 			}
-			expires, err := parseTokenExpiry(input.Expiry)
+			expires, err := parseAPITokenExpiry(input.Expires, input.ExpiresOn)
 			if err != nil {
-				tokenJSONError(w, 400, "VALIDATION_FAILED", err.Error())
+				tokenJSONError(w, r, 400, "VALIDATION_FAILED", err.Error())
 				return
 			}
-			raw, token, err := store.CreateLinked(r.Context(), identity.OwnerID, input.Name, expires)
+			raw, token, err := store.CreateLinkedWithScope(r.Context(), identity.OwnerID, input.Name, input.Scope, expires)
 			if err != nil {
-				tokenJSONError(w, 400, "VALIDATION_FAILED", err.Error())
+				if errors.Is(err, auth.ErrTokenLimit) || strings.Contains(strings.ToLower(err.Error()), "unique") {
+					tokenJSONError(w, r, http.StatusConflict, "CONFLICT", err.Error())
+					return
+				}
+				tokenJSONError(w, r, 400, "VALIDATION_FAILED", err.Error())
 				return
 			}
-			token.Value = ""
 			w.Header().Set("Cache-Control", "no-store")
-			writeJSON(w, r, http.StatusCreated, map[string]any{"ok": true, "data": map[string]any{"token": token, "value": raw}})
+			writeJSON(w, r, http.StatusCreated, map[string]any{"ok": true, "data": map[string]any{"token": publicTokenData(token), "linked_token": raw}})
 			return
 		}
 		w.Header().Set("Allow", "GET, POST")
-		tokenJSONError(w, 405, "METHOD_NOT_ALLOWED", "Method not allowed")
+		tokenJSONError(w, r, 405, "METHOD_NOT_ALLOWED", "Method not allowed")
 		return
 	}
 	if path == "/primary" && r.Method == http.MethodPost {
 		if hasValidBearer(r.Context(), r, store) {
-			tokenJSONError(w, 409, "CONFLICT", "A valid token is already present")
+			tokenJSONError(w, r, 409, "CONFLICT", "A valid token is already present")
 			return
 		}
 		raw, _, err := store.IssueOwner(r.Context())
 		if err != nil {
-			tokenJSONError(w, 500, "INTERNAL_ERROR", "Unable to create token")
+			tokenJSONError(w, r, 500, "INTERNAL_ERROR", "Unable to create token")
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
@@ -591,22 +603,22 @@ func tokenAPI(w http.ResponseWriter, r *http.Request) {
 			Confirm string `json:"confirm"`
 		}
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&input) != nil {
-			tokenJSONError(w, http.StatusBadRequest, "VALIDATION_FAILED", "Invalid request body")
+			tokenJSONError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "Invalid request body")
 			return
 		}
 		tokens, err := store.List(r.Context(), identity.OwnerID)
 		if err != nil {
-			tokenJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load tokens")
+			tokenJSONError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load tokens")
 			return
 		}
 		primary := primaryToken(tokens)
 		if len(input.Confirm) != 4 || subtle.ConstantTimeCompare([]byte(primary.Last4), []byte(input.Confirm)) != 1 {
-			tokenJSONError(w, http.StatusBadRequest, "VALIDATION_FAILED", tokenText(r, "confirm_invalid"))
+			tokenJSONError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", tokenText(r, "confirm_invalid"))
 			return
 		}
 		deletedTokens, deletedResources, err := store.DeleteOwner(r.Context(), identity.OwnerID, "api")
 		if err != nil {
-			tokenJSONError(w, http.StatusInternalServerError, "INTERNAL_ERROR", tokenText(r, "revoke_failed"))
+			tokenJSONError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", tokenText(r, "revoke_failed"))
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
@@ -616,7 +628,7 @@ func tokenAPI(w http.ResponseWriter, r *http.Request) {
 	if path == "/primary/reveal" || path == "/primary/rotate" {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
-			tokenJSONError(w, 405, "METHOD_NOT_ALLOWED", "Method not allowed")
+			tokenJSONError(w, r, 405, "METHOD_NOT_ALLOWED", "Method not allowed")
 			return
 		}
 		identity, err := bearerIdentity(r.Context(), r, store, true)
@@ -626,7 +638,7 @@ func tokenAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		tokens, err := store.List(r.Context(), identity.OwnerID)
 		if err != nil {
-			tokenJSONError(w, 500, "INTERNAL_ERROR", "Unable to load token")
+			tokenJSONError(w, r, 500, "INTERNAL_ERROR", "Unable to load token")
 			return
 		}
 		primary := primaryToken(tokens)
@@ -638,17 +650,17 @@ func tokenAPI(w http.ResponseWriter, r *http.Request) {
 			raw, _, err = store.Rotate(r.Context(), identity.OwnerID, primary.ID)
 			if err == nil {
 				if rotateErr := store.Database().RotateAppSecret(r.Context(), "csrf_token_secret"); rotateErr != nil {
-					tokenJSONError(w, 500, "INTERNAL_ERROR", "Unable to rotate CSRF secret")
+					tokenJSONError(w, r, 500, "INTERNAL_ERROR", "Unable to rotate CSRF secret")
 					return
 				}
 			}
 		}
 		if err != nil {
-			tokenJSONError(w, 500, "INTERNAL_ERROR", "Unable to access token")
+			tokenJSONError(w, r, 500, "INTERNAL_ERROR", "Unable to access token")
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]string{"token": raw}})
+		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]string{"owner_token": raw}})
 		return
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
@@ -661,8 +673,8 @@ func tokenAPI(w http.ResponseWriter, r *http.Request) {
 		tokenAuthError(w, r, err)
 		return
 	}
-	id, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil || id < 1 {
+	id := parts[0]
+	if !validTokenID(id) {
 		http.NotFound(w, r)
 		return
 	}
@@ -670,48 +682,82 @@ func tokenAPI(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if len(parts) == 1 && r.Method == http.MethodPatch {
-		var input struct {
-			Name   string `json:"name"`
-			Expiry string `json:"expiry"`
-		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&input) != nil {
-			tokenJSONError(w, http.StatusBadRequest, "VALIDATION_FAILED", "Invalid request body")
-			return
-		}
-		expires, err := parseTokenExpiry(input.Expiry)
-		if err != nil {
-			tokenJSONError(w, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
-			return
-		}
-		if err := store.UpdateLinked(r.Context(), identity.OwnerID, id, input.Name, expires); err != nil {
-			tokenJSONError(w, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
-			return
-		}
-		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]bool{"updated": true}})
-		return
-	}
-	if len(parts) == 2 && r.Method == http.MethodPatch {
-		var input struct {
-			Name   string `json:"name"`
-			Expiry string `json:"expiry"`
-		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&input) != nil {
-			tokenJSONError(w, 400, "VALIDATION_FAILED", "Invalid request body")
-			return
-		}
-		expires, err := parseTokenExpiry(input.Expiry)
-		if err != nil {
-			tokenJSONError(w, 400, "VALIDATION_FAILED", err.Error())
-			return
-		}
-		if err := store.UpdateLinked(r.Context(), identity.OwnerID, id, input.Name, expires); err != nil {
+	if len(parts) == 1 && r.Method == http.MethodDelete {
+		if err := store.RevokeLinked(r.Context(), identity.OwnerID, id); err != nil {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]bool{"updated": true}})
+		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]string{"id": id, "status": "revoked"}})
+		return
+	}
+	if len(parts) == 1 && r.Method == http.MethodPatch {
+		var input struct {
+			Name      *string `json:"name"`
+			Expires   *string `json:"expires"`
+			ExpiresOn *string `json:"expires_on"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&input) != nil {
+			tokenJSONError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "Invalid request body")
+			return
+		}
+		if input.Name == nil && input.Expires == nil && input.ExpiresOn == nil {
+			tokenJSONError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "At least one token field is required")
+			return
+		}
+		if input.Expires != nil && *input.Expires == "" || input.ExpiresOn != nil && *input.ExpiresOn == "" {
+			tokenJSONError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "Expiry must not be empty")
+			return
+		}
+		if input.Expires != nil && input.ExpiresOn != nil {
+			tokenJSONError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "expires and expires_on cannot both be set")
+			return
+		}
+		tokens, err := store.List(r.Context(), identity.OwnerID)
+		if err != nil {
+			tokenJSONError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load token")
+			return
+		}
+		var current auth.Token
+		for _, token := range tokens {
+			if token.ID == id {
+				current = token
+				break
+			}
+		}
+		name := current.Name
+		if input.Name != nil {
+			name = *input.Name
+		}
+		expires := current.ExpiresAt
+		if input.Expires != nil || input.ExpiresOn != nil {
+			expiresValue, expiresOnValue := "", ""
+			if input.Expires != nil {
+				expiresValue = *input.Expires
+			}
+			if input.ExpiresOn != nil {
+				expiresOnValue = *input.ExpiresOn
+			}
+			expires, err = parseAPITokenExpiry(expiresValue, expiresOnValue)
+			if err != nil {
+				tokenJSONError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
+				return
+			}
+		}
+		if err := store.UpdateLinked(r.Context(), identity.OwnerID, id, name, expires); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				tokenJSONError(w, r, http.StatusConflict, "CONFLICT", err.Error())
+				return
+			}
+			tokenJSONError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		updated := current
+		updated.Name, updated.ExpiresAt = name, expires
+		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": publicTokenData(updated)})
 		return
 	}
 	if len(parts) != 2 {
@@ -729,7 +775,7 @@ func tokenAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]string{"token": token.Value}})
+		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]any{"token": publicTokenData(token), "linked_token": token.Value}})
 	case "rotate":
 		if r.Method != http.MethodPost {
 			break
@@ -740,12 +786,11 @@ func tokenAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := store.Database().RotateAppSecret(r.Context(), "csrf_token_secret"); err != nil {
-			tokenJSONError(w, 500, "INTERNAL_ERROR", "Unable to rotate CSRF secret")
+			tokenJSONError(w, r, 500, "INTERNAL_ERROR", "Unable to rotate CSRF secret")
 			return
 		}
-		token.Value = ""
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]any{"token": token, "value": raw}})
+		writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": map[string]any{"token": publicTokenData(token), "linked_token": raw}})
 	case "revoke":
 		if r.Method != http.MethodDelete {
 			break
@@ -878,8 +923,25 @@ func validTokenViewCard(card string) bool {
 	if card == "primary" {
 		return true
 	}
-	id, err := strconv.ParseInt(card, 10, 64)
-	return err == nil && id > 0 && strconv.FormatInt(id, 10) == card
+	return validTokenID(card)
+}
+
+func validTokenID(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' || value[14] != '7' {
+		return false
+	}
+	for index, character := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+			return false
+		}
+		if index == 19 && character != '8' && character != '9' && character != 'a' && character != 'b' {
+			return false
+		}
+	}
+	return true
 }
 
 func validTokenToast(toast string) bool {
@@ -1157,7 +1219,7 @@ func primaryToken(tokens []auth.Token) auth.Token {
 	return auth.Token{}
 }
 
-func isLinkedToken(ctx context.Context, store *auth.Store, ownerID string, id int64) bool {
+func isLinkedToken(ctx context.Context, store *auth.Store, ownerID, id string) bool {
 	tokens, err := store.List(ctx, ownerID)
 	if err != nil {
 		return false
@@ -1167,6 +1229,30 @@ func isLinkedToken(ctx context.Context, store *auth.Store, ownerID string, id in
 			return token.Kind == "linked"
 		}
 	}
+	return false
+}
+
+func requireWriteScope(w http.ResponseWriter, r *http.Request, route Route) bool {
+	if route.Method == http.MethodGet || route.Method == http.MethodHead || route.Method == http.MethodOptions || strings.HasSuffix(route.Path, "/graphql") {
+		return true
+	}
+	if r == nil || !hasAuthorizationHeader(r) {
+		return true
+	}
+	store := currentAuthStore()
+	if store == nil {
+		return true
+	}
+	value := strings.TrimSpace(r.Header.Get("Authorization"))
+	if len(value) < 7 || !strings.EqualFold(value[:7], "Bearer ") {
+		return true
+	}
+	identity, err := store.AuthenticateBearer(r.Context(), strings.TrimSpace(value[7:]))
+	if err != nil || identity.Admin || identity.Scope != "read" {
+		return true
+	}
+	w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope"`)
+	tokenJSONError(w, r, http.StatusForbidden, "FORBIDDEN", "Token scope does not permit this operation")
 	return false
 }
 
@@ -1206,6 +1292,24 @@ func tokenCopyScript(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, `document.addEventListener("click",async(e)=>{const b=e.target.closest("[data-copy-token]");if(!b)return;const n=document.getElementById(b.dataset.copyToken);if(n)await navigator.clipboard.writeText(n.textContent.trim())});`)
 }
 
+func parseAPITokenExpiry(expires, expiresOn string) (*time.Time, error) {
+	if expires != "" && expiresOn != "" {
+		return nil, errors.New("expires and expires_on cannot both be set")
+	}
+	if expiresOn != "" {
+		if _, err := time.Parse("2006-01-02", expiresOn); err != nil {
+			return nil, errors.New("expires_on must be an ISO date")
+		}
+		return parseTokenExpiry(expiresOn)
+	}
+	switch expires {
+	case "", "never", "7d", "30d", "90d", "1y":
+		return parseTokenExpiry(expires)
+	default:
+		return nil, errors.New("expires must be never, 7d, 30d, 90d, or 1y")
+	}
+}
+
 func parseTokenExpiry(value string) (*time.Time, error) {
 	switch value {
 	case "", "never":
@@ -1227,7 +1331,7 @@ func parseTokenExpiry(value string) (*time.Time, error) {
 		if err != nil {
 			return nil, errors.New("expiry must be never, 7d, 30d, 90d, 1y, or an ISO date")
 		}
-		v = v.UTC().Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+		v = v.UTC().AddDate(0, 0, 1)
 		if !v.After(time.Now()) {
 			return nil, errors.New("expiry must be in the future")
 		}
@@ -1235,7 +1339,27 @@ func parseTokenExpiry(value string) (*time.Time, error) {
 	}
 }
 
-func tokenJSONError(w http.ResponseWriter, status int, code, message string) {
+func publicTokenData(token auth.Token) map[string]any {
+	var lastUsed, expires any
+	if token.LastUsedAt != nil {
+		lastUsed = token.LastUsedAt.UTC().Format(time.RFC3339)
+	}
+	if token.ExpiresAt != nil {
+		expires = token.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	return map[string]any{
+		"id": token.ID, "name": token.Name, "kind": token.Kind,
+		"token_masked": "own_••••" + token.Last4,
+		"created_at":   token.CreatedAt.UTC().Format(time.RFC3339),
+		"last_used_at": lastUsed, "expires_at": expires, "status": token.Status,
+	}
+}
+
+func tokenJSONError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	if wantsText(r) {
+		writeText(w, status, "ERROR: "+code+": "+message)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": code, "message": message, "details": map[string]any{}, "request_id": w.Header().Get("X-Request-ID")})
@@ -1261,7 +1385,7 @@ func strictTokenAllowed(w http.ResponseWriter, r *http.Request) bool {
 	tokenRateMu.Unlock()
 	if !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(tokenStrictWindow.Seconds())))
-		tokenJSONError(w, http.StatusTooManyRequests, "RATE_LIMITED", "Token action rate limit exceeded")
+		tokenJSONError(w, r, http.StatusTooManyRequests, "RATE_LIMITED", "Token action rate limit exceeded")
 		return false
 	}
 	return true
@@ -1270,7 +1394,7 @@ func strictTokenAllowed(w http.ResponseWriter, r *http.Request) bool {
 func tokenAuthError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, auth.ErrPrimaryOnly) {
 		w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope"`)
-		tokenJSONError(w, http.StatusForbidden, "FORBIDDEN", "A primary token is required")
+		tokenJSONError(w, r, http.StatusForbidden, "FORBIDDEN", "A primary token is required")
 		return
 	}
 	if !tokenAuthFailureAllowed(w, r) {
@@ -1278,7 +1402,7 @@ func tokenAuthError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	recordRejectedCLIToken(r)
 	w.Header().Set("WWW-Authenticate", `Bearer realm="gitmessages", error="invalid_token"`)
-	tokenJSONError(w, http.StatusUnauthorized, "UNAUTHORIZED", "A valid primary token is required")
+	tokenJSONError(w, r, http.StatusUnauthorized, "UNAUTHORIZED", "A valid primary token is required")
 }
 
 // TokenAuthFailure records invalid or expired bearer credentials for the shared auth-failure limit.
@@ -1308,7 +1432,7 @@ func tokenAuthFailureAllowed(w http.ResponseWriter, r *http.Request) bool {
 	tokenRateMu.Unlock()
 	if !allowed {
 		w.Header().Set("Retry-After", strconv.Itoa(int(tokenFailureWindow.Seconds())))
-		tokenJSONError(w, http.StatusTooManyRequests, "RATE_LIMITED", "Authentication failure limit exceeded")
+		tokenJSONError(w, r, http.StatusTooManyRequests, "RATE_LIMITED", "Authentication failure limit exceeded")
 		return false
 	}
 	return true

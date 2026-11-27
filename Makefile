@@ -16,11 +16,13 @@ GUI_PLATFORMS ?= linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64
 DOCKER_MEM ?= 4g
 DOCKER_CPUS ?= 2
 DOCKER_TIMEOUT ?= 3600
+TEST_NETWORK ?= $(PROJECT_NAME)-test-net
 REGISTRY ?= ghcr.io/$(PROJECT_ORG)/$(PROJECT_NAME)
 SERVER_LDFLAGS := -s -w -X 'main.Version=$(VERSION)' -X 'main.CommitID=$(COMMIT_ID)' -X 'main.BuildEpoch=$(BUILD_EPOCH)' -X 'main.OfficialSite=$(OFFICIAL_SITE)'
 CLIENT_LDFLAGS := -s -w -X 'main.Version=$(VERSION)' -X 'main.CommitID=$(COMMIT_ID)' -X 'main.BuildEpoch=$(BUILD_EPOCH)'
 GO_DOCKER_RUN := timeout -k 30 $(DOCKER_TIMEOUT) docker run --rm --no-healthcheck --name $(PROJECT_NAME)-$$(od -An -N4 -tx4 /dev/urandom | tr -d '[:space:]') --memory=$(DOCKER_MEM) --cpus=$(DOCKER_CPUS) -v $(PWD):/app -v $(GO_CACHE):/usr/local/share/go/pkg/mod -v $(GO_BUILD):/usr/local/share/go/cache -w /app -e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false
 GO_DOCKER := $(GO_DOCKER_RUN) casjaysdev/go:latest
+GO_TEST_DOCKER := $(GO_DOCKER_RUN) --network $(TEST_NETWORK) casjaysdev/go:latest
 
 .PHONY: dev local build test release docker clean
 
@@ -39,9 +41,7 @@ build: clean
 	@$(GO_DOCKER_RUN) -e SERVER_LDFLAGS="$(SERVER_LDFLAGS)" -e CLIENT_LDFLAGS="$(CLIENT_LDFLAGS)" -e PLATFORMS="$(PLATFORMS)" -e GUI_PLATFORMS="$(GUI_PLATFORMS)" casjaysdev/go:latest sh -c 'set -e; go mod tidy; go mod download; go generate ./src/swagger; go build -buildvcs=false -trimpath -ldflags "$$SERVER_LDFLAGS" -o $(BINDIR)/$(PROJECT_NAME) ./src; if [ -d src/client ]; then go build -buildvcs=false -trimpath -ldflags "$$CLIENT_LDFLAGS" -o $(BINDIR)/$(PROJECT_NAME)-cli ./src/client; fi; for platform in $$(echo "$$PLATFORMS" | tr "," " "); do os=$${platform%/*}; arch=$${platform#*/}; ext=; [ "$$os" = windows ] && ext=.exe; GOOS=$$os GOARCH=$$arch go build -buildvcs=false -trimpath -ldflags "$$SERVER_LDFLAGS" -o $(BINDIR)/$(PROJECT_NAME)-$$os-$$arch$$ext ./src; if [ -d src/client ]; then GOOS=$$os GOARCH=$$arch go build -buildvcs=false -trimpath -ldflags "$$CLIENT_LDFLAGS" -o $(BINDIR)/$(PROJECT_NAME)-cli-$$os-$$arch$$ext ./src/client; fi; done; for platform in $$(echo "$$GUI_PLATFORMS" | tr "," " "); do os=$${platform%/*}; arch=$${platform#*/}; ext=; [ "$$os" = windows ] && ext=.exe; GOOS=$$os GOARCH=$$arch go build -tags gui -buildvcs=false -trimpath -ldflags "$$CLIENT_LDFLAGS" -o $(BINDIR)/$(PROJECT_NAME)-cli-gui-$$os-$$arch$$ext ./src/client; done'
 
 test:
-	@mkdir -p $(GO_CACHE) $(GO_BUILD) "$${TMPDIR:-/tmp}/$(PROJECT_ORG)"
-	@$(GO_DOCKER) sh -c 'set -e; mkdir -p "$${TMPDIR:-/tmp}/$(PROJECT_ORG)"; task_tmp=$$(mktemp -d "$${TMPDIR:-/tmp}/$(PROJECT_ORG)/$(INTERNAL_NAME)-XXXXXX"); trap "rm -rf $$task_tmp" EXIT; export TMPDIR="$$task_tmp"; go mod download; go generate ./src/swagger; go vet ./...; govulncheck ./...; go test -timeout 5m -covermode=atomic -coverprofile=$$task_tmp/coverage.out ./...; total=$$(go tool cover -func=$$task_tmp/coverage.out | awk "/^total:/ {gsub(/%/, \"\", \$$3); print \$$3}"); echo "Coverage: $$total%"; awk -v coverage="$$total" "BEGIN { if (coverage+0 < 60) exit 1 }"'
-
+	@set -e; network_created=0; if ! docker network inspect "$(TEST_NETWORK)" >/dev/null 2>&1; then docker network create --driver bridge "$(TEST_NETWORK)" >/dev/null; network_created=1; fi; cleanup() { if [ "$$network_created" -eq 1 ]; then docker network rm "$(TEST_NETWORK)" >/dev/null; fi; }; trap cleanup EXIT; mkdir -p $(GO_CACHE) $(GO_BUILD) "$${TMPDIR:-/tmp}/$(PROJECT_ORG)"; $(GO_TEST_DOCKER) sh -c 'set -e; mkdir -p "$${TMPDIR:-/tmp}/$(PROJECT_ORG)"; task_tmp=$$(mktemp -d "$${TMPDIR:-/tmp}/$(PROJECT_ORG)/$(INTERNAL_NAME)-XXXXXX"); trap "rm -rf $$task_tmp" EXIT; export TMPDIR="$$task_tmp"; go mod download; go generate ./src/swagger; go vet ./...; govulncheck ./...; go test -timeout 5m -covermode=atomic -coverprofile=$$task_tmp/coverage.out ./...; total=$$(go tool cover -func=$$task_tmp/coverage.out | grep "^total:" | grep -Eo "[0-9.]+%" | tr -d "%"); echo "Coverage: $$total%"; awk -v coverage="$$total" "BEGIN { if (coverage+0 < 60) exit 1 }"'
 release: build
 	@echo "$(VERSION)" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$$' || { echo "release requires stable SemVer (X.Y.Z), got $(VERSION)" >&2; exit 1; }
 	@mkdir -p $(RELDIR)

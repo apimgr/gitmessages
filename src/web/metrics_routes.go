@@ -9,7 +9,7 @@ import (
 	"github.com/apimgr/gitmessages/src/metrics"
 )
 
-func registerMetricsRoutes(mux routeRegistrar, cfg config.MetricsConfig, exporter *metrics.Exporter) {
+func metricsRouteDefinitions(r *http.Request, cfg config.MetricsConfig, exporter *metrics.Exporter) []Route {
 	exporter.SetTorStatusProvider(func() (bool, bool, bool, uint64) {
 		status, ok := overlayStatuses()["tor"]
 		if !ok {
@@ -34,17 +34,52 @@ func registerMetricsRoutes(mux routeRegistrar, cfg config.MetricsConfig, exporte
 	grafana := metricsAuth(cfg, cfg.Auth.Tokens.Grafana, exporter.Grafana(), exporter)
 	loki := metricsAuth(cfg, cfg.Auth.Tokens.Loki, exporter.Loki(), exporter)
 
-	mount := func(prefix string) {
-		mux.Handle(prefix, prometheus)
-		mux.Handle(prefix+"/prometheus", prometheus)
-		mux.Handle(prefix+"/grafana", grafana)
-		mux.Handle(prefix+"/loki", loki)
+	definitions := make([]Route, 0, 20)
+	mount := func(prefix, mountedWhen string) {
+		for _, route := range []struct {
+			path    string
+			handler http.Handler
+		}{
+			{path: prefix, handler: prometheus},
+			{path: prefix + "/prometheus", handler: prometheus},
+			{path: prefix + "/grafana", handler: grafana},
+			{path: prefix + "/loki", handler: loki},
+		} {
+			definitions = append(definitions, Route{
+				Method: http.MethodGet, Path: route.path, OperationID: swaggerOperationID("getMetrics", route.path),
+				Summary: tr(r, "swagger.metrics.summary"), Description: tr(r, "swagger.metrics.response"),
+				Handler: http.HandlerFunc(route.handler.ServeHTTP), Auth: "service", Internal: true,
+				MountedWhen: mountedWhen,
+			})
+		}
 	}
-	mount("/server/metrics")
-	mount(APIBasePath() + "/server/metrics")
-	mount("/api/metrics")
+	mount("/server/metrics", "server.metrics.enabled")
+	mount(APIBasePath()+"/server/metrics", "server.metrics.enabled")
+	mount("/api/metrics", "server.metrics.enabled")
 	if cfg.Root.Enabled {
-		mount("/metrics")
+		mount("/metrics", "server.metrics.root.enabled")
+	}
+	return definitions
+}
+
+func configuredMetricsRouteDefinitions(r *http.Request) []Route {
+	cfg := config.Get().Server.Metrics
+	if !cfg.Enabled {
+		return nil
+	}
+	metricsExporterMu.RLock()
+	exporter := activeMetricsExporter
+	metricsExporterMu.RUnlock()
+	if exporter == nil {
+		return nil
+	}
+	return metricsRouteDefinitions(r, cfg, exporter)
+}
+
+func registerMetricsRoutes(mux routeRegistrar, cfg config.MetricsConfig, exporter *metrics.Exporter) {
+	request := &http.Request{Header: make(http.Header)}
+	for _, route := range metricsRouteDefinitions(request, cfg, exporter) {
+		mux.Handle(route.Path, route.Handler)
 	}
 }
 

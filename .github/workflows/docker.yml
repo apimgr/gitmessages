@@ -2,18 +2,19 @@ name: Docker Build
 
 on:
   push:
-    # ALL branches
-    branches: ['**']
+    # Branches are local and temporary; only main is pushed.
+    branches: [main]
     tags:
       - 'v*'
       - '*.*.*'
+      - '*-beta'
   schedule:
     - cron: '0 4 * * *'
   workflow_dispatch:
 
 concurrency:
-  group: docker-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/beta' }}
+  group: docker-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 env:
   PROJECT_NAME: gitmessages
@@ -23,6 +24,7 @@ env:
 jobs:
   build-standard:
     runs-on: ubuntu-26.04
+    if: github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
     permissions:
       contents: read
       packages: write
@@ -53,7 +55,7 @@ jobs:
             echo "OFFICIAL_SITE=${{ secrets.OFFICIAL_SITE }}" >> $GITHUB_ENV
           fi
           echo "YYMM=$(date +"%y%m")" >> $GITHUB_ENV
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF" != refs/tags/*-beta ]]; then
             VERSION="${GITHUB_REF#refs/tags/}"
             echo "VERSION=${VERSION#v}" >> $GITHUB_ENV
             echo "IS_TAG=true" >> $GITHUB_ENV
@@ -75,7 +77,7 @@ jobs:
             TAGS="$TAGS,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
             TAGS="$TAGS,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.YYMM }}"
           else
-            if [[ "${{ github.ref }}" == refs/heads/beta ]]; then
+            if [[ "$GITHUB_REF" == refs/tags/*-beta ]]; then
               TAGS="$TAGS,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:beta"
             fi
           fi
@@ -127,7 +129,7 @@ jobs:
   build-devel:
     runs-on: ubuntu-26.04
     needs: [build-standard]
-    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'push') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'push') && github.ref == 'refs/heads/main' && (needs.build-standard.result == 'success' || needs.build-standard.result == 'skipped')
     permissions:
       contents: read
       packages: write
@@ -150,7 +152,11 @@ jobs:
 
       - name: Set build info
         run: |
-          echo "COMMIT_ID=$(git rev-parse --short=7 HEAD)" >> $GITHUB_ENV
+          IMAGE_NAME=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          COMMIT_ID=$(git rev-parse --short=7 HEAD)
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+          echo "COMMIT_ID=$COMMIT_ID" >> $GITHUB_ENV
+          echo "BASE_IMAGE=${{ env.REGISTRY }}/${IMAGE_NAME}:${COMMIT_ID}" >> $GITHUB_ENV
           # OFFICIAL_SITE (optional): site.txt wins; otherwise use repository secrets or leave empty
           if [ -f site.txt ]; then
             echo "OFFICIAL_SITE=$(cat site.txt)" >> $GITHUB_ENV
@@ -171,6 +177,7 @@ jobs:
           provenance: false
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:devel
           build-args: |
+            BASE_IMAGE=${{ env.BASE_IMAGE }}
             BUILD_DATE=${{ env.BUILD_DATE }}
             BUILD_EPOCH=${{ env.BUILD_EPOCH }}
             COMMIT_ID=${{ env.COMMIT_ID }}

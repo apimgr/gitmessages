@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/apimgr/gitmessages/src/auth"
 )
@@ -25,6 +25,39 @@ func tokenRouteStore(t *testing.T) *auth.Store {
 	ConfigureAuth(store)
 	t.Cleanup(func() { ConfigureAuth(nil) })
 	return store
+}
+
+func TestTokenIdentifierRequiresUUIDv7(t *testing.T) {
+	if !validTokenID("019535d4-9df7-7b2e-8c3a-c792722a4f12") {
+		t.Fatal("valid UUID v7 token ID was rejected")
+	}
+	for _, value := range []string{"123", "00000000-0000-4000-8000-000000000000", "019535d4-9df7-7b2e-0c3a-c792722a4f12"} {
+		if validTokenID(value) {
+			t.Errorf("invalid public token ID %q was accepted", value)
+		}
+	}
+}
+
+func TestReadScopeBlocksRESTWritesButAllowsGraphQLQueries(t *testing.T) {
+	store := tokenRouteStore(t)
+	_, identity, err := store.IssueOwner(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	readToken, _, err := store.CreateLinkedWithScope(t.Context(), identity.OwnerID, "read-only", "read", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, APIBasePath()+"/messages", nil)
+	request.Header.Set("Authorization", "Bearer "+readToken)
+	response := httptest.NewRecorder()
+	if requireWriteScope(response, request, Route{Method: http.MethodPost, Path: APIBasePath() + "/messages"}) || response.Code != http.StatusForbidden || response.Header().Get("WWW-Authenticate") != `Bearer error="insufficient_scope"` {
+		t.Fatalf("read-scope REST write returned %d with %q", response.Code, response.Header().Get("WWW-Authenticate"))
+	}
+	graphqlResponse := httptest.NewRecorder()
+	if !requireWriteScope(graphqlResponse, request, Route{Method: http.MethodPost, Path: APIBasePath() + "/server/graphql"}) {
+		t.Fatal("read-only GraphQL query was blocked because GraphQL uses POST")
+	}
 }
 
 func TestTokenAPIListRevealAndRotateResponses(t *testing.T) {
@@ -59,16 +92,16 @@ func TestTokenAPIListRevealAndRotateResponses(t *testing.T) {
 	if primaryReveal.Code != http.StatusOK || !strings.Contains(primaryReveal.Body.String(), primary) || primaryReveal.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("primary reveal response = %d %s", primaryReveal.Code, primaryReveal.Body.String())
 	}
-	linkedReveal := call(http.MethodPost, "/"+strconv.FormatInt(linkedToken.ID, 10)+"/reveal")
+	linkedReveal := call(http.MethodPost, "/"+linkedToken.ID+"/reveal")
 	if linkedReveal.Code != http.StatusOK || !strings.Contains(linkedReveal.Body.String(), linked) {
 		t.Fatalf("linked reveal response = %d", linkedReveal.Code)
 	}
-	linkedRotate := call(http.MethodPost, "/"+strconv.FormatInt(linkedToken.ID, 10)+"/rotate")
-	if linkedRotate.Code != http.StatusOK || !strings.Contains(linkedRotate.Body.String(), `"value"`) {
+	linkedRotate := call(http.MethodPost, "/"+linkedToken.ID+"/rotate")
+	if linkedRotate.Code != http.StatusOK || !strings.Contains(linkedRotate.Body.String(), `"linked_token"`) {
 		t.Fatalf("linked rotate response = %d %s", linkedRotate.Code, linkedRotate.Body.String())
 	}
 	primaryRotate := call(http.MethodPost, "/primary/rotate")
-	if primaryRotate.Code != http.StatusOK || !strings.Contains(primaryRotate.Body.String(), `"token"`) || primaryRotate.Header().Get("Cache-Control") != "no-store" {
+	if primaryRotate.Code != http.StatusOK || !strings.Contains(primaryRotate.Body.String(), `"owner_token"`) || primaryRotate.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("primary rotate response = %d %s", primaryRotate.Code, primaryRotate.Body.String())
 	}
 }
@@ -515,8 +548,10 @@ func TestOpenAPIAndGeneratedHelpDocumentPrimaryRevocation(t *testing.T) {
 		t.Fatal("OpenAPI omitted primary token deletion or its confirmation field")
 	}
 	tools, _ := json.Marshal(mcpTools(webTestRequest(http.MethodGet, "/server/help/mcp", nil)))
-	if strings.Contains(string(tools), "revoke_primary_token") {
-		t.Fatal("primary token deletion was exposed as an MCP tool")
+	for _, operation := range []string{"listOwnerTokens", "createLinkedToken", "issuePrimaryToken", "revokePrimaryToken", "revealPrimaryToken", "rotatePrimaryToken", "revealLinkedToken", "rotateLinkedToken", "updateLinkedToken", "revokeLinkedToken"} {
+		if strings.Contains(string(tools), operation) {
+			t.Errorf("token management operation %s was exposed as an MCP tool", operation)
+		}
 	}
 	if !strings.Contains(llmsTextBody(webTestRequest(http.MethodGet, "/.well-known/llms.txt", nil)), "DELETE") {
 		t.Fatal("generated API help omitted primary token deletion")
@@ -557,5 +592,58 @@ func TestPrimaryRevocationAPIMirrorRequiresLastFour(t *testing.T) {
 	}
 	if valid.Code != http.StatusOK || json.Unmarshal(valid.Body.Bytes(), &response) != nil || response.Data.Tokens != 2 || response.Data.Resources != 0 {
 		t.Fatalf("valid API primary revocation = %d %s", valid.Code, valid.Body.String())
+	}
+}
+
+func TestLinkedTokenRevocationUsesCanonicalDeleteRoute(t *testing.T) {
+	store := tokenRouteStore(t)
+	primary, identity, err := store.IssueOwner(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkedRaw, linked, err := store.CreateLinked(t.Context(), identity.OwnerID, "automation", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodDelete, APIBasePath()+"/server/preferences/tokens/"+linked.ID, nil)
+	request.Header.Set("Authorization", "Bearer "+primary)
+	response := httptest.NewRecorder()
+	tokenAPI(response, request)
+	var result struct {
+		Data struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil || result.Data.ID != linked.ID || result.Data.Status != "revoked" {
+		t.Fatalf("canonical linked-token DELETE returned %d %s", response.Code, response.Body.String())
+	}
+	if _, err := store.Authenticate(t.Context(), linkedRaw); err == nil {
+		t.Fatal("revoked linked token remained valid")
+	}
+}
+
+func TestAPITokenExpiryContract(t *testing.T) {
+	for _, value := range []string{"never", "7d", "30d", "90d", "1y"} {
+		if _, err := parseAPITokenExpiry(value, ""); err != nil {
+			t.Errorf("expires=%q rejected: %v", value, err)
+		}
+	}
+	future := time.Now().UTC().AddDate(1, 0, 0).Format("2006-01-02")
+	deadline, err := parseAPITokenExpiry("", future)
+	if err != nil {
+		t.Fatalf("future expires_on=%q rejected: %v", future, err)
+	}
+	wantDeadline, _ := time.Parse("2006-01-02", future)
+	wantDeadline = wantDeadline.AddDate(0, 0, 1)
+	if deadline == nil || !deadline.Equal(wantDeadline) {
+		t.Fatalf("expires_on deadline = %v, want %v", deadline, wantDeadline)
+	}
+	for _, invalid := range []struct{ expires, expiresOn string }{
+		{"2030-01-01", ""}, {"7d", "2030-01-01"}, {"", "7d"}, {"", "2000-01-01"},
+	} {
+		if _, err := parseAPITokenExpiry(invalid.expires, invalid.expiresOn); err == nil {
+			t.Errorf("invalid expiry accepted: expires=%q expires_on=%q", invalid.expires, invalid.expiresOn)
+		}
 	}
 }

@@ -34,15 +34,17 @@ var (
 
 type Identity struct {
 	OwnerID string
-	TokenID int64
+	TokenID string
 	Kind    string
+	Scope   string
 	Admin   bool
 }
 
 type Token struct {
-	ID         int64      `json:"id"`
+	ID         string     `json:"id"`
 	OwnerID    string     `json:"-"`
 	Kind       string     `json:"kind"`
+	Scope      string     `json:"-"`
 	Name       string     `json:"name"`
 	Prefix     string     `json:"prefix"`
 	Last4      string     `json:"last4"`
@@ -56,6 +58,7 @@ type Token struct {
 
 type Store struct {
 	db                    *database.Store
+	tokenIDColumn         string
 	operatorHash          [32]byte
 	operatorEnabled       bool
 	encryptionKey         []byte
@@ -73,17 +76,21 @@ func ReencryptTokenData(ctx context.Context, store *database.Store, previous, cu
 	if store == nil || len(previous) != 32 || len(current) != 32 {
 		return errors.New("token re-encryption requires a database and two 32-byte keys")
 	}
-	rows, err := store.Read().QueryContext(ctx, `SELECT id,owner_id,kind,token_enc FROM api_tokens ORDER BY id`)
+	idColumn, err := store.APITokenIDColumn(ctx)
+	if err != nil {
+		return err
+	}
+	rows, err := store.Read().QueryContext(ctx, `SELECT `+idColumn+`,owner_id,kind,token_enc FROM api_tokens ORDER BY `+idColumn)
 	if err != nil {
 		return err
 	}
 	type tokenCipher struct {
-		id      int64
+		id      string
 		encoded string
 	}
 	updates := make([]tokenCipher, 0)
 	for rows.Next() {
-		var id int64
+		var id string
 		var owner, kind, encoded string
 		if err := rows.Scan(&id, &owner, &kind, &encoded); err != nil {
 			_ = rows.Close()
@@ -95,7 +102,7 @@ func ReencryptTokenData(ctx context.Context, store *database.Store, previous, cu
 		plain, err := decryptTokenWithKey(previous, encoded, owner, kind)
 		if err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("decrypt stored token %d with current or grace key: %w", id, err)
+			return fmt.Errorf("decrypt stored token %s with current or grace key: %w", id, err)
 		}
 		reencrypted, err := encryptTokenWithKey(current, plain, owner, kind)
 		if err != nil {
@@ -113,8 +120,8 @@ func ReencryptTokenData(ctx context.Context, store *database.Store, previous, cu
 	}
 	return store.Write(ctx, func(tx *sql.Tx) error {
 		for _, update := range updates {
-			if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_enc=? WHERE id=?`, update.encoded, update.id); err != nil {
-				return fmt.Errorf("update encrypted token %d: %w", update.id, err)
+			if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_enc=? WHERE `+idColumn+`=?`, update.encoded, update.id); err != nil {
+				return fmt.Errorf("update encrypted token %s: %w", update.id, err)
 			}
 		}
 		return nil
@@ -187,7 +194,11 @@ func NewStore(db *database.Store, operatorToken, encryptionKey string, maxLinked
 	if cookieMaxAge <= 0 {
 		cookieMaxAge = 365 * 24 * time.Hour
 	}
-	store := &Store{db: db, operatorHash: sha256.Sum256([]byte(operatorToken)), operatorEnabled: operatorToken != "", encryptionKey: key, maxLinked: maxLinked, idlePurgeDays: idlePurgeDays, cookieMaxAge: cookieMaxAge}
+	idColumn, err := db.APITokenIDColumn(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("inspect API token identifier schema: %w", err)
+	}
+	store := &Store{db: db, tokenIDColumn: idColumn, operatorHash: sha256.Sum256([]byte(operatorToken)), operatorEnabled: operatorToken != "", encryptionKey: key, maxLinked: maxLinked, idlePurgeDays: idlePurgeDays, cookieMaxAge: cookieMaxAge}
 	if err := store.populateTokenLast4(context.Background()); err != nil {
 		return nil, fmt.Errorf("migrate token display suffixes: %w", err)
 	}
@@ -195,12 +206,12 @@ func NewStore(db *database.Store, operatorToken, encryptionKey string, maxLinked
 }
 
 func (s *Store) populateTokenLast4(ctx context.Context) error {
-	rows, err := s.db.Read().QueryContext(ctx, `SELECT id, owner_id, kind, token_enc FROM api_tokens WHERE token_last4 = ''`)
+	rows, err := s.db.Read().QueryContext(ctx, `SELECT `+s.tokenIDColumn+`, owner_id, kind, token_enc FROM api_tokens WHERE token_last4 = ''`)
 	if err != nil {
 		return err
 	}
 	type tokenSuffix struct {
-		id      int64
+		id      string
 		ownerID string
 		kind    string
 		encoded string
@@ -224,10 +235,10 @@ func (s *Store) populateTokenLast4(ctx context.Context) error {
 	for _, token := range pending {
 		raw, usedPrevious, err := s.decrypt(token.encoded, token.ownerID, token.kind)
 		if err != nil {
-			return fmt.Errorf("decrypt existing token %d: %w", token.id, err)
+			return fmt.Errorf("decrypt existing token %s: %w", token.id, err)
 		}
 		if len(raw) < 4 {
-			return fmt.Errorf("existing token %d is shorter than four characters", token.id)
+			return fmt.Errorf("existing token %s is shorter than four characters", token.id)
 		}
 		if err := s.db.Write(ctx, func(tx *sql.Tx) error {
 			if usedPrevious {
@@ -235,11 +246,11 @@ func (s *Store) populateTokenLast4(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
-				if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_enc=? WHERE id=?`, encoded, token.id); err != nil {
+				if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_enc=? WHERE `+s.tokenIDColumn+`=?`, encoded, token.id); err != nil {
 					return err
 				}
 			}
-			_, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_last4 = ? WHERE id = ? AND token_last4 = ''`, raw[len(raw)-4:], token.id)
+			_, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_last4 = ? WHERE `+s.tokenIDColumn+` = ? AND token_last4 = ''`, raw[len(raw)-4:], token.id)
 			return err
 		}); err != nil {
 			return err
@@ -358,9 +369,9 @@ func (s *Store) Authenticate(ctx context.Context, raw string) (Identity, error) 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var identity Identity
-	var storedHash, kind string
+	var storedHash, kind, scope string
 	var lastUsed sql.NullInt64
-	err := s.db.Read().QueryRowContext(ctx, `SELECT id, owner_id, kind, token_hash, last_used_at FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`, hash, time.Now().Unix()).Scan(&identity.TokenID, &identity.OwnerID, &kind, &storedHash, &lastUsed)
+	err := s.db.Read().QueryRowContext(ctx, `SELECT `+s.tokenIDColumn+`, owner_id, kind, scope, token_hash, last_used_at FROM api_tokens WHERE token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`, hash, time.Now().Unix()).Scan(&identity.TokenID, &identity.OwnerID, &kind, &scope, &storedHash, &lastUsed)
 	if err != nil {
 		s.recordAuth("owner_token", false)
 		return Identity{}, ErrInvalidToken
@@ -370,9 +381,10 @@ func (s *Store) Authenticate(ctx context.Context, raw string) (Identity, error) 
 		return Identity{}, ErrInvalidToken
 	}
 	identity.Kind = kind
+	identity.Scope = scope
 	if !lastUsed.Valid || time.Now().Unix()-lastUsed.Int64 >= 60 {
 		if err := s.db.Write(ctx, func(tx *sql.Tx) error {
-			if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET last_used_at = ? WHERE id = ?`, time.Now().Unix(), identity.TokenID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET last_used_at = ? WHERE `+s.tokenIDColumn+` = ?`, time.Now().Unix(), identity.TokenID); err != nil {
 				return err
 			}
 			_, err := tx.ExecContext(ctx, `UPDATE owners SET last_seen_at = ? WHERE id = ?`, time.Now().Unix(), identity.OwnerID)
@@ -396,7 +408,7 @@ func (s *Store) AuthenticateBearer(ctx context.Context, raw string) (Identity, e
 		got := sha256.Sum256([]byte(raw))
 		if subtle.ConstantTimeCompare(got[:], s.operatorHash[:]) == 1 {
 			s.recordAuth("operator_token", true)
-			return Identity{Kind: "operator", Admin: true}, nil
+			return Identity{Kind: "operator", Scope: "global", Admin: true}, nil
 		}
 		s.recordAuth("operator_token", false)
 		return Identity{}, ErrInvalidToken
@@ -433,16 +445,15 @@ func (s *Store) IssueOwner(ctx context.Context) (string, Identity, error) {
 		return "", Identity{}, err
 	}
 	hash := tokenHash(raw)
-	var tokenID int64
+	tokenID, err := database.NewUUIDv7()
+	if err != nil {
+		return "", Identity{}, err
+	}
 	err = s.db.Write(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO owners(id) VALUES (?)`, ownerID); err != nil {
 			return err
 		}
-		result, err := tx.ExecContext(ctx, `INSERT INTO api_tokens(owner_id, kind, token_hash, token_prefix, token_last4, token_enc) VALUES (?, 'primary', ?, ?, ?, ?)`, ownerID, hash, tokenPrefix(raw), raw[len(raw)-4:], encoded)
-		if err != nil {
-			return err
-		}
-		tokenID, err = result.LastInsertId()
+		_, err := tx.ExecContext(ctx, `INSERT INTO api_tokens(`+s.tokenIDColumn+`, owner_id, kind, scope, token_hash, token_prefix, token_last4, token_enc) VALUES (?, ?, 'primary', 'global', ?, ?, ?, ?)`, tokenID, ownerID, hash, tokenPrefix(raw), raw[len(raw)-4:], encoded)
 		if err != nil {
 			return err
 		}
@@ -451,7 +462,7 @@ func (s *Store) IssueOwner(ctx context.Context) (string, Identity, error) {
 	if err != nil {
 		return "", Identity{}, err
 	}
-	return raw, Identity{OwnerID: ownerID, TokenID: tokenID, Kind: "primary"}, nil
+	return raw, Identity{OwnerID: ownerID, TokenID: tokenID, Kind: "primary", Scope: "global"}, nil
 }
 
 // Restore accepts only a valid primary token, never a linked automation token.
@@ -469,7 +480,7 @@ func (s *Store) Restore(ctx context.Context, raw string) (Identity, error) {
 func (s *Store) List(ctx context.Context, ownerID string) ([]Token, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	rows, err := s.db.Read().QueryContext(ctx, `SELECT id, kind, COALESCE(name,''), token_prefix, token_last4, created_at, last_used_at, expires_at, revoked_at FROM api_tokens WHERE owner_id = ? ORDER BY CASE kind WHEN 'primary' THEN 0 ELSE 1 END, id`, ownerID)
+	rows, err := s.db.Read().QueryContext(ctx, `SELECT `+s.tokenIDColumn+`, kind, scope, COALESCE(name,''), token_prefix, token_last4, created_at, last_used_at, expires_at, revoked_at FROM api_tokens WHERE owner_id = ? ORDER BY CASE kind WHEN 'primary' THEN 0 ELSE 1 END, `+s.tokenIDColumn, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +491,7 @@ func (s *Store) List(ctx context.Context, ownerID string) ([]Token, error) {
 		var token Token
 		var created int64
 		var lastUsed, expires, revoked sql.NullInt64
-		if err := rows.Scan(&token.ID, &token.Kind, &token.Name, &token.Prefix, &token.Last4, &created, &lastUsed, &expires, &revoked); err != nil {
+		if err := rows.Scan(&token.ID, &token.Kind, &token.Scope, &token.Name, &token.Prefix, &token.Last4, &created, &lastUsed, &expires, &revoked); err != nil {
 			return nil, err
 		}
 		token.CreatedAt = time.Unix(created, 0).UTC()
@@ -511,7 +522,7 @@ func (s *Store) List(ctx context.Context, ownerID string) ([]Token, error) {
 
 // ListAll returns token metadata for operator maintenance; token values and hashes are omitted.
 func (s *Store) ListAll(ctx context.Context) ([]Token, error) {
-	rows, err := s.db.Read().QueryContext(ctx, `SELECT id, owner_id, kind, COALESCE(name,''), token_prefix, token_last4, created_at, last_used_at, expires_at, revoked_at FROM api_tokens ORDER BY owner_id, id`)
+	rows, err := s.db.Read().QueryContext(ctx, `SELECT `+s.tokenIDColumn+`, owner_id, kind, scope, COALESCE(name,''), token_prefix, token_last4, created_at, last_used_at, expires_at, revoked_at FROM api_tokens ORDER BY owner_id, `+s.tokenIDColumn)
 	if err != nil {
 		return nil, err
 	}
@@ -522,7 +533,7 @@ func (s *Store) ListAll(ctx context.Context) ([]Token, error) {
 		var token Token
 		var created int64
 		var lastUsed, expires, revoked sql.NullInt64
-		if err := rows.Scan(&token.ID, &token.OwnerID, &token.Kind, &token.Name, &token.Prefix, &token.Last4, &created, &lastUsed, &expires, &revoked); err != nil {
+		if err := rows.Scan(&token.ID, &token.OwnerID, &token.Kind, &token.Scope, &token.Name, &token.Prefix, &token.Last4, &created, &lastUsed, &expires, &revoked); err != nil {
 			return nil, err
 		}
 		token.CreatedAt = time.Unix(created, 0).UTC()
@@ -553,9 +564,9 @@ func (s *Store) ListAll(ctx context.Context) ([]Token, error) {
 
 // RevokeByPrefix revokes one linked token or the complete owner represented by a primary token.
 func (s *Store) RevokeByPrefix(ctx context.Context, prefix string) error {
-	var id int64
+	var id string
 	var ownerID, kind string
-	if err := s.db.Read().QueryRowContext(ctx, `SELECT id, owner_id, kind FROM api_tokens WHERE token_prefix = ? AND revoked_at IS NULL`, prefix).Scan(&id, &ownerID, &kind); err != nil {
+	if err := s.db.Read().QueryRowContext(ctx, `SELECT `+s.tokenIDColumn+`, owner_id, kind FROM api_tokens WHERE token_prefix = ? AND revoked_at IS NULL`, prefix).Scan(&id, &ownerID, &kind); err != nil {
 		return ErrNotFound
 	}
 	if kind == "primary" {
@@ -563,7 +574,7 @@ func (s *Store) RevokeByPrefix(ctx context.Context, prefix string) error {
 		return err
 	}
 	return s.db.Write(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET revoked_at = ?, revoked_reason = 'operator_action' WHERE id = ? AND revoked_at IS NULL`, time.Now().Unix(), id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET revoked_at = ?, revoked_reason = 'operator_action' WHERE `+s.tokenIDColumn+` = ? AND revoked_at IS NULL`, time.Now().Unix(), id); err != nil {
 			return err
 		}
 		return audit(tx, ctx, "token.revoked", ownerID, prefix, "cli")
@@ -608,12 +619,12 @@ func (s *Store) DeleteOwner(ctx context.Context, ownerID, source string) (int64,
 	return tokenCount, resourceCount, nil
 }
 
-func (s *Store) Reveal(ctx context.Context, ownerID string, tokenID int64) (Token, error) {
+func (s *Store) Reveal(ctx context.Context, ownerID, tokenID string) (Token, error) {
 	var token Token
 	var created int64
 	var encoded string
 	var lastUsed, expires, revoked sql.NullInt64
-	err := s.db.Read().QueryRowContext(ctx, `SELECT id, kind, COALESCE(name,''), token_prefix, token_enc, created_at, last_used_at, expires_at, revoked_at FROM api_tokens WHERE owner_id = ? AND id = ?`, ownerID, tokenID).Scan(&token.ID, &token.Kind, &token.Name, &token.Prefix, &encoded, &created, &lastUsed, &expires, &revoked)
+	err := s.db.Read().QueryRowContext(ctx, `SELECT `+s.tokenIDColumn+`, kind, scope, COALESCE(name,''), token_prefix, token_enc, created_at, last_used_at, expires_at, revoked_at FROM api_tokens WHERE owner_id = ? AND `+s.tokenIDColumn+` = ?`, ownerID, tokenID).Scan(&token.ID, &token.Kind, &token.Scope, &token.Name, &token.Prefix, &encoded, &created, &lastUsed, &expires, &revoked)
 	if err != nil {
 		return Token{}, ErrNotFound
 	}
@@ -627,7 +638,7 @@ func (s *Store) Reveal(ctx context.Context, ownerID string, tokenID int64) (Toke
 			return Token{}, err
 		}
 		if err := s.db.Write(ctx, func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_enc=? WHERE id=?`, reencrypted, tokenID)
+			_, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_enc=? WHERE `+s.tokenIDColumn+`=?`, reencrypted, tokenID)
 			return err
 		}); err != nil {
 			return Token{}, err
@@ -654,9 +665,9 @@ func (s *Store) Reveal(ctx context.Context, ownerID string, tokenID int64) (Toke
 }
 
 // MaskedValue returns a token's required masked display without recording a reveal event.
-func (s *Store) MaskedValue(ctx context.Context, ownerID string, tokenID int64) (string, error) {
+func (s *Store) MaskedValue(ctx context.Context, ownerID, tokenID string) (string, error) {
 	var last4 string
-	if err := s.db.Read().QueryRowContext(ctx, `SELECT token_last4 FROM api_tokens WHERE owner_id = ? AND id = ?`, ownerID, tokenID).Scan(&last4); err != nil {
+	if err := s.db.Read().QueryRowContext(ctx, `SELECT token_last4 FROM api_tokens WHERE owner_id = ? AND `+s.tokenIDColumn+` = ?`, ownerID, tokenID).Scan(&last4); err != nil {
 		return "", ErrNotFound
 	}
 	if len(last4) != 4 {
@@ -665,10 +676,11 @@ func (s *Store) MaskedValue(ctx context.Context, ownerID string, tokenID int64) 
 	return "own_••••••••••••••••••••••••" + last4, nil
 }
 
-func (s *Store) Rotate(ctx context.Context, ownerID string, tokenID int64) (string, Token, error) {
+func (s *Store) Rotate(ctx context.Context, ownerID, tokenID string) (string, Token, error) {
 	var kind, name string
 	var expires sql.NullInt64
-	if err := s.db.Read().QueryRowContext(ctx, `SELECT kind, COALESCE(name,''), expires_at FROM api_tokens WHERE owner_id = ? AND id = ? AND revoked_at IS NULL`, ownerID, tokenID).Scan(&kind, &name, &expires); err != nil {
+	var scope string
+	if err := s.db.Read().QueryRowContext(ctx, `SELECT kind, scope, COALESCE(name,''), expires_at FROM api_tokens WHERE owner_id = ? AND `+s.tokenIDColumn+` = ? AND revoked_at IS NULL`, ownerID, tokenID).Scan(&kind, &scope, &name, &expires); err != nil {
 		return "", Token{}, ErrNotFound
 	}
 	raw, err := newToken()
@@ -682,7 +694,7 @@ func (s *Store) Rotate(ctx context.Context, ownerID string, tokenID int64) (stri
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	err = s.db.Write(ctx, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_hash = ?, token_prefix = ?, token_last4 = ?, token_enc = ?, rotated_at = ?, last_used_at = NULL WHERE owner_id = ? AND id = ? AND revoked_at IS NULL`, tokenHash(raw), tokenPrefix(raw), raw[len(raw)-4:], encoded, time.Now().Unix(), ownerID, tokenID)
+		result, err := tx.ExecContext(ctx, `UPDATE api_tokens SET token_hash = ?, token_prefix = ?, token_last4 = ?, token_enc = ?, rotated_at = ?, last_used_at = NULL WHERE owner_id = ? AND `+s.tokenIDColumn+` = ? AND revoked_at IS NULL`, tokenHash(raw), tokenPrefix(raw), raw[len(raw)-4:], encoded, time.Now().Unix(), ownerID, tokenID)
 		if err != nil {
 			return err
 		}
@@ -695,7 +707,7 @@ func (s *Store) Rotate(ctx context.Context, ownerID string, tokenID int64) (stri
 	if err != nil {
 		return "", Token{}, err
 	}
-	token := Token{ID: tokenID, Kind: kind, Name: name, Prefix: tokenPrefix(raw), Last4: raw[len(raw)-4:], Value: raw, Status: "active", CreatedAt: time.Now().UTC()}
+	token := Token{ID: tokenID, Kind: kind, Scope: scope, Name: name, Prefix: tokenPrefix(raw), Last4: raw[len(raw)-4:], Value: raw, Status: "active", CreatedAt: time.Now().UTC()}
 	if expires.Valid {
 		v := time.Unix(expires.Int64, 0).UTC()
 		token.ExpiresAt = &v
@@ -704,12 +716,19 @@ func (s *Store) Rotate(ctx context.Context, ownerID string, tokenID int64) (stri
 }
 
 func (s *Store) CreateLinked(ctx context.Context, ownerID, name string, expiresAt *time.Time) (string, Token, error) {
+	return s.CreateLinkedWithScope(ctx, ownerID, name, "read-write", expiresAt)
+}
+
+func (s *Store) CreateLinkedWithScope(ctx context.Context, ownerID, name, scope string, expiresAt *time.Time) (string, Token, error) {
 	name = strings.TrimSpace(name)
 	if len([]rune(name)) < 1 || len([]rune(name)) > 64 {
 		return "", Token{}, errors.New("name must be 1 to 64 characters")
 	}
 	if expiresAt != nil && !expiresAt.After(time.Now()) {
 		return "", Token{}, errors.New("expiry must be in the future")
+	}
+	if scope != "read" && scope != "read-write" {
+		return "", Token{}, errors.New("linked token scope must be read or read-write")
 	}
 	raw, err := newToken()
 	if err != nil {
@@ -719,7 +738,10 @@ func (s *Store) CreateLinked(ctx context.Context, ownerID, name string, expiresA
 	if err != nil {
 		return "", Token{}, err
 	}
-	var id int64
+	id, err := database.NewUUIDv7()
+	if err != nil {
+		return "", Token{}, err
+	}
 	err = s.db.Write(ctx, func(tx *sql.Tx) error {
 		var count int
 		var duplicate int
@@ -739,11 +761,7 @@ func (s *Store) CreateLinked(ctx context.Context, ownerID, name string, expiresA
 		if expiresAt != nil {
 			expiry = expiresAt.UTC().Unix()
 		}
-		result, err := tx.ExecContext(ctx, `INSERT INTO api_tokens(owner_id, kind, name, token_hash, token_prefix, token_last4, token_enc, expires_at) VALUES (?, 'linked', ?, ?, ?, ?, ?, ?)`, ownerID, name, tokenHash(raw), tokenPrefix(raw), raw[len(raw)-4:], encoded, expiry)
-		if err != nil {
-			return err
-		}
-		id, err = result.LastInsertId()
+		_, err := tx.ExecContext(ctx, `INSERT INTO api_tokens(`+s.tokenIDColumn+`, owner_id, kind, name, scope, token_hash, token_prefix, token_last4, token_enc, expires_at) VALUES (?, ?, 'linked', ?, ?, ?, ?, ?, ?, ?)`, id, ownerID, name, scope, tokenHash(raw), tokenPrefix(raw), raw[len(raw)-4:], encoded, expiry)
 		if err != nil {
 			return err
 		}
@@ -752,7 +770,7 @@ func (s *Store) CreateLinked(ctx context.Context, ownerID, name string, expiresA
 	if err != nil {
 		return "", Token{}, err
 	}
-	token := Token{ID: id, Kind: "linked", Name: name, Prefix: tokenPrefix(raw), Value: raw, CreatedAt: time.Now().UTC(), Status: "active"}
+	token := Token{ID: id, Kind: "linked", Scope: scope, Name: name, Prefix: tokenPrefix(raw), Value: raw, CreatedAt: time.Now().UTC(), Status: "active"}
 	if expiresAt != nil {
 		v := expiresAt.UTC()
 		token.ExpiresAt = &v
@@ -760,7 +778,7 @@ func (s *Store) CreateLinked(ctx context.Context, ownerID, name string, expiresA
 	return raw, token, nil
 }
 
-func (s *Store) UpdateLinked(ctx context.Context, ownerID string, tokenID int64, name string, expiresAt *time.Time) error {
+func (s *Store) UpdateLinked(ctx context.Context, ownerID, tokenID string, name string, expiresAt *time.Time) error {
 	name = strings.TrimSpace(name)
 	if len([]rune(name)) < 1 || len([]rune(name)) > 64 {
 		return errors.New("name must be 1 to 64 characters")
@@ -774,13 +792,13 @@ func (s *Store) UpdateLinked(ctx context.Context, ownerID string, tokenID int64,
 	}
 	return s.db.Write(ctx, func(tx *sql.Tx) error {
 		var duplicate int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_tokens WHERE owner_id = ? AND name = ? AND id <> ?`, ownerID, name, tokenID).Scan(&duplicate); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_tokens WHERE owner_id = ? AND name = ? AND `+s.tokenIDColumn+` <> ?`, ownerID, name, tokenID).Scan(&duplicate); err != nil {
 			return err
 		}
 		if duplicate > 0 {
 			return errors.New("token name must be unique for this owner")
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE api_tokens SET name = ?, expires_at = ? WHERE id = ? AND owner_id = ? AND kind = 'linked' AND revoked_at IS NULL`, name, expiry, tokenID, ownerID)
+		result, err := tx.ExecContext(ctx, `UPDATE api_tokens SET name = ?, expires_at = ? WHERE `+s.tokenIDColumn+` = ? AND owner_id = ? AND kind = 'linked' AND revoked_at IS NULL`, name, expiry, tokenID, ownerID)
 		if err != nil {
 			return err
 		}
@@ -788,17 +806,17 @@ func (s *Store) UpdateLinked(ctx context.Context, ownerID string, tokenID int64,
 		if err != nil || count != 1 {
 			return ErrNotFound
 		}
-		return audit(tx, ctx, "token.updated", ownerID, fmt.Sprint(tokenID), "update")
+		return audit(tx, ctx, "token.updated", ownerID, tokenID, "update")
 	})
 }
 
-func (s *Store) RevokeLinked(ctx context.Context, ownerID string, tokenID int64) error {
+func (s *Store) RevokeLinked(ctx context.Context, ownerID, tokenID string) error {
 	return s.db.Write(ctx, func(tx *sql.Tx) error {
 		var prefix string
-		if err := tx.QueryRowContext(ctx, `SELECT token_prefix FROM api_tokens WHERE id = ? AND owner_id = ? AND kind = 'linked' AND revoked_at IS NULL`, tokenID, ownerID).Scan(&prefix); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT token_prefix FROM api_tokens WHERE `+s.tokenIDColumn+` = ? AND owner_id = ? AND kind = 'linked' AND revoked_at IS NULL`, tokenID, ownerID).Scan(&prefix); err != nil {
 			return ErrNotFound
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE api_tokens SET revoked_at = ?, revoked_reason = 'owner_revoked' WHERE id = ? AND owner_id = ? AND kind = 'linked' AND revoked_at IS NULL`, time.Now().Unix(), tokenID, ownerID)
+		result, err := tx.ExecContext(ctx, `UPDATE api_tokens SET revoked_at = ?, revoked_reason = 'owner_revoked' WHERE `+s.tokenIDColumn+` = ? AND owner_id = ? AND kind = 'linked' AND revoked_at IS NULL`, time.Now().Unix(), tokenID, ownerID)
 		if err != nil {
 			return err
 		}

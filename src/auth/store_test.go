@@ -49,6 +49,36 @@ func TestIssueAuthenticateAndOperatorToken(t *testing.T) {
 	}
 }
 
+func TestTokenIDsAreUUIDv7AndScopesPersist(t *testing.T) {
+	store, _ := testStore(t)
+	ctx := context.Background()
+	primary, identity, err := store.IssueOwner(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(identity.TokenID) != 36 || identity.TokenID[14] != '7' || identity.Scope != "global" {
+		t.Fatalf("primary identity = %#v; want UUID v7 and global scope", identity)
+	}
+	linkedRaw, linked, err := store.CreateLinkedWithScope(ctx, identity.OwnerID, "read-only", "read", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(linked.ID) != 36 || linked.ID[14] != '7' || linked.Scope != "read" {
+		t.Fatalf("linked token = %#v; want UUID v7 and read scope", linked)
+	}
+	linkedIdentity, err := store.Authenticate(ctx, linkedRaw)
+	if err != nil || linkedIdentity.Scope != "read" {
+		t.Fatalf("linked identity = %#v, %v; want read scope", linkedIdentity, err)
+	}
+	tokens, err := store.List(ctx, identity.OwnerID)
+	if err != nil || len(tokens) != 2 || tokens[0].ID != identity.TokenID || tokens[0].Scope != "global" || tokens[1].ID != linked.ID || tokens[1].Scope != "read" {
+		t.Fatalf("listed tokens = %#v, %v; want persisted UUIDv7 IDs and scopes", tokens, err)
+	}
+	if _, err := store.Authenticate(ctx, primary); err != nil {
+		t.Fatalf("authenticate primary token: %v", err)
+	}
+}
+
 func TestAuthenticationObserverUsesBoundedMethodAndStatusValues(t *testing.T) {
 	store, operator := testStore(t)
 	var events []struct {
@@ -330,7 +360,7 @@ func TestUpdateLinkedRejectsInvalidAndDuplicateChanges(t *testing.T) {
 	if err := store.UpdateLinked(ctx, identity.OwnerID, first.ID, "second", nil); err == nil {
 		t.Fatal("duplicate linked-token name was accepted")
 	}
-	if err := store.UpdateLinked(ctx, identity.OwnerID, second.ID+100, "missing", nil); !errors.Is(err, ErrNotFound) {
+	if err := store.UpdateLinked(ctx, identity.OwnerID, second.ID+"0", "missing", nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing token update error = %v", err)
 	}
 }
@@ -441,7 +471,7 @@ func TestReloadEncryptionKeyReadsGraceKeyAndReencryptsOnReveal(t *testing.T) {
 	if err := store.ReloadEncryptionKey(ctx, base64.RawURLEncoding.EncodeToString(current), 2); err != nil {
 		t.Fatal(err)
 	}
-	var tokenID int64
+	var tokenID string
 	if err := store.db.Read().QueryRowContext(ctx, `SELECT id FROM api_tokens WHERE owner_id=? AND kind='primary'`, identity.OwnerID).Scan(&tokenID); err != nil {
 		t.Fatal(err)
 	}

@@ -17,13 +17,91 @@
     "/api/autodiscover": {
       "get": {
         "description": "Resources",
-        "operationId": "get_api_autodiscover",
+        "operationId": "getApiAutodiscover",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "api": {
+                          "properties": {
+                            "current_version": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "cli_min_version": {
+                          "type": "string"
+                        },
+                        "cli_versions": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "urls": {
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "version": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Resources"
           },
-          "400": {
-            "description": "Invalid request"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "REST API"
@@ -32,7 +110,7 @@
     "/api/graphql": {
       "post": {
         "description": "Explore the public commit catalog with GraphiQL. A query form is also available without JavaScript.",
-        "operationId": "graphql_query_api_graphql",
+        "operationId": "graphqlQueryApiGraphql",
         "requestBody": {
           "content": {
             "application/json": {
@@ -59,6 +137,30 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
             "description": "Explore the public commit catalog with GraphiQL. A query form is also available without JavaScript."
           }
         },
@@ -68,13 +170,199 @@
     "/api/healthz": {
       "get": {
         "description": "Service is healthy",
-        "operationId": "get_api_healthz",
+        "operationId": "getApiHealthz",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "build": {
+                      "properties": {
+                        "commit": {
+                          "type": "string"
+                        },
+                        "date": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "commit",
+                        "date"
+                      ],
+                      "type": "object"
+                    },
+                    "checks": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "features": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "go_version": {
+                      "type": "string"
+                    },
+                    "maintenance": {
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "self_healing": {
+                          "properties": {
+                            "attempts": {
+                              "type": "integer"
+                            },
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "exhausted": {
+                              "type": "boolean"
+                            },
+                            "last_attempt": {
+                              "type": "string"
+                            },
+                            "next_attempt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "enabled",
+                            "exhausted",
+                            "attempts",
+                            "last_attempt",
+                            "next_attempt"
+                          ],
+                          "type": "object"
+                        },
+                        "since": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "reason",
+                        "message",
+                        "since",
+                        "self_healing"
+                      ],
+                      "type": "object"
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "pending_restart": {
+                      "type": "boolean"
+                    },
+                    "project": {
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "tagline": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "tagline",
+                        "description"
+                      ],
+                      "type": "object"
+                    },
+                    "restart_reason": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "stats": {
+                      "properties": {
+                        "active_connections": {
+                          "type": "integer"
+                        },
+                        "requests_24h": {
+                          "type": "integer"
+                        },
+                        "requests_total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "requests_total",
+                        "requests_24h",
+                        "active_connections"
+                      ],
+                      "type": "object"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string"
+                    },
+                    "uptime": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project",
+                    "status",
+                    "version",
+                    "go_version",
+                    "build",
+                    "mode",
+                    "uptime",
+                    "timestamp",
+                    "features",
+                    "checks",
+                    "stats"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Service is healthy"
           },
-          "400": {
-            "description": "Invalid request"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Service health"
@@ -83,7 +371,7 @@
     "/api/mcp": {
       "post": {
         "description": "Connect to the public catalog and stateless message builder using Streamable HTTP.",
-        "operationId": "mcp_endpoint_api_mcp",
+        "operationId": "mcpEndpointApiMcp",
         "parameters": [
           {
             "in": "header",
@@ -178,9 +466,106 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "_meta": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "data": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "id": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "jsonrpc": {
+                      "type": "string"
+                    },
+                    "result": {}
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "description": "Connect to the public catalog and stateless message builder using Streamable HTTP."
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "_meta": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "data": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "id": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "jsonrpc": {
+                      "type": "string"
+                    },
+                    "result": {}
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
           },
           "403": {
@@ -207,100 +592,78 @@
         "summary": "Git Messages MCP connection help"
       }
     },
-    "/api/metrics": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_metrics_api_metrics",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/api/metrics/grafana": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_metrics_api_metrics_grafana",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/api/metrics/loki": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_metrics_api_metrics_loki",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/api/metrics/prometheus": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_metrics_api_metrics_prometheus",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
     "/api/swagger": {
       "get": {
         "description": "REST API",
-        "operationId": "get_api_swagger",
+        "operationId": "getApiSwagger",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "components": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "info": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "openapi": {
+                      "type": "string"
+                    },
+                    "paths": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "servers": {
+                      "items": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
             "description": "REST API"
           },
-          "400": {
-            "description": "Invalid request"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "OpenAPI"
@@ -309,10 +672,80 @@
     "/api/v1": {
       "get": {
         "description": "Resources",
-        "operationId": "get_api_index",
+        "operationId": "getApiIndex",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "resources": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "server": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "version": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Resources"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "REST API"
@@ -321,10 +754,83 @@
     "/api/v1/conventions": {
       "get": {
         "description": "The supported commit conventions.",
-        "operationId": "list_conventions",
+        "operationId": "listConventions",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "properties": {
+                          "description": {
+                            "type": "string"
+                          },
+                          "example": {
+                            "type": "string"
+                          },
+                          "format": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "description",
+                          "format",
+                          "example"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "The supported commit conventions."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "List conventions"
@@ -333,7 +839,7 @@
     "/api/v1/messages": {
       "post": {
         "description": "The formatted commit message.",
-        "operationId": "build_commit_message",
+        "operationId": "buildCommitMessage",
         "requestBody": {
           "content": {
             "application/json": {
@@ -380,10 +886,92 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "The formatted commit message."
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "The request contains invalid message fields."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Build a commit message"
@@ -392,10 +980,68 @@
     "/api/v1/messages/random": {
       "get": {
         "description": "A random example commit message.",
-        "operationId": "get_random_example",
+        "operationId": "getRandomExample",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "A random example commit message."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Get a random example message"
@@ -404,10 +1050,71 @@
     "/api/v1/server/about": {
       "get": {
         "description": "Git Messages is a curated reference for commit message conventions and a tool for composing clear messages.",
-        "operationId": "get_about",
+        "operationId": "getAbout",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        },
+                        "format": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Git Messages is a curated reference for commit message conventions and a tool for composing clear messages."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "About Git Messages"
@@ -416,17 +1123,115 @@
     "/api/v1/server/contact": {
       "get": {
         "description": "Returns report-form descriptors and a one-use captcha challenge",
-        "operationId": "get_contact_form",
+        "operationId": "getContactForm",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "abuse_email": {
+                          "type": "string"
+                        },
+                        "captcha": {
+                          "properties": {
+                            "challenge": {
+                              "type": "string"
+                            },
+                            "expires_at": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "fields": {
+                          "items": {
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "required": {
+                                "type": "boolean"
+                              },
+                              "type": {
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "form_token": {
+                          "type": "string"
+                        },
+                        "security_url": {
+                          "type": "string"
+                        },
+                        "types": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Returns report-form descriptors and a one-use captcha challenge"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Contact report form"
       },
       "post": {
         "description": "Uses a submit and confirm review flow",
-        "operationId": "submit_contact_report",
+        "operationId": "submitContactReport",
         "requestBody": {
           "content": {
             "application/json": {
@@ -489,10 +1294,115 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "confirm_after_seconds": {
+                          "type": "integer"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "review": {
+                          "properties": {
+                            "email": {
+                              "type": "string"
+                            },
+                            "subject": {
+                              "type": "string"
+                            },
+                            "type": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "review_token": {
+                          "type": "string"
+                        },
+                        "tracking_id": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Uses a submit and confirm review flow"
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "The request contains invalid message fields."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Submit a contact report"
@@ -501,10 +1411,71 @@
     "/api/v1/server/dpo": {
       "get": {
         "description": "Public DPO contact information",
-        "operationId": "get_data_protection_contact",
+        "operationId": "getDataProtectionContact",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "email": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "privacy_url": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Public DPO contact information"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Data protection contact"
@@ -513,7 +1484,7 @@
     "/api/v1/server/graphql": {
       "post": {
         "description": "Explore the public commit catalog with GraphiQL. A query form is also available without JavaScript.",
-        "operationId": "graphql_query_api_v1_server_graphql",
+        "operationId": "graphqlQuery",
         "requestBody": {
           "content": {
             "application/json": {
@@ -540,7 +1511,91 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
             "description": "Explore the public commit catalog with GraphiQL. A query form is also available without JavaScript."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The request contains invalid message fields."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "GraphQL"
@@ -549,10 +1604,199 @@
     "/api/v1/server/healthz": {
       "get": {
         "description": "Service is healthy",
-        "operationId": "get_health",
+        "operationId": "getHealth",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "build": {
+                      "properties": {
+                        "commit": {
+                          "type": "string"
+                        },
+                        "date": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "commit",
+                        "date"
+                      ],
+                      "type": "object"
+                    },
+                    "checks": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "features": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "go_version": {
+                      "type": "string"
+                    },
+                    "maintenance": {
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "self_healing": {
+                          "properties": {
+                            "attempts": {
+                              "type": "integer"
+                            },
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "exhausted": {
+                              "type": "boolean"
+                            },
+                            "last_attempt": {
+                              "type": "string"
+                            },
+                            "next_attempt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "enabled",
+                            "exhausted",
+                            "attempts",
+                            "last_attempt",
+                            "next_attempt"
+                          ],
+                          "type": "object"
+                        },
+                        "since": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "reason",
+                        "message",
+                        "since",
+                        "self_healing"
+                      ],
+                      "type": "object"
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "pending_restart": {
+                      "type": "boolean"
+                    },
+                    "project": {
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "tagline": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "tagline",
+                        "description"
+                      ],
+                      "type": "object"
+                    },
+                    "restart_reason": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "stats": {
+                      "properties": {
+                        "active_connections": {
+                          "type": "integer"
+                        },
+                        "requests_24h": {
+                          "type": "integer"
+                        },
+                        "requests_total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "requests_total",
+                        "requests_24h",
+                        "active_connections"
+                      ],
+                      "type": "object"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string"
+                    },
+                    "uptime": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project",
+                    "status",
+                    "version",
+                    "go_version",
+                    "build",
+                    "mode",
+                    "uptime",
+                    "timestamp",
+                    "features",
+                    "checks",
+                    "stats"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Service is healthy"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Service health"
@@ -561,10 +1805,85 @@
     "/api/v1/server/help": {
       "get": {
         "description": "See",
-        "operationId": "get_help",
+        "operationId": "getHelp",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        },
+                        "format": {
+                          "type": "string"
+                        },
+                        "pages": {
+                          "items": {
+                            "properties": {
+                              "title": {
+                                "type": "string"
+                              },
+                              "url": {
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "title": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "See"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Help"
@@ -573,10 +1892,99 @@
     "/api/v1/server/help/mcp": {
       "get": {
         "description": "Connect to the public catalog and stateless message builder using Streamable HTTP.",
-        "operationId": "get_mcp_help",
+        "operationId": "getMcpHelp",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "aliases": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "auth": {
+                          "properties": {
+                            "scheme": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "project": {
+                          "type": "string"
+                        },
+                        "tools": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "url": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Connect to the public catalog and stateless message builder using Streamable HTTP."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Git Messages MCP connection help"
@@ -585,7 +1993,7 @@
     "/api/v1/server/mcp": {
       "post": {
         "description": "Connect to the public catalog and stateless message builder using Streamable HTTP.",
-        "operationId": "mcp_endpoint_api_v1_server_mcp",
+        "operationId": "mcpEndpoint",
         "parameters": [
           {
             "in": "header",
@@ -680,9 +2088,106 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "_meta": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "data": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "id": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "jsonrpc": {
+                      "type": "string"
+                    },
+                    "result": {}
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "description": "Connect to the public catalog and stateless message builder using Streamable HTTP."
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "_meta": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "data": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "id": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "jsonrpc": {
+                      "type": "string"
+                    },
+                    "result": {}
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
           },
           "403": {
@@ -709,104 +2214,99 @@
         "summary": "Git Messages MCP connection help"
       }
     },
-    "/api/v1/server/metrics": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_metrics_api_v1_server_metrics",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/api/v1/server/metrics/grafana": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_metrics_api_v1_server_metrics_grafana",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/api/v1/server/metrics/loki": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_metrics_api_v1_server_metrics_loki",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/api/v1/server/metrics/prometheus": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_metrics_api_v1_server_metrics_prometheus",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
     "/api/v1/server/preferences": {
       "get": {
         "description": "Preferences",
-        "operationId": "get_preferences",
+        "operationId": "getPreferences",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "applied": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "consent_required": {
+                          "type": "boolean"
+                        },
+                        "ignored": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "lang": {
+                          "type": "string"
+                        },
+                        "prefs": {
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "theme": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Preferences"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Preferences"
       },
       "post": {
         "description": "Preferences",
-        "operationId": "save_preferences",
+        "operationId": "savePreferences",
         "requestBody": {
           "content": {
             "application/json": {
@@ -833,10 +2333,116 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "applied": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "consent_required": {
+                          "type": "boolean"
+                        },
+                        "ignored": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "lang": {
+                          "type": "string"
+                        },
+                        "prefs": {
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "theme": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Preferences"
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "The request contains invalid message fields."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Save"
@@ -845,10 +2451,80 @@
     "/api/v1/server/preferences/sync": {
       "get": {
         "description": "Move your preferences to another device.",
-        "operationId": "get_preferences_sync",
+        "operationId": "getPreferencesSync",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "lang": {
+                          "type": "string"
+                        },
+                        "prefs": {
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "theme": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Move your preferences to another device."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Sync preferences"
@@ -857,10 +2533,89 @@
     "/api/v1/server/preferences/sync/import": {
       "get": {
         "description": "Move your preferences to another device.",
-        "operationId": "import_preferences_sync",
+        "operationId": "importPreferencesSync",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "applied": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "consent_required": {
+                          "type": "boolean"
+                        },
+                        "ignored": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "lang": {
+                          "type": "string"
+                        },
+                        "prefs": {
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "theme": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Move your preferences to another device."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Import"
@@ -869,13 +2624,118 @@
     "/api/v1/server/preferences/tokens": {
       "get": {
         "description": "Owner tokens",
-        "operationId": "list_owner_tokens",
+        "operationId": "listOwnerTokens",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "linked": {
+                          "items": {
+                            "properties": {
+                              "created_at": {
+                                "type": "string"
+                              },
+                              "expires_at": {},
+                              "id": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "last_used_at": {},
+                              "name": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string"
+                              },
+                              "token_masked": {
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "max_linked": {
+                          "type": "integer"
+                        },
+                        "primary": {
+                          "properties": {
+                            "created_at": {
+                              "type": "string"
+                            },
+                            "expires_at": {},
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "last_used_at": {},
+                            "name": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "token_masked": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Owner tokens"
           },
-          "400": {
-            "description": "Invalid request"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -887,14 +2747,20 @@
       },
       "post": {
         "description": "Full access to your {resources}. Keep it private.",
-        "operationId": "create_linked_token",
+        "operationId": "createLinkedToken",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "additionalProperties": false,
+                "not": {
+                  "required": [
+                    "expires",
+                    "expires_on"
+                  ]
+                },
                 "properties": {
-                  "expiry": {
+                  "expires": {
                     "enum": [
                       "never",
                       "7d",
@@ -904,12 +2770,26 @@
                     ],
                     "type": "string"
                   },
+                  "expires_on": {
+                    "format": "date",
+                    "type": "string"
+                  },
                   "name": {
                     "maxLength": 64,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "scope": {
+                    "enum": [
+                      "read",
+                      "read-write"
+                    ],
+                    "type": "string"
                   }
                 },
+                "required": [
+                  "name"
+                ],
                 "type": "object"
               }
             }
@@ -917,11 +2797,118 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "linked_token": {
+                          "type": "string"
+                        },
+                        "token": {
+                          "properties": {
+                            "created_at": {
+                              "type": "string"
+                            },
+                            "expires_at": {},
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "last_used_at": {},
+                            "name": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "token_masked": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Full access to your {resources}. Keep it private."
           },
           "400": {
-            "description": "Invalid request"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The request contains invalid message fields."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -935,7 +2922,7 @@
     "/api/v1/server/preferences/tokens/primary": {
       "delete": {
         "description": "This deletes {linked} linked tokens and {resources}, including anything created with a linked token.",
-        "operationId": "revoke_primary_token",
+        "operationId": "revokePrimaryToken",
         "requestBody": {
           "content": {
             "application/json": {
@@ -959,10 +2946,65 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "resources": {
+                          "type": "integer"
+                        },
+                        "tokens": {
+                          "type": "integer"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "This deletes {linked} linked tokens and {resources}, including anything created with a linked token."
           },
-          "400": {
-            "description": "Invalid request"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -974,13 +3016,95 @@
       },
       "post": {
         "description": "Primary token",
-        "operationId": "issue_primary_token",
+        "operationId": "issuePrimaryToken",
         "responses": {
-          "200": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "owner_token": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Primary token"
           },
           "400": {
-            "description": "Invalid request"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The request contains invalid message fields."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "New token"
@@ -989,13 +3113,95 @@
     "/api/v1/server/preferences/tokens/primary/reveal": {
       "post": {
         "description": "Shown once, on this page load.",
-        "operationId": "reveal_primary_token",
+        "operationId": "revealPrimaryToken",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "owner_token": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Shown once, on this page load."
           },
           "400": {
-            "description": "Invalid request"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The request contains invalid message fields."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -1009,13 +3215,95 @@
     "/api/v1/server/preferences/tokens/primary/rotate": {
       "post": {
         "description": "Primary token",
-        "operationId": "rotate_primary_token",
+        "operationId": "rotatePrimaryToken",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "owner_token": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Primary token"
           },
           "400": {
-            "description": "Invalid request"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The request contains invalid message fields."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -1029,7 +3317,7 @@
     "/api/v1/server/preferences/tokens/{id}": {
       "delete": {
         "description": "Revoke",
-        "operationId": "revoke_linked_token",
+        "operationId": "revokeLinkedToken",
         "parameters": [
           {
             "in": "path",
@@ -1042,10 +3330,65 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Revoke"
           },
-          "400": {
-            "description": "Invalid request"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -1057,7 +3400,7 @@
       },
       "patch": {
         "description": "Save",
-        "operationId": "update_linked_token",
+        "operationId": "updateLinkedToken",
         "parameters": [
           {
             "in": "path",
@@ -1073,8 +3416,14 @@
             "application/json": {
               "schema": {
                 "additionalProperties": false,
+                "not": {
+                  "required": [
+                    "expires",
+                    "expires_on"
+                  ]
+                },
                 "properties": {
-                  "expiry": {
+                  "expires": {
                     "enum": [
                       "never",
                       "7d",
@@ -1082,6 +3431,10 @@
                       "90d",
                       "1y"
                     ],
+                    "type": "string"
+                  },
+                  "expires_on": {
+                    "format": "date",
                     "type": "string"
                   },
                   "name": {
@@ -1098,10 +3451,79 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "created_at": {
+                          "type": "string"
+                        },
+                        "expires_at": {},
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string"
+                        },
+                        "last_used_at": {},
+                        "name": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "token_masked": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Save"
           },
-          "400": {
-            "description": "Invalid request"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -1115,7 +3537,7 @@
     "/api/v1/server/preferences/tokens/{id}/reveal": {
       "post": {
         "description": "Shown once, on this page load.",
-        "operationId": "reveal_linked_token",
+        "operationId": "revealLinkedToken",
         "parameters": [
           {
             "in": "path",
@@ -1128,10 +3550,117 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "linked_token": {
+                          "type": "string"
+                        },
+                        "token": {
+                          "properties": {
+                            "created_at": {
+                              "type": "string"
+                            },
+                            "expires_at": {},
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "last_used_at": {},
+                            "name": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "token_masked": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Shown once, on this page load."
           },
           "400": {
-            "description": "Invalid request"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The request contains invalid message fields."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -1145,7 +3674,7 @@
     "/api/v1/server/preferences/tokens/{id}/rotate": {
       "post": {
         "description": "Primary token",
-        "operationId": "rotate_linked_token",
+        "operationId": "rotateLinkedToken",
         "parameters": [
           {
             "in": "path",
@@ -1158,10 +3687,117 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "linked_token": {
+                          "type": "string"
+                        },
+                        "token": {
+                          "properties": {
+                            "created_at": {
+                              "type": "string"
+                            },
+                            "expires_at": {},
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "last_used_at": {},
+                            "name": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "token_masked": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Primary token"
           },
           "400": {
-            "description": "Invalid request"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "The request contains invalid message fields."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -1175,10 +3811,226 @@
     "/api/v1/server/privacy": {
       "get": {
         "description": "This service serves a static, curated commit convention catalog. It does not provide user accounts, accept user submissions, or persist personal data. Operational logs may be handled by the server operator.",
-        "operationId": "get_privacy",
+        "operationId": "getPrivacy",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "ccpa": {
+                          "properties": {
+                            "applicable": {
+                              "type": "boolean"
+                            },
+                            "opt_out_url": {
+                              "type": "string"
+                            },
+                            "user_opted_out": {
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "content": {
+                          "properties": {
+                            "consent_message": {
+                              "type": "string"
+                            },
+                            "data_collection": {
+                              "type": "string"
+                            },
+                            "data_security": {
+                              "type": "string"
+                            },
+                            "data_usage": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "cookies": {
+                          "properties": {
+                            "analytics": {
+                              "properties": {
+                                "description": {
+                                  "type": "string"
+                                },
+                                "enabled": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "essential": {
+                              "properties": {
+                                "description": {
+                                  "type": "string"
+                                },
+                                "enabled": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "preferences": {
+                              "properties": {
+                                "description": {
+                                  "type": "string"
+                                },
+                                "enabled": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "type": "object"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "data": {
+                          "properties": {
+                            "sharing": {
+                              "items": {
+                                "properties": {
+                                  "condition": {
+                                    "type": "string"
+                                  },
+                                  "data": {
+                                    "type": "string"
+                                  },
+                                  "when": {
+                                    "type": "string"
+                                  }
+                                },
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "sold": {
+                              "type": "boolean"
+                            },
+                            "stored_on_server": {
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "retention": {
+                          "properties": {
+                            "deletion_available": {
+                              "type": "boolean"
+                            },
+                            "export_available": {
+                              "type": "boolean"
+                            },
+                            "period": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "summary": {
+                          "properties": {
+                            "data_sold": {
+                              "type": "boolean"
+                            },
+                            "data_stored_on_server": {
+                              "type": "boolean"
+                            },
+                            "user_control": {
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "third_party": {
+                          "properties": {
+                            "services": {
+                              "items": {
+                                "properties": {
+                                  "data_sent": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "policy_url": {
+                                    "type": "string"
+                                  },
+                                  "purpose": {
+                                    "type": "string"
+                                  }
+                                },
+                                "type": "object"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "tracking": {
+                          "properties": {
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "type": {
+                              "type": "string"
+                            },
+                            "type_name": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "This service serves a static, curated commit convention catalog. It does not provide user accounts, accept user submissions, or persist personal data. Operational logs may be handled by the server operator."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Privacy"
@@ -1187,10 +4039,102 @@
     "/api/v1/server/security": {
       "get": {
         "description": "Report vulnerabilities through GitHub private vulnerability reporting. Do not post exploit details in public issues.",
-        "operationId": "get_security",
+        "operationId": "getSecurity",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "contacts": {
+                          "items": {
+                            "properties": {
+                              "type": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "expires": {
+                          "type": "string"
+                        },
+                        "pgp": {
+                          "properties": {
+                            "available": {
+                              "type": "boolean"
+                            },
+                            "fingerprint": {
+                              "type": "string"
+                            },
+                            "url": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "policy_url": {
+                          "type": "string"
+                        },
+                        "report_url": {
+                          "type": "string"
+                        },
+                        "thanks_url": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Report vulnerabilities through GitHub private vulnerability reporting. Do not post exploit details in public issues."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Security"
@@ -1199,10 +4143,65 @@
     "/api/v1/server/security/policy": {
       "get": {
         "description": "Public coordinated-disclosure policy",
-        "operationId": "get_security_policy",
+        "operationId": "getSecurityPolicy",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "policy": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Public coordinated-disclosure policy"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Security disclosure policy"
@@ -1211,10 +4210,84 @@
     "/api/v1/server/security/thanks": {
       "get": {
         "description": "Public researcher acknowledgments",
-        "operationId": "get_security_thanks",
+        "operationId": "getSecurityThanks",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "entries": {
+                          "items": {
+                            "properties": {
+                              "credit": {
+                                "type": "string"
+                              },
+                              "date": {
+                                "type": "string"
+                              },
+                              "severity": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "credit",
+                              "date",
+                              "severity"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Public researcher acknowledgments"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Security acknowledgments"
@@ -1223,10 +4296,75 @@
     "/api/v1/server/swagger": {
       "get": {
         "description": "REST API",
-        "operationId": "get_openapi",
+        "operationId": "getOpenAPI",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "components": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "info": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "openapi": {
+                      "type": "string"
+                    },
+                    "paths": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "servers": {
+                      "items": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
             "description": "REST API"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "OpenAPI"
@@ -1235,10 +4373,71 @@
     "/api/v1/server/terms": {
       "get": {
         "description": "The catalog is provided as a reference. Check the selected convention and your repository's contribution rules before using a generated message.",
-        "operationId": "get_terms",
+        "operationId": "getTerms",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        },
+                        "format": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "The catalog is provided as a reference. Check the selected convention and your repository's contribution rules before using a generated message."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Terms"
@@ -1247,10 +4446,79 @@
     "/api/v1/templates": {
       "get": {
         "description": "The curated message templates.",
-        "operationId": "list_templates",
+        "operationId": "listTemplates",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "properties": {
+                          "category": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "message",
+                          "category"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "The curated message templates."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "List message templates"
@@ -1259,10 +4527,76 @@
     "/api/v1/templates/random": {
       "get": {
         "description": "A random message template.",
-        "operationId": "get_random_template",
+        "operationId": "getRandomTemplate",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "category": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "message",
+                        "category"
+                      ],
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "A random message template."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Get a random template"
@@ -1271,10 +4605,87 @@
     "/api/v1/types": {
       "get": {
         "description": "The commit type catalog.",
-        "operationId": "list_commit_types",
+        "operationId": "listCommitTypes",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "properties": {
+                          "breaking": {
+                            "type": "boolean"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "emoji": {
+                            "type": "string"
+                          },
+                          "example": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "description",
+                          "emoji",
+                          "example",
+                          "breaking"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "The commit type catalog."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "List commit types"
@@ -1283,7 +4694,7 @@
     "/cli/binaries/{binary}": {
       "get": {
         "description": "REST API",
-        "operationId": "download_cli_binary",
+        "operationId": "downloadCliBinary",
         "parameters": [
           {
             "in": "path",
@@ -1316,7 +4727,7 @@
     "/mcp": {
       "post": {
         "description": "Connect to the public catalog and stateless message builder using Streamable HTTP.",
-        "operationId": "mcp_endpoint_mcp",
+        "operationId": "mcpEndpointMcp",
         "parameters": [
           {
             "in": "header",
@@ -1411,9 +4822,106 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "_meta": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "data": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "id": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "jsonrpc": {
+                      "type": "string"
+                    },
+                    "result": {}
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "description": "Connect to the public catalog and stateless message builder using Streamable HTTP."
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "_meta": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "data": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "id": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "jsonrpc": {
+                      "type": "string"
+                    },
+                    "result": {}
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
           },
           "403": {
@@ -1438,174 +4946,6 @@
           }
         ],
         "summary": "Git Messages MCP connection help"
-      }
-    },
-    "/metrics": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_root_metrics_metrics",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.root.enabled"
-      }
-    },
-    "/metrics/grafana": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_root_metrics_metrics_grafana",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.root.enabled"
-      }
-    },
-    "/metrics/loki": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_root_metrics_metrics_loki",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.root.enabled"
-      }
-    },
-    "/metrics/prometheus": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_root_metrics_metrics_prometheus",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.root.enabled"
-      }
-    },
-    "/server/metrics": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_metrics_server_metrics",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/server/metrics/grafana": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_metrics_server_metrics_grafana",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/server/metrics/loki": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_metrics_server_metrics_loki",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/server/metrics/prometheus": {
-      "get": {
-        "description": "Authenticated internal metrics endpoint",
-        "operationId": "get_metrics_server_metrics_prometheus",
-        "responses": {
-          "200": {
-            "description": "Authenticated internal metrics endpoint"
-          },
-          "400": {
-            "description": "Invalid request"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "Metrics service",
-        "x-mounted-when": "server.metrics.enabled"
       }
     }
   },

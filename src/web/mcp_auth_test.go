@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -69,13 +70,13 @@ func TestMCPRequiresBearerAndDoesNotLeakToken(t *testing.T) {
 	if tool["name"] == nil || tool["description"] == nil || tool["inputSchema"] == nil || tool["annotations"] == nil {
 		t.Fatalf("tool metadata incomplete: %#v", tool)
 	}
-	callBody := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"},"name":"build_commit_message","arguments":{"type":"feat","description":"MCP auth regression"}}}`
+	callBody := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"},"name":"buildCommitMessage","arguments":{"type":"feat","description":"MCP auth regression"}}}`
 	callRequest := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(callBody))
 	callRequest.Header.Set("Content-Type", "application/json")
 	callRequest.Header.Set("Accept", "application/json, text/event-stream")
 	callRequest.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
 	callRequest.Header.Set("Mcp-Method", "tools/call")
-	callRequest.Header.Set("Mcp-Name", "build_commit_message")
+	callRequest.Header.Set("Mcp-Name", "buildCommitMessage")
 	callRequest.Header.Set("Authorization", "Bearer "+raw)
 	callResponse := httptest.NewRecorder()
 	mcpHandler(callResponse, callRequest)
@@ -91,6 +92,62 @@ func TestMCPRequiresBearerAndDoesNotLeakToken(t *testing.T) {
 	}
 	if callEnvelope["_meta"] == nil || callEnvelope["result"] == nil {
 		t.Fatalf("tools/call omitted response metadata or result: %#v", callEnvelope)
+	}
+}
+
+func TestMCPReadScopeBlocksWriteOperations(t *testing.T) {
+	key := base64.RawURLEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	store, err := auth.Open(projectTestDir(t)+"/server.db", "adm_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ", key, 25, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ConfigureAuth(store)
+	defer ConfigureAuth(nil)
+	_, identity, err := store.IssueOwner(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	readToken, _, err := store.CreateLinkedWithScope(t.Context(), identity.OwnerID, "read-only", "read", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readIdentity, err := store.Authenticate(t.Context(), readToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolsRequest := httptest.NewRequest(http.MethodGet, "/server/help/mcp", nil)
+	toolsRequest = toolsRequest.WithContext(context.WithValue(toolsRequest.Context(), mcpIdentityKey{}, readIdentity))
+	var visibleTools []string
+	for _, tool := range mcpTools(toolsRequest) {
+		visibleTools = append(visibleTools, tool["name"].(string))
+	}
+	hasTool := func(expected string) bool {
+		for _, name := range visibleTools {
+			if name == expected {
+				return true
+			}
+		}
+		return false
+	}
+	if hasTool("buildCommitMessage") || hasTool("submitContactReport") {
+		t.Fatalf("read-scoped MCP tools exposed write operations: %v", visibleTools)
+	}
+	if !hasTool("listCommitTypes") || !hasTool("graphqlQuery") {
+		t.Fatalf("read-scoped MCP tools omitted read operations: %v", visibleTools)
+	}
+	body := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"},"name":"buildCommitMessage","arguments":{"type":"feat","description":"scope test"}}}`
+	request := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
+	request.Header.Set("Mcp-Method", "tools/call")
+	request.Header.Set("Mcp-Name", "buildCommitMessage")
+	request.Header.Set("Authorization", "Bearer "+readToken)
+	response := httptest.NewRecorder()
+	mcpHandler(response, request)
+	if response.Code != http.StatusForbidden || response.Header().Get("WWW-Authenticate") != `Bearer error="insufficient_scope"` {
+		t.Fatalf("read-scoped token write returned %d with %q", response.Code, response.Header().Get("WWW-Authenticate"))
 	}
 }
 
@@ -140,7 +197,7 @@ func TestLinkedTokenCannotManageTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest(http.MethodPost, APIBasePath()+"/server/preferences/tokens", strings.NewReader(`{"name":"another","expiry":"never"}`))
+	r := httptest.NewRequest(http.MethodPost, APIBasePath()+"/server/preferences/tokens", strings.NewReader(`{"name":"another","expires":"never"}`))
 	r.Header.Set("Authorization", "Bearer "+linked)
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

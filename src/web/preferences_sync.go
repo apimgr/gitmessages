@@ -19,8 +19,6 @@ var preferenceControls = map[string]bool{"csrf_token": true, "code": true, "redi
 func registerPreferenceSyncRoutes(mux routeRegistrar) {
 	mux.HandleFunc("/server/preferences/sync", preferenceSyncPage)
 	mux.HandleFunc("/server/preferences/sync/import", preferenceSyncImport)
-	mux.HandleFunc(APIBasePath()+"/server/preferences/sync", preferenceSyncAPI)
-	mux.HandleFunc(APIBasePath()+"/server/preferences/sync/import", preferenceSyncImportAPI)
 }
 
 func preferenceState(r *http.Request) (string, string, url.Values) {

@@ -14,8 +14,10 @@ import (
 	"strings"
 	"sync"
 
-	graphqlapi "github.com/apimgr/gitmessages/src/graphql"
+	"github.com/apimgr/gitmessages/src/auth"
+	"github.com/apimgr/gitmessages/src/config"
 	"github.com/apimgr/gitmessages/src/mode"
+	swaggerapi "github.com/apimgr/gitmessages/src/swagger"
 )
 
 const mcpProtocolVersion = "2026-07-28"
@@ -46,35 +48,50 @@ var (
 	serverFQDN   string
 )
 
-type apiOperation struct {
-	name        string
-	path        string
-	method      string
-	summary     string
-	description string
-	handler     http.HandlerFunc
-	inputSchema map[string]any
-	Auth        string
-	Listed      bool
-	Internal    bool
-	DebugOnly   bool
-	Request     any
-	Response    any
-	Primary     string
-	Message     string
-	Binary      string
+type Route struct {
+	Method       string
+	Path         string
+	OperationID  string
+	Summary      string
+	Description  string
+	Handler      http.HandlerFunc
+	Auth         string
+	Listed       bool
+	Internal     bool
+	DebugOnly    bool
+	MountedWhen  string
+	Request      any
+	Response     any
+	BareResponse bool
+	Primary      string
+	Message      string
+	Binary       string
 }
+
+type apiOperation = Route
 
 func apiOperationMounted(definition apiOperation, debugEnabled bool) bool {
 	return !definition.DebugOnly || debugEnabled
 }
 
 func apiOperationVisible(definition apiOperation, debugEnabled bool) bool {
+	return apiOperationListed(definition, debugEnabled) && !isCookieBoundPreferencesRoute(definition) && !strings.HasPrefix(definition.OperationID, "mcpEndpoint")
+}
+
+func apiOperationListed(definition apiOperation, debugEnabled bool) bool {
 	return apiOperationMounted(definition, debugEnabled) && definition.Listed && !definition.Internal
+}
+
+func isCookieBoundPreferencesRoute(definition apiOperation) bool {
+	return strings.HasPrefix(definition.Path, APIBasePath()+"/server/preferences")
 }
 
 func apiOperationVisibleNow(definition apiOperation) bool {
 	return apiOperationVisible(definition, mode.IsDebugEnabled())
+}
+
+func apiOperationListedNow(definition apiOperation) bool {
+	return apiOperationListed(definition, mode.IsDebugEnabled())
 }
 
 // SetServerFQDN sets the public hostname used by MCP's origin check.
@@ -176,6 +193,16 @@ func mcpHandler(w http.ResponseWriter, r *http.Request) {
 		if name == "" || decodeMCPName(r.Header.Get("Mcp-Name")) != name {
 			writeMCPError(w, http.StatusBadRequest, request.ID, -32020, "Header mismatch: Mcp-Name does not match request parameters", nil)
 			return
+		}
+	}
+	if request.Method == "tools/call" && identity.Scope == "read" {
+		toolName, _ := request.Params["name"].(string)
+		for _, operation := range apiOperationDefinitions(r) {
+			if operation.OperationID == toolName && !mcpOperationAllowedForScope(operation, identity.Scope) {
+				w.Header().Set("WWW-Authenticate", `Bearer error="insufficient_scope"`)
+				writeMCPError(w, http.StatusForbidden, request.ID, -32003, "Token scope does not permit this operation", nil)
+				return
+			}
 		}
 	}
 	result, status, rpcErr := handleMCPRequest(r, request)
@@ -309,31 +336,48 @@ func mcpResponseMetadata() map[string]any {
 
 func apiOperationDefinitions(r *http.Request) []apiOperation {
 	definitions := []apiOperation{
-		{name: "get_api_index", path: APIBasePath(), method: http.MethodGet, summary: tr(r, "api.rest"), description: tr(r, "api.resources"), handler: apiRoot, inputSchema: emptyInputSchema()},
-		{name: "list_commit_types", path: APIBasePath() + "/types", method: http.MethodGet, summary: tr(r, "swagger.types.summary"), description: tr(r, "swagger.types.response"), handler: apiTypes, inputSchema: emptyInputSchema()},
-		{name: "list_conventions", path: APIBasePath() + "/conventions", method: http.MethodGet, summary: tr(r, "swagger.conventions.summary"), description: tr(r, "swagger.conventions.response"), handler: apiConventions, inputSchema: emptyInputSchema()},
-		{name: "list_templates", path: APIBasePath() + "/templates", method: http.MethodGet, summary: tr(r, "swagger.templates.summary"), description: tr(r, "swagger.templates.response"), handler: apiTemplates, inputSchema: emptyInputSchema()},
-		{name: "get_random_template", path: APIBasePath() + "/templates/random", method: http.MethodGet, summary: tr(r, "swagger.random_template.summary"), description: tr(r, "swagger.random_template.response"), handler: apiRandomTemplate, inputSchema: emptyInputSchema()},
-		{name: "get_random_example", path: APIBasePath() + "/messages/random", method: http.MethodGet, summary: tr(r, "swagger.random_message.summary"), description: tr(r, "swagger.random_message.response"), handler: apiRandom, inputSchema: emptyInputSchema()},
-		{name: "build_commit_message", path: APIBasePath() + "/messages", method: http.MethodPost, summary: tr(r, "swagger.build_message.summary"), description: tr(r, "swagger.build_message.response"), handler: apiMessages, inputSchema: buildMessageInputSchema(r)},
-		{name: "get_health", path: APIBasePath() + "/server/healthz", method: http.MethodGet, summary: tr(r, "health.title"), description: tr(r, "health.ok"), handler: apiHealth, inputSchema: emptyInputSchema()},
-		{name: "get_about", path: APIBasePath() + "/server/about", method: http.MethodGet, summary: tr(r, "about.title"), description: tr(r, "about.body"), handler: apiAbout, inputSchema: emptyInputSchema()},
-		{name: "get_help", path: APIBasePath() + "/server/help", method: http.MethodGet, summary: tr(r, "help.title"), description: tr(r, "help.api.docs"), handler: apiHelp, inputSchema: emptyInputSchema()},
-		{name: "get_mcp_help", path: APIBasePath() + "/server/help/mcp", method: http.MethodGet, summary: tr(r, "mcp.title"), description: tr(r, "mcp.help.description"), handler: apiMCPHelp, inputSchema: emptyInputSchema()},
-		{name: "get_privacy", path: APIBasePath() + "/server/privacy", method: http.MethodGet, summary: tr(r, "privacy.title"), description: tr(r, "privacy.body"), handler: apiPrivacy, inputSchema: emptyInputSchema()},
-		{name: "get_terms", path: APIBasePath() + "/server/terms", method: http.MethodGet, summary: tr(r, "terms.title"), description: tr(r, "terms.body"), handler: apiTerms, inputSchema: emptyInputSchema()},
-		{name: "get_security", path: APIBasePath() + "/server/security", method: http.MethodGet, summary: tr(r, "security.title"), description: tr(r, "security.body"), handler: apiContactSecurity, inputSchema: emptyInputSchema()},
-		{name: "get_security_policy", path: APIBasePath() + "/server/security/policy", method: http.MethodGet, summary: "Security disclosure policy", description: "Public coordinated-disclosure policy", handler: apiSecurityPolicy, inputSchema: emptyInputSchema()},
-		{name: "get_security_thanks", path: APIBasePath() + "/server/security/thanks", method: http.MethodGet, summary: "Security acknowledgments", description: "Public researcher acknowledgments", handler: apiSecurityThanks, inputSchema: emptyInputSchema()},
-		{name: "get_data_protection_contact", path: APIBasePath() + "/server/dpo", method: http.MethodGet, summary: "Data protection contact", description: "Public DPO contact information", handler: apiDPO, inputSchema: emptyInputSchema()},
-		{name: "get_contact_form", path: APIBasePath() + "/server/contact", method: http.MethodGet, summary: "Contact report form", description: "Returns report-form descriptors and a one-use captcha challenge", handler: apiContact, inputSchema: emptyInputSchema()},
-		{name: "submit_contact_report", path: APIBasePath() + "/server/contact", method: http.MethodPost, summary: "Submit a contact report", description: "Uses a submit and confirm review flow", handler: apiContact, inputSchema: contactInputSchema()},
-		{name: "get_preferences", path: APIBasePath() + "/server/preferences", method: http.MethodGet, summary: tr(r, "preferences.title"), description: tr(r, "preferences.title"), handler: apiPreferences, inputSchema: emptyInputSchema()},
-		{name: "save_preferences", path: APIBasePath() + "/server/preferences", method: http.MethodPost, summary: tr(r, "preferences.save"), description: tr(r, "preferences.title"), handler: apiPreferences, inputSchema: map[string]any{"type": "object", "properties": map[string]any{"theme": map[string]any{"type": "string", "enum": []string{"dark", "light", "auto"}}, "lang": map[string]any{"type": "string"}}, "additionalProperties": true}},
-		{name: "get_preferences_sync", path: APIBasePath() + "/server/preferences/sync", method: http.MethodGet, summary: tr(r, "preferences.sync"), description: tr(r, "preferences.sync.description"), handler: preferenceSyncAPI, inputSchema: emptyInputSchema()},
-		{name: "import_preferences_sync", path: APIBasePath() + "/server/preferences/sync/import", method: http.MethodGet, summary: tr(r, "preferences.sync.import"), description: tr(r, "preferences.sync.description"), handler: preferenceSyncImportAPI, inputSchema: emptyInputSchema()},
-		{name: "get_openapi", path: APIBasePath() + "/server/swagger", method: http.MethodGet, summary: tr(r, "api.openapi"), description: tr(r, "api.rest"), handler: swaggerJSON, inputSchema: emptyInputSchema()},
-		{name: "graphql_query", path: APIBasePath() + "/server/graphql", method: http.MethodPost, summary: tr(r, "graphql.title"), description: tr(r, "graphql.description"), handler: graphqlapi.Handler().ServeHTTP, inputSchema: graphqlInputSchema(r)},
+		{OperationID: "getApiIndex", Path: APIBasePath(), Method: http.MethodGet, Summary: tr(r, "api.rest"), Description: tr(r, "api.resources"), Handler: apiRoot, Request: emptyInputSchema()},
+		{OperationID: "listCommitTypes", Path: APIBasePath() + "/types", Method: http.MethodGet, Summary: tr(r, "swagger.types.summary"), Description: tr(r, "swagger.types.response"), Handler: apiTypes, Request: emptyInputSchema()},
+		{OperationID: "listConventions", Path: APIBasePath() + "/conventions", Method: http.MethodGet, Summary: tr(r, "swagger.conventions.summary"), Description: tr(r, "swagger.conventions.response"), Handler: apiConventions, Request: emptyInputSchema()},
+		{OperationID: "listTemplates", Path: APIBasePath() + "/templates", Method: http.MethodGet, Summary: tr(r, "swagger.templates.summary"), Description: tr(r, "swagger.templates.response"), Handler: apiTemplates, Request: emptyInputSchema()},
+		{OperationID: "getRandomTemplate", Path: APIBasePath() + "/templates/random", Method: http.MethodGet, Summary: tr(r, "swagger.random_template.summary"), Description: tr(r, "swagger.random_template.response"), Handler: apiRandomTemplate, Request: emptyInputSchema()},
+		{OperationID: "getRandomExample", Path: APIBasePath() + "/messages/random", Method: http.MethodGet, Summary: tr(r, "swagger.random_message.summary"), Description: tr(r, "swagger.random_message.response"), Handler: apiRandom, Request: emptyInputSchema()},
+		{OperationID: "buildCommitMessage", Path: APIBasePath() + "/messages", Method: http.MethodPost, Summary: tr(r, "swagger.build_message.summary"), Description: tr(r, "swagger.build_message.response"), Handler: apiMessages, Request: buildMessageInputSchema(r), Primary: "message"},
+		{OperationID: "getHealth", Path: APIBasePath() + "/server/healthz", Method: http.MethodGet, Summary: tr(r, "health.title"), Description: tr(r, "health.ok"), Handler: apiHealth, Request: emptyInputSchema()},
+		{OperationID: "getAbout", Path: APIBasePath() + "/server/about", Method: http.MethodGet, Summary: tr(r, "about.title"), Description: tr(r, "about.body"), Handler: apiAbout, Request: emptyInputSchema()},
+		{OperationID: "getHelp", Path: APIBasePath() + "/server/help", Method: http.MethodGet, Summary: tr(r, "help.title"), Description: tr(r, "help.api.docs"), Handler: apiHelp, Request: emptyInputSchema()},
+		{OperationID: "getMcpHelp", Path: APIBasePath() + "/server/help/mcp", Method: http.MethodGet, Summary: tr(r, "mcp.title"), Description: tr(r, "mcp.help.description"), Handler: apiMCPHelp, Request: emptyInputSchema()},
+		{OperationID: "getPrivacy", Path: APIBasePath() + "/server/privacy", Method: http.MethodGet, Summary: tr(r, "privacy.title"), Description: tr(r, "privacy.body"), Handler: apiPrivacy, Request: emptyInputSchema()},
+		{OperationID: "getTerms", Path: APIBasePath() + "/server/terms", Method: http.MethodGet, Summary: tr(r, "terms.title"), Description: tr(r, "terms.body"), Handler: apiTerms, Request: emptyInputSchema()},
+		{OperationID: "getSecurity", Path: APIBasePath() + "/server/security", Method: http.MethodGet, Summary: tr(r, "security.title"), Description: tr(r, "security.body"), Handler: apiContactSecurity, Request: emptyInputSchema()},
+		{OperationID: "getSecurityPolicy", Path: APIBasePath() + "/server/security/policy", Method: http.MethodGet, Summary: "Security disclosure policy", Description: "Public coordinated-disclosure policy", Handler: apiSecurityPolicy, Request: emptyInputSchema()},
+		{OperationID: "getSecurityThanks", Path: APIBasePath() + "/server/security/thanks", Method: http.MethodGet, Summary: "Security acknowledgments", Description: "Public researcher acknowledgments", Handler: apiSecurityThanks, Request: emptyInputSchema()},
+		{OperationID: "getDataProtectionContact", Path: APIBasePath() + "/server/dpo", Method: http.MethodGet, Summary: "Data protection contact", Description: "Public DPO contact information", Handler: apiDPO, Request: emptyInputSchema()},
+		{OperationID: "getContactForm", Path: APIBasePath() + "/server/contact", Method: http.MethodGet, Summary: "Contact report form", Description: "Returns report-form descriptors and a one-use captcha challenge", Handler: apiContact, Request: emptyInputSchema()},
+		{OperationID: "submitContactReport", Path: APIBasePath() + "/server/contact", Method: http.MethodPost, Summary: "Submit a contact report", Description: "Uses a submit and confirm review flow", Handler: apiContact, Request: contactInputSchema()},
+		{OperationID: "getPreferences", Path: APIBasePath() + "/server/preferences", Method: http.MethodGet, Summary: tr(r, "preferences.title"), Description: tr(r, "preferences.title"), Handler: apiPreferences, Request: emptyInputSchema()},
+		{OperationID: "savePreferences", Path: APIBasePath() + "/server/preferences", Method: http.MethodPost, Summary: tr(r, "preferences.save"), Description: tr(r, "preferences.title"), Handler: apiPreferences, Request: map[string]any{"type": "object", "properties": map[string]any{"theme": map[string]any{"type": "string", "enum": []string{"dark", "light", "auto"}}, "lang": map[string]any{"type": "string"}}, "additionalProperties": true}},
+		{OperationID: "getPreferencesSync", Path: APIBasePath() + "/server/preferences/sync", Method: http.MethodGet, Summary: tr(r, "preferences.sync"), Description: tr(r, "preferences.sync.description"), Handler: preferenceSyncAPI, Request: emptyInputSchema()},
+		{OperationID: "importPreferencesSync", Path: APIBasePath() + "/server/preferences/sync/import", Method: http.MethodGet, Summary: tr(r, "preferences.sync.import"), Description: tr(r, "preferences.sync.description"), Handler: preferenceSyncImportAPI, Request: emptyInputSchema()},
+		{OperationID: "getOpenAPI", Path: APIBasePath() + "/server/swagger", Method: http.MethodGet, Summary: tr(r, "api.openapi"), Description: tr(r, "api.rest"), Handler: swaggerJSON, Request: emptyInputSchema()},
+		{OperationID: "graphqlQuery", Path: APIBasePath() + "/server/graphql", Method: http.MethodPost, Summary: tr(r, "graphql.title"), Description: tr(r, "graphql.description"), Handler: graphQLHandler, Request: graphqlInputSchema(r)},
+		{OperationID: "getApiAutodiscover", Path: "/api/autodiscover", Method: http.MethodGet, Summary: tr(r, "api.rest"), Description: tr(r, "api.resources"), Handler: apiAutodiscover, Request: emptyInputSchema()},
+		{OperationID: "getApiHealthz", Path: "/api/healthz", Method: http.MethodGet, Summary: tr(r, "health.title"), Description: tr(r, "health.ok"), Handler: apiHealth, Request: emptyInputSchema()},
+		{OperationID: "getApiSwagger", Path: "/api/swagger", Method: http.MethodGet, Summary: tr(r, "api.openapi"), Description: tr(r, "api.rest"), Handler: swaggerJSON, Request: emptyInputSchema()},
+		{OperationID: "graphqlQueryApiGraphql", Path: "/api/graphql", Method: http.MethodPost, Summary: tr(r, "graphql.title"), Description: tr(r, "graphql.description"), Handler: graphQLHandler, Request: graphqlInputSchema(r)},
+		{OperationID: "mcpEndpoint", Path: APIBasePath() + "/server/mcp", Method: http.MethodPost, Summary: tr(r, "mcp.title"), Description: tr(r, "mcp.help.description"), Handler: mcpHandler, Auth: "token", Request: mcpInputSchema()},
+		{OperationID: "mcpEndpointApiMcp", Path: "/api/mcp", Method: http.MethodPost, Summary: tr(r, "mcp.title"), Description: tr(r, "mcp.help.description"), Handler: mcpHandler, Auth: "token", Request: mcpInputSchema()},
+		{OperationID: "mcpEndpointMcp", Path: "/mcp", Method: http.MethodPost, Summary: tr(r, "mcp.title"), Description: tr(r, "mcp.help.description"), Handler: mcpHandler, Auth: "token", Request: mcpInputSchema()},
+		{OperationID: "listOwnerTokens", Path: APIBasePath() + "/server/preferences/tokens", Method: http.MethodGet, Summary: tr(r, "tokens.title"), Description: tr(r, "tokens.title"), Handler: tokenAPI, Auth: "owner", Request: emptyInputSchema()},
+		{OperationID: "createLinkedToken", Path: APIBasePath() + "/server/preferences/tokens", Method: http.MethodPost, Summary: tr(r, "tokens.create_linked"), Description: tr(r, "tokens.access"), Handler: tokenAPI, Auth: "owner", Request: tokenCreateSchema(), Message: "Created successfully"},
+		{OperationID: "issuePrimaryToken", Path: APIBasePath() + "/server/preferences/tokens/primary", Method: http.MethodPost, Summary: tr(r, "tokens.new"), Description: tr(r, "tokens.primary"), Handler: tokenAPI, Request: emptyInputSchema(), Message: "Created successfully"},
+		{OperationID: "revokePrimaryToken", Path: APIBasePath() + "/server/preferences/tokens/primary", Method: http.MethodDelete, Summary: tr(r, "tokens.revoke_primary"), Description: tr(r, "tokens.primary_revoke_summary"), Handler: tokenAPI, Auth: "owner", Request: tokenConfirmSchema()},
+		{OperationID: "revealPrimaryToken", Path: APIBasePath() + "/server/preferences/tokens/primary/reveal", Method: http.MethodPost, Summary: tr(r, "tokens.reveal"), Description: tr(r, "tokens.shown_once"), Handler: tokenAPI, Auth: "owner", Request: emptyInputSchema()},
+		{OperationID: "rotatePrimaryToken", Path: APIBasePath() + "/server/preferences/tokens/primary/rotate", Method: http.MethodPost, Summary: tr(r, "tokens.rotate"), Description: tr(r, "tokens.primary"), Handler: tokenAPI, Auth: "owner", Request: emptyInputSchema()},
+		{OperationID: "revealLinkedToken", Path: APIBasePath() + "/server/preferences/tokens/{id}/reveal", Method: http.MethodPost, Summary: tr(r, "tokens.reveal"), Description: tr(r, "tokens.shown_once"), Handler: tokenAPI, Auth: "owner", Request: emptyInputSchema()},
+		{OperationID: "rotateLinkedToken", Path: APIBasePath() + "/server/preferences/tokens/{id}/rotate", Method: http.MethodPost, Summary: tr(r, "tokens.rotate"), Description: tr(r, "tokens.primary"), Handler: tokenAPI, Auth: "owner", Request: emptyInputSchema()},
+		{OperationID: "updateLinkedToken", Path: APIBasePath() + "/server/preferences/tokens/{id}", Method: http.MethodPatch, Summary: tr(r, "tokens.edit"), Description: tr(r, "tokens.save"), Handler: tokenAPI, Auth: "owner", Request: tokenNameExpirySchema()},
+		{OperationID: "revokeLinkedToken", Path: APIBasePath() + "/server/preferences/tokens/{id}", Method: http.MethodDelete, Summary: tr(r, "tokens.revoke"), Description: tr(r, "tokens.revoke"), Handler: tokenAPI, Auth: "owner", Request: emptyInputSchema()},
 	}
 	for index := range definitions {
 		if definitions[index].Auth == "" {
@@ -342,8 +386,61 @@ func apiOperationDefinitions(r *http.Request) []apiOperation {
 		if !definitions[index].Internal {
 			definitions[index].Listed = true
 		}
+		definitions[index].Response = apiOperationResponseModel(definitions[index].OperationID)
+		definitions[index].BareResponse = apiOperationBareResponse(definitions[index].OperationID)
 	}
+	definitions = append(definitions, configuredMetricsRouteDefinitions(r)...)
 	return definitions
+}
+
+func tokenNameExpirySchema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string", "minLength": 1, "maxLength": 64}, "expires": map[string]any{"type": "string", "enum": []string{"never", "7d", "30d", "90d", "1y"}}, "expires_on": map[string]any{"type": "string", "format": "date"}}, "not": map[string]any{"required": []string{"expires", "expires_on"}}, "additionalProperties": false}
+}
+
+func tokenCreateSchema() map[string]any {
+	schema := tokenNameExpirySchema()
+	properties := schema["properties"].(map[string]any)
+	properties["scope"] = map[string]any{"type": "string", "enum": []string{"read", "read-write"}}
+	schema["required"] = []string{"name"}
+	return schema
+}
+
+func tokenConfirmSchema() map[string]any {
+	return map[string]any{"type": "object", "required": []string{"confirm"}, "properties": map[string]any{"confirm": map[string]any{"type": "string", "minLength": 4, "maxLength": 4}}, "additionalProperties": false}
+}
+
+func mcpInputSchema() map[string]any {
+	return map[string]any{"type": "object", "required": []string{"jsonrpc", "id", "method", "params"}, "properties": map[string]any{"jsonrpc": map[string]any{"type": "string", "enum": []string{"2.0"}}, "id": map[string]any{"oneOf": []map[string]string{{"type": "string"}, {"type": "number"}}}, "method": map[string]any{"type": "string"}, "params": map[string]any{"type": "object"}}, "additionalProperties": false}
+}
+
+func routeRequestSchema(request any) map[string]any {
+	if schema, ok := request.(map[string]any); ok {
+		return schema
+	}
+	return swaggerapi.SchemaFromModel(request)
+}
+
+func registerAPIRoutes(mux *routeMux) {
+	request := &http.Request{Header: make(http.Header)}
+	registry := &routeRegistry{mux: mux}
+	for _, route := range apiOperationDefinitions(request) {
+		if route.MountedWhen != "" && !apiRouteConditionEnabled(route.MountedWhen) {
+			continue
+		}
+		registry.Add(route)
+	}
+}
+
+func apiRouteConditionEnabled(condition string) bool {
+	metricsConfig := config.Get().Server.Metrics
+	switch condition {
+	case "server.metrics.enabled":
+		return metricsConfig.Enabled
+	case "server.metrics.root.enabled":
+		return metricsConfig.Enabled && metricsConfig.Root.Enabled
+	default:
+		return false
+	}
 }
 
 func emptyInputSchema() map[string]any {
@@ -379,27 +476,38 @@ func graphqlInputSchema(r *http.Request) map[string]any {
 
 func mcpTools(r *http.Request) []map[string]any {
 	definitions := apiOperationDefinitions(r)
+	identity, hasIdentity := r.Context().Value(mcpIdentityKey{}).(auth.Identity)
 	tools := make([]map[string]any, 0, len(definitions))
 	for _, definition := range definitions {
 		if !apiOperationVisibleNow(definition) {
 			continue
 		}
-		annotations := map[string]bool{"readOnlyHint": definition.method == http.MethodGet}
-		if definition.method == http.MethodDelete {
+		if hasIdentity && !mcpOperationAllowedForScope(definition, identity.Scope) {
+			continue
+		}
+		annotations := map[string]bool{"readOnlyHint": definition.Method == http.MethodGet}
+		if definition.Method == http.MethodDelete {
 			annotations["destructiveHint"] = true
 		}
-		if definition.method == http.MethodDelete || definition.method == http.MethodPut {
+		if definition.Method == http.MethodDelete || definition.Method == http.MethodPut {
 			annotations["idempotentHint"] = true
 		}
 		tools = append(tools, map[string]any{
-			"name":        definition.name,
-			"title":       definition.summary,
-			"description": definition.description,
-			"inputSchema": definition.inputSchema,
+			"name":        definition.OperationID,
+			"title":       definition.Summary,
+			"description": definition.Description,
+			"inputSchema": routeRequestSchema(definition.Request),
 			"annotations": annotations,
 		})
 	}
 	return tools
+}
+
+func mcpOperationAllowedForScope(operation apiOperation, scope string) bool {
+	if scope != "read" || operation.Method == http.MethodGet || operation.Method == http.MethodHead || operation.Method == http.MethodOptions {
+		return true
+	}
+	return operation.OperationID == "graphqlQuery" || operation.OperationID == "graphqlQueryApiGraphql"
 }
 
 func callMCPTool(r *http.Request, params map[string]any) (any, int, *mcpError) {
@@ -407,7 +515,7 @@ func callMCPTool(r *http.Request, params map[string]any) (any, int, *mcpError) {
 	arguments, _ := params["arguments"].(map[string]any)
 	var definition *apiOperation
 	for _, candidate := range apiOperationDefinitions(r) {
-		if apiOperationVisibleNow(candidate) && candidate.name == name {
+		if apiOperationVisibleNow(candidate) && candidate.OperationID == name {
 			definition = &candidate
 			break
 		}
@@ -415,20 +523,20 @@ func callMCPTool(r *http.Request, params map[string]any) (any, int, *mcpError) {
 	if definition == nil {
 		return mcpToolError(tr(r, "api.invalid_request")), http.StatusOK, nil
 	}
-	if definition.method == http.MethodGet && len(arguments) > 0 || definition.name == "build_commit_message" && !validBuildArguments(arguments) || definition.name == "graphql_query" && !validGraphQLArguments(arguments) {
+	if definition.Method == http.MethodGet && len(arguments) > 0 || definition.OperationID == "buildCommitMessage" && !validBuildArguments(arguments) || definition.OperationID == "graphqlQuery" && !validGraphQLArguments(arguments) {
 		return mcpToolError(tr(r, "api.invalid_request")), http.StatusOK, nil
 	}
 	request := r.Clone(r.Context())
 	urlCopy := *r.URL
-	urlCopy.Path = definition.path
+	urlCopy.Path = definition.Path
 	urlCopy.RawPath = ""
 	urlCopy.RawQuery = ""
 	request.URL = &urlCopy
-	request.Method = definition.method
+	request.Method = definition.Method
 	request.Header = r.Header.Clone()
 	request.Header.Del("Cookie")
 	request.Header.Set("Accept", "application/json")
-	if definition.method == http.MethodPost {
+	if definition.Method == http.MethodPost {
 		body, err := json.Marshal(arguments)
 		if err != nil {
 			return mcpToolError(tr(r, "api.invalid_request")), http.StatusOK, nil
@@ -437,7 +545,7 @@ func callMCPTool(r *http.Request, params map[string]any) (any, int, *mcpError) {
 		request.Body = io.NopCloser(bytes.NewReader(body))
 	}
 	recorder := httptest.NewRecorder()
-	definition.handler(recorder, request)
+	definition.Handler(recorder, request)
 	if recorder.Code < http.StatusOK || recorder.Code >= http.StatusMultipleChoices {
 		return mcpToolError(strings.TrimSpace(recorder.Body.String())), http.StatusOK, nil
 	}

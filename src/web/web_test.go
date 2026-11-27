@@ -790,34 +790,39 @@ func TestMCPPublicProtocolAndAliases(t *testing.T) {
 	listRequest.Header.Set("Mcp-Method", "tools/list")
 	listResponse := httptest.NewRecorder()
 	handler.ServeHTTP(listResponse, listRequest)
-	if listResponse.Code != http.StatusOK || !strings.Contains(listResponse.Body.String(), "build_commit_message") {
+	if listResponse.Code != http.StatusOK || !strings.Contains(listResponse.Body.String(), "buildCommitMessage") {
 		t.Fatalf("MCP tool listing returned %d: %s", listResponse.Code, listResponse.Body.String())
 	}
-	if strings.Contains(listResponse.Body.String(), "graphql_query_get") || !strings.Contains(listResponse.Body.String(), "graphql_query") {
+	if strings.Contains(listResponse.Body.String(), "graphqlQueryApiV1ServerGraphql") || !strings.Contains(listResponse.Body.String(), "graphqlQuery") {
 		t.Fatalf("MCP tool listing omitted GraphQL operations: %s", listResponse.Body.String())
 	}
-	if strings.Contains(listResponse.Body.String(), "issue_primary_token") || strings.Contains(listResponse.Body.String(), "create_linked_token") {
+	for _, forbidden := range []string{"getPreferences", "savePreferences", "getPreferencesSync", "importPreferencesSync"} {
+		if strings.Contains(listResponse.Body.String(), forbidden) {
+			t.Fatalf("MCP tool listing exposed cookie-bound preference route %q", forbidden)
+		}
+	}
+	if strings.Contains(listResponse.Body.String(), "issuePrimaryToken") || strings.Contains(listResponse.Body.String(), "createLinkedToken") {
 		t.Fatalf("MCP tool listing exposed token management: %s", listResponse.Body.String())
 	}
-	callRequest := webTestRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":"call","method":"tools/call","params":{"name":"build_commit_message","arguments":{"type":"feat","description":"add mcp builder"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`))
+	callRequest := webTestRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":"call","method":"tools/call","params":{"name":"buildCommitMessage","arguments":{"type":"feat","description":"add mcp builder"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`))
 	callRequest.Header.Set("Authorization", "Bearer "+token)
 	callRequest.Header.Set("Content-Type", "application/json")
 	callRequest.Header.Set("Accept", "application/json, text/event-stream")
 	callRequest.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
 	callRequest.Header.Set("Mcp-Method", "tools/call")
-	callRequest.Header.Set("Mcp-Name", "build_commit_message")
+	callRequest.Header.Set("Mcp-Name", "buildCommitMessage")
 	callResponse := httptest.NewRecorder()
 	handler.ServeHTTP(callResponse, callRequest)
 	if callResponse.Code != http.StatusOK || !strings.Contains(callResponse.Body.String(), "feat: add mcp builder") {
 		t.Fatalf("MCP builder call returned %d: %s", callResponse.Code, callResponse.Body.String())
 	}
-	graphqlRequest := webTestRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":"graphql","method":"tools/call","params":{"name":"graphql_query","arguments":{"query":"{ missingField }"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`))
+	graphqlRequest := webTestRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":"graphql","method":"tools/call","params":{"name":"graphqlQuery","arguments":{"query":"{ missingField }"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}`))
 	graphqlRequest.Header.Set("Authorization", "Bearer "+token)
 	graphqlRequest.Header.Set("Content-Type", "application/json")
 	graphqlRequest.Header.Set("Accept", "application/json, text/event-stream")
 	graphqlRequest.Header.Set("MCP-Protocol-Version", mcpProtocolVersion)
 	graphqlRequest.Header.Set("Mcp-Method", "tools/call")
-	graphqlRequest.Header.Set("Mcp-Name", "graphql_query")
+	graphqlRequest.Header.Set("Mcp-Name", "graphqlQuery")
 	graphqlResponse := httptest.NewRecorder()
 	handler.ServeHTTP(graphqlResponse, graphqlRequest)
 	if graphqlResponse.Code != http.StatusOK || !strings.Contains(graphqlResponse.Body.String(), `"isError":true`) {
@@ -879,8 +884,7 @@ func TestSwaggerAndBrowserReferenceCoverCurrentRoutes(t *testing.T) {
 		"/api/v1/server/preferences/tokens", "/api/v1/server/preferences/tokens/primary",
 		"/api/v1/server/preferences/tokens/primary/reveal", "/api/v1/server/preferences/tokens/primary/rotate",
 		"/api/v1/server/preferences/tokens/{id}", "/api/v1/server/preferences/tokens/{id}/reveal",
-		"/api/v1/server/preferences/tokens/{id}/rotate", "/api/v1/server/metrics",
-		"/api/v1/server/metrics/prometheus", "/api/metrics/grafana", "/metrics/loki",
+		"/api/v1/server/preferences/tokens/{id}/rotate",
 	} {
 		if _, exists := schema.Paths[path]; !exists {
 			t.Errorf("OpenAPI JSON omitted registered API path %s", path)
@@ -888,14 +892,33 @@ func TestSwaggerAndBrowserReferenceCoverCurrentRoutes(t *testing.T) {
 	}
 	operationIDs := make(map[string]string)
 	for path, methods := range schema.Paths {
+		if strings.Contains(path, "/metrics") || strings.HasPrefix(path, "/metrics") {
+			t.Errorf("OpenAPI JSON exposed internal metrics route %s", path)
+		}
 		for method, raw := range methods {
 			var operation map[string]any
 			if err := json.Unmarshal(raw, &operation); err != nil {
 				t.Fatalf("decode %s %s operation: %v", method, path, err)
 			}
+			responses, ok := operation["responses"].(map[string]any)
+			if !ok {
+				t.Errorf("OpenAPI operation %s %s omitted responses", method, path)
+			} else {
+				success := responses["200"]
+				if success == nil {
+					success = responses["201"]
+				}
+				response, _ := success.(map[string]any)
+				content, _ := response["content"].(map[string]any)
+				if len(content) == 0 {
+					t.Errorf("OpenAPI success response for %s %s omitted content schema", method, path)
+				}
+			}
 			operationID, _ := operation["operationId"].(string)
 			if operationID == "" {
 				t.Errorf("OpenAPI operation %s %s omitted operationId", method, path)
+			} else if strings.Contains(operationID, "_") || operationID[0] < 'a' || operationID[0] > 'z' {
+				t.Errorf("OpenAPI operation %s %s has non-camelCase operationId %q", method, path, operationID)
 			} else if previousPath, exists := operationIDs[operationID]; exists {
 				t.Errorf("OpenAPI operationId %q is shared by %s and %s", operationID, previousPath, path)
 			} else {
@@ -906,6 +929,45 @@ func TestSwaggerAndBrowserReferenceCoverCurrentRoutes(t *testing.T) {
 				t.Errorf("protected token operation %s %s has no Bearer security", method, path)
 			}
 		}
+	}
+	createResponse := schema.Paths["/api/v1/server/preferences/tokens"]["post"]
+	var createOperation map[string]any
+	if err := json.Unmarshal(createResponse, &createOperation); err != nil {
+		t.Fatal(err)
+	}
+	createResponses := createOperation["responses"].(map[string]any)
+	created := createResponses["201"].(map[string]any)
+	createdContent := created["content"].(map[string]any)
+	createdSchema := createdContent["application/json"].(map[string]any)["schema"].(map[string]any)
+	createdData := createdSchema["properties"].(map[string]any)["data"].(map[string]any)
+	if _, exists := createdData["properties"].(map[string]any)["linked_token"]; !exists {
+		t.Fatal("linked-token create response schema omitted linked_token")
+	}
+	createdToken := createdData["properties"].(map[string]any)["token"].(map[string]any)
+	createdTokenID := createdToken["properties"].(map[string]any)["id"].(map[string]any)
+	if createdTokenID["type"] != "string" {
+		t.Fatalf("linked-token OpenAPI ID schema type = %v, want string", createdTokenID["type"])
+	}
+	revokeOperation := schema.Paths["/api/v1/server/preferences/tokens/{id}"]["delete"]
+	var revokeDoc map[string]any
+	if err := json.Unmarshal(revokeOperation, &revokeDoc); err != nil {
+		t.Fatal(err)
+	}
+	revokeResponse := revokeDoc["responses"].(map[string]any)["200"].(map[string]any)
+	revokeSchema := revokeResponse["content"].(map[string]any)["application/json"].(map[string]any)["schema"].(map[string]any)
+	revokeID := revokeSchema["properties"].(map[string]any)["data"].(map[string]any)["properties"].(map[string]any)["id"].(map[string]any)
+	if revokeID["type"] != "string" {
+		t.Fatalf("linked-token revoke OpenAPI ID schema type = %v, want string", revokeID["type"])
+	}
+	graphqlOperation := schema.Paths["/api/graphql"]["post"]
+	var graphqlDoc map[string]any
+	if err := json.Unmarshal(graphqlOperation, &graphqlDoc); err != nil {
+		t.Fatal(err)
+	}
+	graphqlResponses := graphqlDoc["responses"].(map[string]any)
+	graphqlSuccess := graphqlResponses["200"].(map[string]any)
+	if len(graphqlSuccess["content"].(map[string]any)) == 0 {
+		t.Fatal("GraphQL response schema is missing")
 	}
 	if _, exists := schema.Paths["/graphql"]; exists {
 		t.Fatal("OpenAPI JSON exposed the removed root GraphQL endpoint")
@@ -988,7 +1050,10 @@ func TestOpenAPIRoutesMatchIDEAContractAndRouter(t *testing.T) {
 	}
 
 	for _, route := range contract {
-		if _, exists := document.Paths[route.path][strings.ToLower(route.method)]; !exists {
+		_, exists := document.Paths[route.path][strings.ToLower(route.method)]
+		if route.internal && exists {
+			t.Errorf("internal IDEA.md route %s %s must not appear in OpenAPI", route.method, route.path)
+		} else if !route.internal && !exists {
 			t.Errorf("IDEA.md route %s %s is missing from OpenAPI", route.method, route.path)
 		}
 		body := io.Reader(nil)
@@ -1046,6 +1111,7 @@ type ideaAPIRoute struct {
 	method     string
 	path       string
 	routerPath string
+	internal   bool
 }
 
 func parseIDEAAPIRoutes(specification, apiVersion string) ([]ideaAPIRoute, error) {
@@ -1082,7 +1148,9 @@ func parseIDEAAPIRoutes(specification, apiVersion string) ([]ideaAPIRoute, error
 			}
 			for _, method := range methods {
 				for index, variant := range variants {
-					routes = append(routes, ideaAPIRoute{method: strings.TrimSpace(method), path: variant, routerPath: routerVariants[index]})
+					auth := strings.ToLower(columns[3])
+					internal := strings.Contains(auth, "service bearer token") || strings.Contains(strings.ToLower(columns[4]), "internal metrics")
+					routes = append(routes, ideaAPIRoute{method: strings.TrimSpace(method), path: variant, routerPath: routerVariants[index], internal: internal})
 				}
 			}
 		}
@@ -1097,7 +1165,7 @@ func TestMCPHelpPageAndAPIStayAligned(t *testing.T) {
 	mcpURL := BuildURL(request, APIBasePath()+"/server/mcp")
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, request)
-	for _, expected := range []string{`id="overview"`, `id="endpoint"`, `id="authentication"`, `id="connect"`, `id="tools"`, `id="limits"`, `id="troubleshooting"`, `id="project"`, "build_commit_message", "claude mcp add --transport http gitmessages " + mcpURL, "Mcp-Method: tools/list", `data-copy-text="` + BuildURL(request, "/mcp") + `"`} {
+	for _, expected := range []string{`id="overview"`, `id="endpoint"`, `id="authentication"`, `id="connect"`, `id="tools"`, `id="limits"`, `id="troubleshooting"`, `id="project"`, "buildCommitMessage", "claude mcp add --transport http gitmessages " + mcpURL, "Mcp-Method: tools/list", `data-copy-text="` + BuildURL(request, "/mcp") + `"`} {
 		if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), expected) {
 			t.Errorf("MCP help page missing %q: %d", expected, page.Code)
 		}
@@ -1107,7 +1175,7 @@ func TestMCPHelpPageAndAPIStayAligned(t *testing.T) {
 	}
 	api := httptest.NewRecorder()
 	handler.ServeHTTP(api, webTestRequest(http.MethodGet, "/api/v1/server/help/mcp", nil))
-	for _, expected := range []string{"/api/v1/server/mcp", "list_commit_types", "build_commit_message", `"scheme": "Bearer"`, `"project"`} {
+	for _, expected := range []string{"/api/v1/server/mcp", "listCommitTypes", "buildCommitMessage", `"scheme": "Bearer"`, `"project"`} {
 		if api.Code != http.StatusOK || !strings.Contains(api.Body.String(), expected) {
 			t.Errorf("MCP help API missing %q: %d", expected, api.Code)
 		}

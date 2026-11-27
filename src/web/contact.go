@@ -45,7 +45,6 @@ func ConfigureContact(store *database.Store) {
 
 func registerContactRoutes(mux routeRegistrar) {
 	mux.HandleFunc("/server/contact", contactPage)
-	mux.HandleFunc(APIBasePath()+"/server/contact", apiContact)
 	mux.HandleFunc("/server/security", contactSecurityPage)
 	mux.HandleFunc("/server/security/policy", securityPolicyPage)
 	mux.HandleFunc("/server/security/thanks", securityThanksPage)
@@ -55,10 +54,6 @@ func registerContactRoutes(mux routeRegistrar) {
 	mux.HandleFunc("/.well-known/llms.txt", llmsTxt)
 	mux.HandleFunc("/llms.txt", llmsTxt)
 	mux.HandleFunc("/.well-known/pgp-key.asc", pgpKeyPage)
-	mux.HandleFunc(APIBasePath()+"/server/security", apiContactSecurity)
-	mux.HandleFunc(APIBasePath()+"/server/security/policy", apiSecurityPolicy)
-	mux.HandleFunc(APIBasePath()+"/server/security/thanks", apiSecurityThanks)
-	mux.HandleFunc(APIBasePath()+"/server/dpo", apiDPO)
 }
 
 func contactInputSchema() map[string]any {
@@ -858,23 +853,21 @@ func llmsTextBody(r *http.Request) string {
 	body.WriteString("\n## Endpoints\n")
 	fmt.Fprintf(&body, "- GET %s - Health check page (no auth)\n- GET %s - Server information page (no auth)\n", BuildURL(r, "/server/healthz"), BuildURL(r, "/server/about"))
 	for _, operation := range apiOperationDefinitions(r) {
-		if !apiOperationVisibleNow(operation) {
+		if !apiOperationListedNow(operation) {
 			continue
 		}
-		if operation.path == APIBasePath()+"/server/contact" || strings.Contains(operation.path, "/server/metrics") {
+		if operation.Path == APIBasePath()+"/server/contact" || strings.HasPrefix(operation.OperationID, "mcpEndpoint") {
 			continue
 		}
-		description := strings.TrimSpace(operation.summary)
+		description := strings.TrimSpace(operation.Summary)
 		if description == "" {
-			description = operation.name
+			description = operation.OperationID
 		}
-		fmt.Fprintf(&body, "- %s %s - %s\n", operation.method, BuildURL(r, operation.path), description)
+		if operation.Auth != "" && operation.Auth != "none" {
+			description += " (" + operation.Auth + " authentication)"
+		}
+		fmt.Fprintf(&body, "- %s %s - %s\n", operation.Method, BuildURL(r, operation.Path), description)
 	}
-	tokenAPI := BuildURL(r, APIBasePath()+"/server/preferences/tokens")
-	primaryAPI := BuildURL(r, APIBasePath()+"/server/preferences/tokens/primary")
-	fmt.Fprintf(&body, "- POST %s - Issue an owner token (no auth)\n- GET %s - List tokens (primary Bearer token)\n- POST %s - Create a linked token (primary Bearer token)\n", primaryAPI, tokenAPI, tokenAPI)
-	fmt.Fprintf(&body, "- POST %s - Reveal the primary token (primary Bearer token)\n- POST %s - Rotate the primary token (primary Bearer token)\n- DELETE %s - Delete the owner and all tokens; the JSON confirm field must contain the primary token's last four characters\n", BuildURL(r, APIBasePath()+"/server/preferences/tokens/primary/reveal"), BuildURL(r, APIBasePath()+"/server/preferences/tokens/primary/rotate"), BuildURL(r, APIBasePath()+"/server/preferences/tokens/primary"))
-	fmt.Fprintf(&body, "- POST %s - Reveal a linked token (primary Bearer token)\n- POST %s - Rotate a linked token (primary Bearer token)\n- PATCH %s - Rename or change expiry (primary Bearer token)\n- DELETE %s - Revoke a linked token (primary Bearer token)\n", BuildURL(r, APIBasePath()+"/server/preferences/tokens/{id}/reveal"), BuildURL(r, APIBasePath()+"/server/preferences/tokens/{id}/rotate"), BuildURL(r, APIBasePath()+"/server/preferences/tokens/{id}"), BuildURL(r, APIBasePath()+"/server/preferences/tokens/{id}"))
 	fmt.Fprintf(&body, "- POST %s - MCP endpoint (Bearer token required)\n", BuildURL(r, APIBasePath()+"/server/mcp"))
 	body.WriteString("\n## Capabilities\n- Browse commit types, conventions, and templates\n- Retrieve random examples\n- Build a commit message without submitting it to the server\n\n## Contact\nAPI issues: consult the API documentation\n")
 	_, fqdn, _ := GetURLVars(r)

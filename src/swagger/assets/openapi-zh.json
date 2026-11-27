@@ -17,13 +17,91 @@
     "/api/autodiscover": {
       "get": {
         "description": "资源",
-        "operationId": "get_api_autodiscover",
+        "operationId": "getApiAutodiscover",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "api": {
+                          "properties": {
+                            "current_version": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "cli_min_version": {
+                          "type": "string"
+                        },
+                        "cli_versions": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "urls": {
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "version": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "资源"
           },
-          "400": {
-            "description": "请求无效"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "REST API"
@@ -32,7 +110,7 @@
     "/api/graphql": {
       "post": {
         "description": "使用 GraphiQL 浏览公开提交目录。也提供无需 JavaScript 的查询表单。",
-        "operationId": "graphql_query_api_graphql",
+        "operationId": "graphqlQueryApiGraphql",
         "requestBody": {
           "content": {
             "application/json": {
@@ -59,6 +137,30 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
             "description": "使用 GraphiQL 浏览公开提交目录。也提供无需 JavaScript 的查询表单。"
           }
         },
@@ -68,13 +170,199 @@
     "/api/healthz": {
       "get": {
         "description": "服务运行正常",
-        "operationId": "get_api_healthz",
+        "operationId": "getApiHealthz",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "build": {
+                      "properties": {
+                        "commit": {
+                          "type": "string"
+                        },
+                        "date": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "commit",
+                        "date"
+                      ],
+                      "type": "object"
+                    },
+                    "checks": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "features": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "go_version": {
+                      "type": "string"
+                    },
+                    "maintenance": {
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "self_healing": {
+                          "properties": {
+                            "attempts": {
+                              "type": "integer"
+                            },
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "exhausted": {
+                              "type": "boolean"
+                            },
+                            "last_attempt": {
+                              "type": "string"
+                            },
+                            "next_attempt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "enabled",
+                            "exhausted",
+                            "attempts",
+                            "last_attempt",
+                            "next_attempt"
+                          ],
+                          "type": "object"
+                        },
+                        "since": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "reason",
+                        "message",
+                        "since",
+                        "self_healing"
+                      ],
+                      "type": "object"
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "pending_restart": {
+                      "type": "boolean"
+                    },
+                    "project": {
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "tagline": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "tagline",
+                        "description"
+                      ],
+                      "type": "object"
+                    },
+                    "restart_reason": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "stats": {
+                      "properties": {
+                        "active_connections": {
+                          "type": "integer"
+                        },
+                        "requests_24h": {
+                          "type": "integer"
+                        },
+                        "requests_total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "requests_total",
+                        "requests_24h",
+                        "active_connections"
+                      ],
+                      "type": "object"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string"
+                    },
+                    "uptime": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project",
+                    "status",
+                    "version",
+                    "go_version",
+                    "build",
+                    "mode",
+                    "uptime",
+                    "timestamp",
+                    "features",
+                    "checks",
+                    "stats"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "服务运行正常"
           },
-          "400": {
-            "description": "请求无效"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "服务状态"
@@ -83,7 +371,7 @@
     "/api/mcp": {
       "post": {
         "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。",
-        "operationId": "mcp_endpoint_api_mcp",
+        "operationId": "mcpEndpointApiMcp",
         "parameters": [
           {
             "in": "header",
@@ -178,9 +466,106 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "_meta": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "data": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "id": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "jsonrpc": {
+                      "type": "string"
+                    },
+                    "result": {}
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。"
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "_meta": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "data": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "id": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "jsonrpc": {
+                      "type": "string"
+                    },
+                    "result": {}
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
           },
           "403": {
@@ -207,100 +592,78 @@
         "summary": "Git Messages MCP 连接帮助"
       }
     },
-    "/api/metrics": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_metrics_api_metrics",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/api/metrics/grafana": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_metrics_api_metrics_grafana",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/api/metrics/loki": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_metrics_api_metrics_loki",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/api/metrics/prometheus": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_metrics_api_metrics_prometheus",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
     "/api/swagger": {
       "get": {
         "description": "REST API",
-        "operationId": "get_api_swagger",
+        "operationId": "getApiSwagger",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "components": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "info": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "openapi": {
+                      "type": "string"
+                    },
+                    "paths": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "servers": {
+                      "items": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
             "description": "REST API"
           },
-          "400": {
-            "description": "请求无效"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "OpenAPI"
@@ -309,10 +672,80 @@
     "/api/v1": {
       "get": {
         "description": "资源",
-        "operationId": "get_api_index",
+        "operationId": "getApiIndex",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "resources": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "server": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "version": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "资源"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "REST API"
@@ -321,10 +754,83 @@
     "/api/v1/conventions": {
       "get": {
         "description": "受支持的提交约定。",
-        "operationId": "list_conventions",
+        "operationId": "listConventions",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "properties": {
+                          "description": {
+                            "type": "string"
+                          },
+                          "example": {
+                            "type": "string"
+                          },
+                          "format": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "description",
+                          "format",
+                          "example"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "受支持的提交约定。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "列出约定"
@@ -333,7 +839,7 @@
     "/api/v1/messages": {
       "post": {
         "description": "格式化后的提交消息。",
-        "operationId": "build_commit_message",
+        "operationId": "buildCommitMessage",
         "requestBody": {
           "content": {
             "application/json": {
@@ -380,10 +886,92 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "格式化后的提交消息。"
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "请求包含无效的消息字段。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "构建提交消息"
@@ -392,10 +980,68 @@
     "/api/v1/messages/random": {
       "get": {
         "description": "随机提交消息示例。",
-        "operationId": "get_random_example",
+        "operationId": "getRandomExample",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "随机提交消息示例。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "获取随机示例消息"
@@ -404,10 +1050,71 @@
     "/api/v1/server/about": {
       "get": {
         "description": "Git Messages 是精选的提交消息规范参考工具，也可用于编写清晰的消息。",
-        "operationId": "get_about",
+        "operationId": "getAbout",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        },
+                        "format": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Git Messages 是精选的提交消息规范参考工具，也可用于编写清晰的消息。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "关于 Git Messages"
@@ -416,17 +1123,115 @@
     "/api/v1/server/contact": {
       "get": {
         "description": "Returns report-form descriptors and a one-use captcha challenge",
-        "operationId": "get_contact_form",
+        "operationId": "getContactForm",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "abuse_email": {
+                          "type": "string"
+                        },
+                        "captcha": {
+                          "properties": {
+                            "challenge": {
+                              "type": "string"
+                            },
+                            "expires_at": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "fields": {
+                          "items": {
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "required": {
+                                "type": "boolean"
+                              },
+                              "type": {
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "form_token": {
+                          "type": "string"
+                        },
+                        "security_url": {
+                          "type": "string"
+                        },
+                        "types": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Returns report-form descriptors and a one-use captcha challenge"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Contact report form"
       },
       "post": {
         "description": "Uses a submit and confirm review flow",
-        "operationId": "submit_contact_report",
+        "operationId": "submitContactReport",
         "requestBody": {
           "content": {
             "application/json": {
@@ -489,10 +1294,115 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "confirm_after_seconds": {
+                          "type": "integer"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "review": {
+                          "properties": {
+                            "email": {
+                              "type": "string"
+                            },
+                            "subject": {
+                              "type": "string"
+                            },
+                            "type": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "review_token": {
+                          "type": "string"
+                        },
+                        "tracking_id": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Uses a submit and confirm review flow"
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "请求包含无效的消息字段。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Submit a contact report"
@@ -501,10 +1411,71 @@
     "/api/v1/server/dpo": {
       "get": {
         "description": "Public DPO contact information",
-        "operationId": "get_data_protection_contact",
+        "operationId": "getDataProtectionContact",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "email": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "privacy_url": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Public DPO contact information"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Data protection contact"
@@ -513,7 +1484,7 @@
     "/api/v1/server/graphql": {
       "post": {
         "description": "使用 GraphiQL 浏览公开提交目录。也提供无需 JavaScript 的查询表单。",
-        "operationId": "graphql_query_api_v1_server_graphql",
+        "operationId": "graphqlQuery",
         "requestBody": {
           "content": {
             "application/json": {
@@ -540,7 +1511,91 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "errors": {
+                      "items": {
+                        "properties": {
+                          "message": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
             "description": "使用 GraphiQL 浏览公开提交目录。也提供无需 JavaScript 的查询表单。"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "请求包含无效的消息字段。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "GraphQL"
@@ -549,10 +1604,199 @@
     "/api/v1/server/healthz": {
       "get": {
         "description": "服务运行正常",
-        "operationId": "get_health",
+        "operationId": "getHealth",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "build": {
+                      "properties": {
+                        "commit": {
+                          "type": "string"
+                        },
+                        "date": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "commit",
+                        "date"
+                      ],
+                      "type": "object"
+                    },
+                    "checks": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "features": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "go_version": {
+                      "type": "string"
+                    },
+                    "maintenance": {
+                      "properties": {
+                        "message": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "self_healing": {
+                          "properties": {
+                            "attempts": {
+                              "type": "integer"
+                            },
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "exhausted": {
+                              "type": "boolean"
+                            },
+                            "last_attempt": {
+                              "type": "string"
+                            },
+                            "next_attempt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "enabled",
+                            "exhausted",
+                            "attempts",
+                            "last_attempt",
+                            "next_attempt"
+                          ],
+                          "type": "object"
+                        },
+                        "since": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "reason",
+                        "message",
+                        "since",
+                        "self_healing"
+                      ],
+                      "type": "object"
+                    },
+                    "mode": {
+                      "type": "string"
+                    },
+                    "pending_restart": {
+                      "type": "boolean"
+                    },
+                    "project": {
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "tagline": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "tagline",
+                        "description"
+                      ],
+                      "type": "object"
+                    },
+                    "restart_reason": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "stats": {
+                      "properties": {
+                        "active_connections": {
+                          "type": "integer"
+                        },
+                        "requests_24h": {
+                          "type": "integer"
+                        },
+                        "requests_total": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "requests_total",
+                        "requests_24h",
+                        "active_connections"
+                      ],
+                      "type": "object"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "type": "string"
+                    },
+                    "uptime": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "project",
+                    "status",
+                    "version",
+                    "go_version",
+                    "build",
+                    "mode",
+                    "uptime",
+                    "timestamp",
+                    "features",
+                    "checks",
+                    "stats"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "服务运行正常"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "服务状态"
@@ -561,10 +1805,85 @@
     "/api/v1/server/help": {
       "get": {
         "description": "查看",
-        "operationId": "get_help",
+        "operationId": "getHelp",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        },
+                        "format": {
+                          "type": "string"
+                        },
+                        "pages": {
+                          "items": {
+                            "properties": {
+                              "title": {
+                                "type": "string"
+                              },
+                              "url": {
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "title": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "查看"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "帮助"
@@ -573,10 +1892,99 @@
     "/api/v1/server/help/mcp": {
       "get": {
         "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。",
-        "operationId": "get_mcp_help",
+        "operationId": "getMcpHelp",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "aliases": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "auth": {
+                          "properties": {
+                            "scheme": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "enabled": {
+                          "type": "boolean"
+                        },
+                        "project": {
+                          "type": "string"
+                        },
+                        "tools": {
+                          "items": {
+                            "properties": {
+                              "description": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "url": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Git Messages MCP 连接帮助"
@@ -585,7 +1993,7 @@
     "/api/v1/server/mcp": {
       "post": {
         "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。",
-        "operationId": "mcp_endpoint_api_v1_server_mcp",
+        "operationId": "mcpEndpoint",
         "parameters": [
           {
             "in": "header",
@@ -680,9 +2088,106 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "_meta": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "data": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "id": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "jsonrpc": {
+                      "type": "string"
+                    },
+                    "result": {}
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。"
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "_meta": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "data": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "id": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "jsonrpc": {
+                      "type": "string"
+                    },
+                    "result": {}
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
           },
           "403": {
@@ -709,104 +2214,99 @@
         "summary": "Git Messages MCP 连接帮助"
       }
     },
-    "/api/v1/server/metrics": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_metrics_api_v1_server_metrics",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/api/v1/server/metrics/grafana": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_metrics_api_v1_server_metrics_grafana",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/api/v1/server/metrics/loki": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_metrics_api_v1_server_metrics_loki",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/api/v1/server/metrics/prometheus": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_metrics_api_v1_server_metrics_prometheus",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
     "/api/v1/server/preferences": {
       "get": {
         "description": "偏好设置",
-        "operationId": "get_preferences",
+        "operationId": "getPreferences",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "applied": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "consent_required": {
+                          "type": "boolean"
+                        },
+                        "ignored": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "lang": {
+                          "type": "string"
+                        },
+                        "prefs": {
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "theme": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "偏好设置"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "偏好设置"
       },
       "post": {
         "description": "偏好设置",
-        "operationId": "save_preferences",
+        "operationId": "savePreferences",
         "requestBody": {
           "content": {
             "application/json": {
@@ -833,10 +2333,116 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "applied": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "consent_required": {
+                          "type": "boolean"
+                        },
+                        "ignored": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "lang": {
+                          "type": "string"
+                        },
+                        "prefs": {
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "theme": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "偏好设置"
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "请求包含无效的消息字段。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "保存"
@@ -845,10 +2451,80 @@
     "/api/v1/server/preferences/sync": {
       "get": {
         "description": "将偏好设置移至另一台设备。",
-        "operationId": "get_preferences_sync",
+        "operationId": "getPreferencesSync",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "lang": {
+                          "type": "string"
+                        },
+                        "prefs": {
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "theme": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "将偏好设置移至另一台设备。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "同步偏好设置"
@@ -857,10 +2533,89 @@
     "/api/v1/server/preferences/sync/import": {
       "get": {
         "description": "将偏好设置移至另一台设备。",
-        "operationId": "import_preferences_sync",
+        "operationId": "importPreferencesSync",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "applied": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "consent_required": {
+                          "type": "boolean"
+                        },
+                        "ignored": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "lang": {
+                          "type": "string"
+                        },
+                        "prefs": {
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "type": "object"
+                        },
+                        "theme": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "将偏好设置移至另一台设备。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "导入"
@@ -869,13 +2624,118 @@
     "/api/v1/server/preferences/tokens": {
       "get": {
         "description": "所有者令牌",
-        "operationId": "list_owner_tokens",
+        "operationId": "listOwnerTokens",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "linked": {
+                          "items": {
+                            "properties": {
+                              "created_at": {
+                                "type": "string"
+                              },
+                              "expires_at": {},
+                              "id": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "last_used_at": {},
+                              "name": {
+                                "type": "string"
+                              },
+                              "status": {
+                                "type": "string"
+                              },
+                              "token_masked": {
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "max_linked": {
+                          "type": "integer"
+                        },
+                        "primary": {
+                          "properties": {
+                            "created_at": {
+                              "type": "string"
+                            },
+                            "expires_at": {},
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "last_used_at": {},
+                            "name": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "token_masked": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "所有者令牌"
           },
-          "400": {
-            "description": "请求无效"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -887,14 +2747,20 @@
       },
       "post": {
         "description": "可完全访问你的{resources}。请妥善保密。",
-        "operationId": "create_linked_token",
+        "operationId": "createLinkedToken",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
                 "additionalProperties": false,
+                "not": {
+                  "required": [
+                    "expires",
+                    "expires_on"
+                  ]
+                },
                 "properties": {
-                  "expiry": {
+                  "expires": {
                     "enum": [
                       "never",
                       "7d",
@@ -904,12 +2770,26 @@
                     ],
                     "type": "string"
                   },
+                  "expires_on": {
+                    "format": "date",
+                    "type": "string"
+                  },
                   "name": {
                     "maxLength": 64,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "scope": {
+                    "enum": [
+                      "read",
+                      "read-write"
+                    ],
+                    "type": "string"
                   }
                 },
+                "required": [
+                  "name"
+                ],
                 "type": "object"
               }
             }
@@ -917,11 +2797,118 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "linked_token": {
+                          "type": "string"
+                        },
+                        "token": {
+                          "properties": {
+                            "created_at": {
+                              "type": "string"
+                            },
+                            "expires_at": {},
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "last_used_at": {},
+                            "name": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "token_masked": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "可完全访问你的{resources}。请妥善保密。"
           },
           "400": {
-            "description": "请求无效"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "请求包含无效的消息字段。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -935,7 +2922,7 @@
     "/api/v1/server/preferences/tokens/primary": {
       "delete": {
         "description": "这会删除 {linked} 个关联令牌和 {resources}，包括使用关联令牌创建的所有内容。",
-        "operationId": "revoke_primary_token",
+        "operationId": "revokePrimaryToken",
         "requestBody": {
           "content": {
             "application/json": {
@@ -959,10 +2946,65 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "resources": {
+                          "type": "integer"
+                        },
+                        "tokens": {
+                          "type": "integer"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "这会删除 {linked} 个关联令牌和 {resources}，包括使用关联令牌创建的所有内容。"
           },
-          "400": {
-            "description": "请求无效"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -974,13 +3016,95 @@
       },
       "post": {
         "description": "主令牌",
-        "operationId": "issue_primary_token",
+        "operationId": "issuePrimaryToken",
         "responses": {
-          "200": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "owner_token": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "主令牌"
           },
           "400": {
-            "description": "请求无效"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "请求包含无效的消息字段。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "新令牌"
@@ -989,13 +3113,95 @@
     "/api/v1/server/preferences/tokens/primary/reveal": {
       "post": {
         "description": "此页面加载时仅显示一次。",
-        "operationId": "reveal_primary_token",
+        "operationId": "revealPrimaryToken",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "owner_token": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "此页面加载时仅显示一次。"
           },
           "400": {
-            "description": "请求无效"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "请求包含无效的消息字段。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -1009,13 +3215,95 @@
     "/api/v1/server/preferences/tokens/primary/rotate": {
       "post": {
         "description": "主令牌",
-        "operationId": "rotate_primary_token",
+        "operationId": "rotatePrimaryToken",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "owner_token": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "主令牌"
           },
           "400": {
-            "description": "请求无效"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "请求包含无效的消息字段。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -1029,7 +3317,7 @@
     "/api/v1/server/preferences/tokens/{id}": {
       "delete": {
         "description": "撤销",
-        "operationId": "revoke_linked_token",
+        "operationId": "revokeLinkedToken",
         "parameters": [
           {
             "in": "path",
@@ -1042,10 +3330,65 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "撤销"
           },
-          "400": {
-            "description": "请求无效"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -1057,7 +3400,7 @@
       },
       "patch": {
         "description": "保存",
-        "operationId": "update_linked_token",
+        "operationId": "updateLinkedToken",
         "parameters": [
           {
             "in": "path",
@@ -1073,8 +3416,14 @@
             "application/json": {
               "schema": {
                 "additionalProperties": false,
+                "not": {
+                  "required": [
+                    "expires",
+                    "expires_on"
+                  ]
+                },
                 "properties": {
-                  "expiry": {
+                  "expires": {
                     "enum": [
                       "never",
                       "7d",
@@ -1082,6 +3431,10 @@
                       "90d",
                       "1y"
                     ],
+                    "type": "string"
+                  },
+                  "expires_on": {
+                    "format": "date",
                     "type": "string"
                   },
                   "name": {
@@ -1098,10 +3451,79 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "created_at": {
+                          "type": "string"
+                        },
+                        "expires_at": {},
+                        "id": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string"
+                        },
+                        "last_used_at": {},
+                        "name": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "token_masked": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "保存"
           },
-          "400": {
-            "description": "请求无效"
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -1115,7 +3537,7 @@
     "/api/v1/server/preferences/tokens/{id}/reveal": {
       "post": {
         "description": "此页面加载时仅显示一次。",
-        "operationId": "reveal_linked_token",
+        "operationId": "revealLinkedToken",
         "parameters": [
           {
             "in": "path",
@@ -1128,10 +3550,117 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "linked_token": {
+                          "type": "string"
+                        },
+                        "token": {
+                          "properties": {
+                            "created_at": {
+                              "type": "string"
+                            },
+                            "expires_at": {},
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "last_used_at": {},
+                            "name": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "token_masked": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "此页面加载时仅显示一次。"
           },
           "400": {
-            "description": "请求无效"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "请求包含无效的消息字段。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -1145,7 +3674,7 @@
     "/api/v1/server/preferences/tokens/{id}/rotate": {
       "post": {
         "description": "主令牌",
-        "operationId": "rotate_linked_token",
+        "operationId": "rotateLinkedToken",
         "parameters": [
           {
             "in": "path",
@@ -1158,10 +3687,117 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "linked_token": {
+                          "type": "string"
+                        },
+                        "token": {
+                          "properties": {
+                            "created_at": {
+                              "type": "string"
+                            },
+                            "expires_at": {},
+                            "id": {
+                              "type": "string"
+                            },
+                            "kind": {
+                              "type": "string"
+                            },
+                            "last_used_at": {},
+                            "name": {
+                              "type": "string"
+                            },
+                            "status": {
+                              "type": "string"
+                            },
+                            "token_masked": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "主令牌"
           },
           "400": {
-            "description": "请求无效"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "请求包含无效的消息字段。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "security": [
@@ -1175,10 +3811,226 @@
     "/api/v1/server/privacy": {
       "get": {
         "description": "此服务提供静态精选的提交规范目录，不提供用户账户、不接收用户提交，也不保存个人数据。服务器运营者可能会处理运行日志。",
-        "operationId": "get_privacy",
+        "operationId": "getPrivacy",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "ccpa": {
+                          "properties": {
+                            "applicable": {
+                              "type": "boolean"
+                            },
+                            "opt_out_url": {
+                              "type": "string"
+                            },
+                            "user_opted_out": {
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "content": {
+                          "properties": {
+                            "consent_message": {
+                              "type": "string"
+                            },
+                            "data_collection": {
+                              "type": "string"
+                            },
+                            "data_security": {
+                              "type": "string"
+                            },
+                            "data_usage": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "cookies": {
+                          "properties": {
+                            "analytics": {
+                              "properties": {
+                                "description": {
+                                  "type": "string"
+                                },
+                                "enabled": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "essential": {
+                              "properties": {
+                                "description": {
+                                  "type": "string"
+                                },
+                                "enabled": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "preferences": {
+                              "properties": {
+                                "description": {
+                                  "type": "string"
+                                },
+                                "enabled": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "type": "object"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "data": {
+                          "properties": {
+                            "sharing": {
+                              "items": {
+                                "properties": {
+                                  "condition": {
+                                    "type": "string"
+                                  },
+                                  "data": {
+                                    "type": "string"
+                                  },
+                                  "when": {
+                                    "type": "string"
+                                  }
+                                },
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "sold": {
+                              "type": "boolean"
+                            },
+                            "stored_on_server": {
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "retention": {
+                          "properties": {
+                            "deletion_available": {
+                              "type": "boolean"
+                            },
+                            "export_available": {
+                              "type": "boolean"
+                            },
+                            "period": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "summary": {
+                          "properties": {
+                            "data_sold": {
+                              "type": "boolean"
+                            },
+                            "data_stored_on_server": {
+                              "type": "boolean"
+                            },
+                            "user_control": {
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "third_party": {
+                          "properties": {
+                            "services": {
+                              "items": {
+                                "properties": {
+                                  "data_sent": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "policy_url": {
+                                    "type": "string"
+                                  },
+                                  "purpose": {
+                                    "type": "string"
+                                  }
+                                },
+                                "type": "object"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "tracking": {
+                          "properties": {
+                            "enabled": {
+                              "type": "boolean"
+                            },
+                            "type": {
+                              "type": "string"
+                            },
+                            "type_name": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "此服务提供静态精选的提交规范目录，不提供用户账户、不接收用户提交，也不保存个人数据。服务器运营者可能会处理运行日志。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "隐私"
@@ -1187,10 +4039,102 @@
     "/api/v1/server/security": {
       "get": {
         "description": "请通过 GitHub 私密漏洞报告渠道报告漏洞。请勿在公开问题中发布利用细节。",
-        "operationId": "get_security",
+        "operationId": "getSecurity",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "contacts": {
+                          "items": {
+                            "properties": {
+                              "type": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "expires": {
+                          "type": "string"
+                        },
+                        "pgp": {
+                          "properties": {
+                            "available": {
+                              "type": "boolean"
+                            },
+                            "fingerprint": {
+                              "type": "string"
+                            },
+                            "url": {
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "policy_url": {
+                          "type": "string"
+                        },
+                        "report_url": {
+                          "type": "string"
+                        },
+                        "thanks_url": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "请通过 GitHub 私密漏洞报告渠道报告漏洞。请勿在公开问题中发布利用细节。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "安全"
@@ -1199,10 +4143,65 @@
     "/api/v1/server/security/policy": {
       "get": {
         "description": "Public coordinated-disclosure policy",
-        "operationId": "get_security_policy",
+        "operationId": "getSecurityPolicy",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "policy": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Public coordinated-disclosure policy"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Security disclosure policy"
@@ -1211,10 +4210,84 @@
     "/api/v1/server/security/thanks": {
       "get": {
         "description": "Public researcher acknowledgments",
-        "operationId": "get_security_thanks",
+        "operationId": "getSecurityThanks",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "entries": {
+                          "items": {
+                            "properties": {
+                              "credit": {
+                                "type": "string"
+                              },
+                              "date": {
+                                "type": "string"
+                              },
+                              "severity": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "credit",
+                              "date",
+                              "severity"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Public researcher acknowledgments"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "Security acknowledgments"
@@ -1223,10 +4296,75 @@
     "/api/v1/server/swagger": {
       "get": {
         "description": "REST API",
-        "operationId": "get_openapi",
+        "operationId": "getOpenAPI",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "components": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "info": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "openapi": {
+                      "type": "string"
+                    },
+                    "paths": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "servers": {
+                      "items": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
             "description": "REST API"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "OpenAPI"
@@ -1235,10 +4373,71 @@
     "/api/v1/server/terms": {
       "get": {
         "description": "此目录仅供参考。使用生成的消息前，请检查所选规范和仓库的贡献规则。",
-        "operationId": "get_terms",
+        "operationId": "getTerms",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "content": {
+                          "type": "string"
+                        },
+                        "format": {
+                          "type": "string"
+                        },
+                        "title": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "此目录仅供参考。使用生成的消息前，请检查所选规范和仓库的贡献规则。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "条款"
@@ -1247,10 +4446,79 @@
     "/api/v1/templates": {
       "get": {
         "description": "精选的消息模板。",
-        "operationId": "list_templates",
+        "operationId": "listTemplates",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "properties": {
+                          "category": {
+                            "type": "string"
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "message",
+                          "category"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "精选的消息模板。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "列出消息模板"
@@ -1259,10 +4527,76 @@
     "/api/v1/templates/random": {
       "get": {
         "description": "随机消息模板。",
-        "operationId": "get_random_template",
+        "operationId": "getRandomTemplate",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "category": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "message",
+                        "category"
+                      ],
+                      "type": "object"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "随机消息模板。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "获取随机模板"
@@ -1271,10 +4605,87 @@
     "/api/v1/types": {
       "get": {
         "description": "提交类型目录。",
-        "operationId": "list_commit_types",
+        "operationId": "listCommitTypes",
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "items": {
+                        "properties": {
+                          "breaking": {
+                            "type": "boolean"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "emoji": {
+                            "type": "string"
+                          },
+                          "example": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "type",
+                          "description",
+                          "emoji",
+                          "example",
+                          "breaking"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "提交类型目录。"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "details": {
+                      "type": "object"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "const": false,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "api.error"
           }
         },
         "summary": "列出提交类型"
@@ -1283,7 +4694,7 @@
     "/cli/binaries/{binary}": {
       "get": {
         "description": "REST API",
-        "operationId": "download_cli_binary",
+        "operationId": "downloadCliBinary",
         "parameters": [
           {
             "in": "path",
@@ -1316,7 +4727,7 @@
     "/mcp": {
       "post": {
         "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。",
-        "operationId": "mcp_endpoint_mcp",
+        "operationId": "mcpEndpointMcp",
         "parameters": [
           {
             "in": "header",
@@ -1411,9 +4822,106 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "_meta": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "data": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "id": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "jsonrpc": {
+                      "type": "string"
+                    },
+                    "result": {}
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "description": "使用 Streamable HTTP 连接公共目录和无状态消息生成器。"
           },
           "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "_meta": {
+                      "additionalProperties": {},
+                      "type": "object"
+                    },
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "data": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    },
+                    "id": {
+                      "items": {
+                        "type": "integer"
+                      },
+                      "type": "array"
+                    },
+                    "jsonrpc": {
+                      "type": "string"
+                    },
+                    "result": {}
+                  },
+                  "required": [
+                    "jsonrpc",
+                    "id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
             "description": "Invalid JSON-RPC request, unsupported version, or header mismatch."
           },
           "403": {
@@ -1438,174 +4946,6 @@
           }
         ],
         "summary": "Git Messages MCP 连接帮助"
-      }
-    },
-    "/metrics": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_root_metrics_metrics",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.root.enabled"
-      }
-    },
-    "/metrics/grafana": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_root_metrics_metrics_grafana",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.root.enabled"
-      }
-    },
-    "/metrics/loki": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_root_metrics_metrics_loki",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.root.enabled"
-      }
-    },
-    "/metrics/prometheus": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_root_metrics_metrics_prometheus",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.root.enabled"
-      }
-    },
-    "/server/metrics": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_metrics_server_metrics",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/server/metrics/grafana": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_metrics_server_metrics_grafana",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/server/metrics/loki": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_metrics_server_metrics_loki",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.enabled"
-      }
-    },
-    "/server/metrics/prometheus": {
-      "get": {
-        "description": "需要身份验证的内部指标端点",
-        "operationId": "get_metrics_server_metrics_prometheus",
-        "responses": {
-          "200": {
-            "description": "需要身份验证的内部指标端点"
-          },
-          "400": {
-            "description": "请求无效"
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "summary": "指标服务",
-        "x-mounted-when": "server.metrics.enabled"
       }
     }
   },

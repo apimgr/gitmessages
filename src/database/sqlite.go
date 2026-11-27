@@ -2,7 +2,9 @@ package database
 
 import (
 	"context"
+	crand "crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -397,16 +399,107 @@ func (s *Store) migrateAPITokens(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("inspect API token schema: %w", err)
 	}
-	if columns["token_last4"] {
-		return nil
+	columnTypes, err := tableColumnTypes(ctx, s.read, "api_tokens")
+	if err != nil {
+		return fmt.Errorf("inspect API token column types: %w", err)
 	}
-	if err := s.Write(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `ALTER TABLE api_tokens ADD COLUMN token_last4 TEXT NOT NULL DEFAULT ''`)
+	if !columns["token_last4"] {
+		if err := s.Write(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `ALTER TABLE api_tokens ADD COLUMN token_last4 TEXT NOT NULL DEFAULT ''`)
+			return err
+		}); err != nil {
+			return fmt.Errorf("add api_tokens.token_last4: %w", err)
+		}
+	}
+	if !columns["scope"] {
+		if err := s.Write(ctx, func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `ALTER TABLE api_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'read-write' CHECK (scope IN ('read', 'read-write', 'global'))`); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `UPDATE api_tokens SET scope='global' WHERE kind='primary'`)
+			return err
+		}); err != nil {
+			return fmt.Errorf("migrate api_tokens.scope: %w", err)
+		}
+	} else if err := s.Write(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE api_tokens SET scope='global' WHERE kind='primary' AND (scope IS NULL OR scope<>'global')`)
 		return err
 	}); err != nil {
-		return fmt.Errorf("add api_tokens.token_last4: %w", err)
+		return fmt.Errorf("normalize primary API token scopes: %w", err)
+	}
+	if strings.EqualFold(columnTypes["id"], "INTEGER") {
+		if err := s.Write(ctx, func(tx *sql.Tx) error {
+			if !columns["public_id"] {
+				if _, err := tx.ExecContext(ctx, `ALTER TABLE api_tokens ADD COLUMN public_id TEXT`); err != nil {
+					return err
+				}
+			}
+			rows, err := tx.QueryContext(ctx, `SELECT id FROM api_tokens WHERE public_id IS NULL OR public_id=''`)
+			if err != nil {
+				return err
+			}
+			var ids []int64
+			for rows.Next() {
+				var id int64
+				if err := rows.Scan(&id); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				ids = append(ids, id)
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+			for _, id := range ids {
+				publicID, err := NewUUIDv7()
+				if err != nil {
+					return err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE api_tokens SET public_id=? WHERE id=?`, publicID, id); err != nil {
+					return err
+				}
+			}
+			_, err = tx.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_api_tokens_public_id ON api_tokens(public_id)`)
+			return err
+		}); err != nil {
+			return fmt.Errorf("migrate legacy API token identifiers: %w", err)
+		}
 	}
 	return nil
+}
+
+// APITokenIDColumn returns the schema-defined public identifier column.
+func (s *Store) APITokenIDColumn(ctx context.Context) (string, error) {
+	columnTypes, err := tableColumnTypes(ctx, s.read, "api_tokens")
+	if err != nil {
+		return "", err
+	}
+	if strings.EqualFold(columnTypes["id"], "INTEGER") {
+		return "public_id", nil
+	}
+	return "id", nil
+}
+
+// NewUUIDv7 returns a time-ordered UUID version 7.
+func NewUUIDv7() (string, error) {
+	var raw [16]byte
+	if _, err := crand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	ms := uint64(time.Now().UnixMilli())
+	for i := 5; i >= 0; i-- {
+		raw[i] = byte(ms)
+		ms >>= 8
+	}
+	raw[6] = raw[6]&0x0f | 0x70
+	raw[8] = raw[8]&0x3f | 0x80
+	encoded := make([]byte, 32)
+	hex.Encode(encoded, raw[:])
+	return string(encoded[:8]) + "-" + string(encoded[8:12]) + "-" + string(encoded[12:16]) + "-" + string(encoded[16:20]) + "-" + string(encoded[20:]), nil
 }
 
 func (s *Store) migrateSecurityReports(ctx context.Context) error {
@@ -532,6 +625,25 @@ func tableColumns(ctx context.Context, db *sql.DB, table string) (map[string]boo
 		return nil, fmt.Errorf("table %s does not exist", table)
 	}
 	return columns, nil
+}
+
+func tableColumnTypes(ctx context.Context, db *sql.DB, table string) (map[string]string, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	columns := make(map[string]string)
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return nil, err
+		}
+		columns[name] = columnType
+	}
+	return columns, rows.Err()
 }
 
 // HasColumn reports whether an application table currently has a named column.

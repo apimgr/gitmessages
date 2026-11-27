@@ -197,6 +197,69 @@ func TestEnsureSchemaMigratesTokenLastFourColumnIdempotently(t *testing.T) {
 	}
 }
 
+func TestEnsureSchemaMigratesLegacyTokenIDsAndScopes(t *testing.T) {
+	store, err := OpenSQLite(filepath.Join(projectTestDir(t), "server.db"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.Write(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DROP TABLE api_tokens`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `CREATE TABLE api_tokens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			owner_id TEXT NOT NULL REFERENCES owners(id) ON DELETE CASCADE,
+			kind TEXT NOT NULL CHECK (kind IN ('primary', 'linked')),
+			name TEXT,
+			token_hash TEXT NOT NULL UNIQUE,
+			token_prefix TEXT NOT NULL,
+			token_enc TEXT NOT NULL,
+			created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+			rotated_at INTEGER,
+			expires_at INTEGER,
+			last_used_at INTEGER,
+			revoked_at INTEGER,
+			revoked_reason TEXT
+		)`)
+		return err
+	}); err != nil {
+		t.Fatalf("prepare legacy token schema: %v", err)
+	}
+	if err := store.Write(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO api_tokens(owner_id,kind,name,token_hash,token_prefix,token_enc) VALUES ('system','primary',NULL,'primary-hash','own_primary','cipher')`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO api_tokens(owner_id,kind,name,token_hash,token_prefix,token_enc) VALUES ('system','linked','automation','linked-hash','own_linked','cipher')`)
+		return err
+	}); err != nil {
+		t.Fatalf("insert legacy token: %v", err)
+	}
+	if err := store.EnsureSchema(ctx); err != nil {
+		t.Fatalf("migrate legacy token schema: %v", err)
+	}
+	var publicID, primaryScope, linkedScope string
+	if err := store.Read().QueryRowContext(ctx, `SELECT public_id,scope FROM api_tokens WHERE kind='primary'`).Scan(&publicID, &primaryScope); err != nil {
+		t.Fatal(err)
+	}
+	if len(publicID) != 36 || publicID[14] != '7' || primaryScope != "global" {
+		t.Fatalf("migrated primary = id %q, scope %q; want UUID v7 and global", publicID, primaryScope)
+	}
+	if err := store.Read().QueryRowContext(ctx, `SELECT scope FROM api_tokens WHERE kind='linked'`).Scan(&linkedScope); err != nil {
+		t.Fatal(err)
+	}
+	if linkedScope != "read-write" {
+		t.Fatalf("migrated linked scope = %q, want read-write", linkedScope)
+	}
+	if err := store.Read().QueryRowContext(ctx, `SELECT type FROM pragma_table_info('api_tokens') WHERE name='id'`).Scan(&primaryScope); err != nil {
+		t.Fatal(err)
+	}
+	if primaryScope != "INTEGER" {
+		t.Fatalf("legacy internal id type = %q, want INTEGER preserved", primaryScope)
+	}
+}
+
 func TestOpenSQLiteRejectsInvalidDatabasePath(t *testing.T) {
 	path := filepath.Join(projectTestDir(t), "directory.db")
 	if err := os.Mkdir(path, 0o700); err != nil {

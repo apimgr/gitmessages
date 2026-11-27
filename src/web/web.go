@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -124,7 +125,6 @@ func Handler(version string, commit ...string) http.Handler {
 			buildDate = commit[1]
 		}
 		exporter = metrics.New(metricsConfig, serverVersion, serverCommit, buildDate)
-		registerMetricsRoutes(mux, metricsConfig, exporter)
 	}
 	metricsExporterMu.Lock()
 	activeMetricsExporter = exporter
@@ -160,35 +160,13 @@ func Handler(version string, commit ...string) http.Handler {
 	mux.HandleFunc("/static/vendor/graphiql/", graphQLStaticAsset)
 	mux.HandleFunc("/static/js/", documentationScript)
 	mux.HandleFunc("/locales/", localeJSON)
-	mux.HandleFunc("/api/autodiscover", apiAutodiscover)
 	mux.HandleFunc("/cli/binaries/", serveCLIBinary)
-	mux.HandleFunc(APIBasePath(), apiRoot)
-	mux.HandleFunc("/api/healthz", apiHealth)
 	mux.HandleFunc("/api/healthz.txt", apiTextExtension)
 	mux.HandleFunc(APIBasePath()+".txt", apiTextExtension)
 	mux.HandleFunc(APIBasePath()+"/", apiTextExtension)
-	mux.HandleFunc(APIBasePath()+"/types", apiTypes)
-	mux.HandleFunc(APIBasePath()+"/conventions", apiConventions)
-	mux.HandleFunc(APIBasePath()+"/templates", apiTemplates)
-	mux.HandleFunc(APIBasePath()+"/templates/random", apiRandomTemplate)
-	mux.HandleFunc(APIBasePath()+"/messages", apiMessages)
-	mux.HandleFunc(APIBasePath()+"/messages/random", apiRandom)
-	mux.HandleFunc(APIBasePath()+"/server/healthz", apiHealth)
-	mux.HandleFunc(APIBasePath()+"/server/about", apiAbout)
-	mux.HandleFunc(APIBasePath()+"/server/help", apiHelp)
-	mux.HandleFunc(APIBasePath()+"/server/help/mcp", apiMCPHelp)
-	mux.HandleFunc(APIBasePath()+"/server/privacy", apiPrivacy)
-	mux.HandleFunc(APIBasePath()+"/server/terms", apiTerms)
+	registerAPIRoutes(mux)
 	registerContactRoutes(mux)
-	mux.HandleFunc(APIBasePath()+"/server/preferences", apiPreferences)
-	mux.HandleFunc(APIBasePath()+"/server/mcp", mcpHandler)
-	mux.HandleFunc("/api/mcp", mcpHandler)
-	mux.HandleFunc("/mcp", mcpHandler)
-	mux.HandleFunc(APIBasePath()+"/server/swagger", swaggerJSON)
-	mux.HandleFunc("/api/swagger", swaggerJSON)
 	mux.HandleFunc("/server/docs/swagger", swaggerUI)
-	mux.HandleFunc(APIBasePath()+"/server/graphql", graphQLHandler)
-	mux.HandleFunc("/api/graphql", graphQLHandler)
 	mux.HandleFunc("/server/docs/graphql", graphQLUI)
 	mux.HandleDebugOnly("/debug/", debugHandler(mux.routeList), mode.IsDebugEnabled())
 	handler := language(mux)
@@ -706,9 +684,23 @@ func rateLimit(next http.Handler) http.Handler {
 
 func writeJSON(w http.ResponseWriter, r *http.Request, status int, value any) {
 	if wantsText(r) {
-		var output []byte
-		var err error
-		output, err = json.MarshalIndent(value, "", "  ")
+		if envelope, ok := value.(map[string]any); ok {
+			if success, _ := envelope["ok"].(bool); success {
+				if data, exists := envelope["data"]; exists {
+					writeText(w, status, serializeRouteText(r, data))
+					return
+				}
+			} else if code, exists := envelope["error"].(string); exists {
+				message, _ := envelope["message"].(string)
+				writeText(w, status, "ERROR: "+code+": "+message)
+				return
+			}
+		}
+		if routeForRequest(r) != nil {
+			writeText(w, status, serializeRouteText(r, value))
+			return
+		}
+		output, err := json.MarshalIndent(value, "", "  ")
 		if err != nil {
 			writeError(w, r, http.StatusInternalServerError, "ENCODE_FAILED", tr(r, "api.encode_failed"))
 			return
@@ -731,7 +723,11 @@ func writeJSON(w http.ResponseWriter, r *http.Request, status int, value any) {
 func writeSuccess(w http.ResponseWriter, r *http.Request, data any) {
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	if wantsText(r) {
-		writeText(w, http.StatusOK, plainData(data))
+		if routeForRequest(r) != nil {
+			writeText(w, http.StatusOK, serializeRouteText(r, data))
+		} else {
+			writeText(w, http.StatusOK, plainData(data))
+		}
 		return
 	}
 	writeJSON(w, r, http.StatusOK, map[string]any{"ok": true, "data": data})
@@ -742,7 +738,7 @@ func writeError(w http.ResponseWriter, r *http.Request, status int, code, messag
 		recordRejectedCLIToken(r)
 	}
 	if wantsText(r) {
-		writeText(w, status, message)
+		writeText(w, status, "ERROR: "+code+": "+message)
 		return
 	}
 	if htmlPageRequest(r) {
@@ -914,6 +910,226 @@ func plainData(data any) string {
 	}
 }
 
+func routeForRequest(r *http.Request) *Route {
+	if r == nil || r.URL == nil {
+		return nil
+	}
+	for _, definition := range apiOperationDefinitions(r) {
+		if routePathMatches(definition.Path, r.URL.Path) && (definition.Method == r.Method || r.Method == http.MethodHead && definition.Method == http.MethodGet) {
+			return &definition
+		}
+	}
+	return nil
+}
+
+func routePathMatches(pattern, path string) bool {
+	patternParts := strings.Split(strings.Trim(pattern, "/"), "/")
+	pathParts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(patternParts) != len(pathParts) {
+		return false
+	}
+	for index, part := range patternParts {
+		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}") {
+			if pathParts[index] == "" {
+				return false
+			}
+			continue
+		}
+		if part != pathParts[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func serializeRouteText(r *http.Request, data any) string {
+	definition := routeForRequest(r)
+	if definition == nil {
+		return plainData(data)
+	}
+	value := reflect.ValueOf(data)
+	for value.IsValid() && (value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer) {
+		if value.IsNil() {
+			value = reflect.Value{}
+			break
+		}
+		value = value.Elem()
+	}
+	if definition.Primary != "" {
+		if primary, ok := jsonField(value, definition.Primary); ok {
+			return textScalar(primary)
+		}
+	}
+	if !value.IsValid() || isEmptyCollection(value) {
+		if value.IsValid() && (value.Kind() == reflect.Slice || value.Kind() == reflect.Array) {
+			return fmt.Sprintf("OK: %d items found", value.Len())
+		}
+		return "OK: " + routeTextMessage(*definition)
+	}
+	if value.Kind() == reflect.Slice || value.Kind() == reflect.Array {
+		if value.Len() == 0 {
+			return "OK: 0 items found"
+		}
+		first := dereference(value.Index(0))
+		if isTextObject(first) {
+			var objects []string
+			for index := 0; index < value.Len(); index++ {
+				var lines []string
+				appendTextFields(&lines, "", value.Index(index))
+				objects = append(objects, strings.Join(lines, "\n"))
+			}
+			return fmt.Sprintf("OK: %d items found\n%s", value.Len(), strings.Join(objects, "\n\n"))
+		}
+		var items []string
+		for index := 0; index < value.Len(); index++ {
+			items = append(items, textScalar(value.Index(index)))
+		}
+		return fmt.Sprintf("OK: %d items found\n%s", len(items), strings.Join(items, "\n"))
+	}
+	if isTextObject(value) {
+		lines := []string{"OK: " + routeTextMessage(*definition)}
+		appendTextFields(&lines, "", value)
+		return strings.Join(lines, "\n")
+	}
+	return "OK: " + routeTextMessage(*definition) + "\n" + textScalar(value)
+}
+
+func routeTextMessage(route Route) string {
+	if route.Message != "" {
+		return route.Message
+	}
+	switch route.Method {
+	case http.MethodGet:
+		return "Retrieved successfully"
+	case http.MethodPut, http.MethodPatch:
+		return "Updated successfully"
+	case http.MethodDelete:
+		return "Deleted successfully"
+	default:
+		return "OK"
+	}
+}
+
+func dereference(value reflect.Value) reflect.Value {
+	for value.IsValid() && (value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer) {
+		if value.IsNil() {
+			return reflect.Value{}
+		}
+		value = value.Elem()
+	}
+	return value
+}
+
+func isEmptyCollection(value reflect.Value) bool {
+	value = dereference(value)
+	return value.IsValid() && (value.Kind() == reflect.Slice || value.Kind() == reflect.Array || value.Kind() == reflect.Map) && value.Len() == 0
+}
+
+func isTextObject(value reflect.Value) bool {
+	value = dereference(value)
+	return value.IsValid() && (value.Kind() == reflect.Struct || value.Kind() == reflect.Map)
+}
+
+func jsonField(value reflect.Value, name string) (reflect.Value, bool) {
+	value = dereference(value)
+	if !value.IsValid() {
+		return reflect.Value{}, false
+	}
+	switch value.Kind() {
+	case reflect.Map:
+		key := reflect.ValueOf(name)
+		if key.Type().AssignableTo(value.Type().Key()) {
+			field := value.MapIndex(key)
+			return field, field.IsValid()
+		}
+	case reflect.Struct:
+		for index := 0; index < value.NumField(); index++ {
+			field := value.Type().Field(index)
+			jsonName := strings.Split(field.Tag.Get("json"), ",")[0]
+			if jsonName == "" {
+				jsonName = field.Name
+			}
+			if jsonName == name && field.PkgPath == "" {
+				return value.Field(index), true
+			}
+		}
+	}
+	return reflect.Value{}, false
+}
+
+func appendTextFields(lines *[]string, prefix string, value reflect.Value) {
+	value = dereference(value)
+	if !value.IsValid() {
+		return
+	}
+	switch value.Kind() {
+	case reflect.Struct:
+		for index := 0; index < value.NumField(); index++ {
+			field := value.Type().Field(index)
+			if field.PkgPath != "" {
+				continue
+			}
+			name, options, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if name == "-" {
+				continue
+			}
+			if name == "" {
+				name = field.Name
+			}
+			fieldValue := value.Field(index)
+			if strings.Contains(options, "omitempty") && fieldValue.IsZero() {
+				continue
+			}
+			appendTextField(lines, joinTextField(prefix, name), fieldValue)
+		}
+	case reflect.Map:
+		keys := value.MapKeys()
+		sort.Slice(keys, func(i, j int) bool { return fmt.Sprint(keys[i].Interface()) < fmt.Sprint(keys[j].Interface()) })
+		for _, key := range keys {
+			appendTextField(lines, joinTextField(prefix, fmt.Sprint(key.Interface())), value.MapIndex(key))
+		}
+	}
+}
+
+func appendTextField(lines *[]string, name string, value reflect.Value) {
+	value = dereference(value)
+	if !value.IsValid() {
+		*lines = append(*lines, name+": null")
+		return
+	}
+	if value.Kind() == reflect.Struct || value.Kind() == reflect.Map {
+		appendTextFields(lines, name, value)
+		return
+	}
+	if value.Kind() == reflect.Slice || value.Kind() == reflect.Array {
+		items := make([]string, 0, value.Len())
+		for index := 0; index < value.Len(); index++ {
+			items = append(items, textScalar(value.Index(index)))
+		}
+		*lines = append(*lines, name+": "+strings.Join(items, ", "))
+		return
+	}
+	*lines = append(*lines, name+": "+textScalar(value))
+}
+
+func joinTextField(prefix, name string) string {
+	if prefix == "" {
+		return name
+	}
+	return prefix + "." + name
+}
+
+func textScalar(value reflect.Value) string {
+	value = dereference(value)
+	if !value.IsValid() {
+		return "null"
+	}
+	if value.Kind() == reflect.String {
+		return value.String()
+	}
+	return fmt.Sprint(value.Interface())
+}
+
 func apiTextExtension(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasSuffix(r.URL.Path, ".txt") {
 		writeError(w, r, http.StatusNotFound, "NOT_FOUND", tr(r, "errors.not_found"))
@@ -924,56 +1140,32 @@ func apiTextExtension(w http.ResponseWriter, r *http.Request) {
 	urlCopy.Path = strings.TrimSuffix(urlCopy.Path, ".txt")
 	clone.URL = &urlCopy
 	clone.Header.Set("X-GitMessages-Text-Response", "true")
-	switch urlCopy.Path {
-	case APIBasePath():
-		apiRoot(w, clone)
-	case APIBasePath() + "/types":
-		apiTypes(w, clone)
-	case APIBasePath() + "/conventions":
-		apiConventions(w, clone)
-	case APIBasePath() + "/templates":
-		apiTemplates(w, clone)
-	case APIBasePath() + "/templates/random":
-		apiRandomTemplate(w, clone)
-	case APIBasePath() + "/messages/random":
-		apiRandom(w, clone)
-	case APIBasePath() + "/messages":
-		apiMessages(w, clone)
-	case APIBasePath() + "/server/healthz":
+	if urlCopy.Path == "/api/healthz" {
 		apiHealth(w, clone)
-	case "/api/healthz":
-		apiHealth(w, clone)
-	case APIBasePath() + "/server/about":
-		apiAbout(w, clone)
-	case APIBasePath() + "/server/help":
-		apiHelp(w, clone)
-	case APIBasePath() + "/server/help/mcp":
-		apiMCPHelp(w, clone)
-	case APIBasePath() + "/server/privacy":
-		apiPrivacy(w, clone)
-	case APIBasePath() + "/server/terms":
-		apiTerms(w, clone)
-	case APIBasePath() + "/server/security":
-		apiContactSecurity(w, clone)
-	case APIBasePath() + "/server/contact":
-		apiContact(w, clone)
-	case APIBasePath() + "/server/security/policy":
-		apiSecurityPolicy(w, clone)
-	case APIBasePath() + "/server/security/thanks":
-		apiSecurityThanks(w, clone)
-	case APIBasePath() + "/server/dpo":
-		apiDPO(w, clone)
-	case APIBasePath() + "/server/preferences":
-		apiPreferences(w, clone)
-	case APIBasePath() + "/server/preferences/sync":
-		preferenceSyncAPI(w, clone)
-	case APIBasePath() + "/server/preferences/sync/import":
-		preferenceSyncImportAPI(w, clone)
-	case APIBasePath() + "/server/swagger":
-		swaggerJSON(w, clone)
-	default:
-		writeText(w, http.StatusNotFound, tr(r, "errors.not_found"))
+		return
 	}
+	pathMatched := false
+	allowed := make([]string, 0, 2)
+	for _, route := range apiOperationDefinitions(clone) {
+		if !routePathMatches(route.Path, urlCopy.Path) {
+			continue
+		}
+		pathMatched = true
+		if route.Binary != "" {
+			continue
+		}
+		allowed = append(allowed, route.Method)
+		if route.Method == clone.Method || clone.Method == http.MethodHead && route.Method == http.MethodGet {
+			route.Handler(w, clone)
+			return
+		}
+	}
+	if pathMatched && len(allowed) > 0 {
+		w.Header().Set("Allow", strings.Join(allowed, ", "))
+		writeError(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", tr(r, "api.method_not_allowed"))
+		return
+	}
+	writeText(w, http.StatusNotFound, tr(r, "errors.not_found"))
 }
 
 func method(w http.ResponseWriter, r *http.Request, allowed string) bool {
@@ -1323,6 +1515,7 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
 	toolStyles := pageToolStylesheets(r)
 	trackingTags, trackingNoscript := trackingMarkup(r)
 	consentBanner := consentBannerMarkup(r, csrf)
+	overlayFooter := overlayFooterMarkup(r)
 	headerThemeToggle := ""
 	if r.URL.Path != "/server/preferences" {
 		headerThemeToggle = fmt.Sprintf(`<form class="theme-toggle-form" method="post" action="/server/preferences"><input type="hidden" name="csrf_token" value="%s"><input type="hidden" name="theme" value="%s"><button type="submit" aria-label="%s" title="%s">%s <span>%s</span></button></form>`, template.HTMLEscapeString(csrf), nextTheme, template.HTMLEscapeString(themeLabel), template.HTMLEscapeString(tr(r, "nav.theme")), themeIcon, template.HTMLEscapeString(tr(r, "theme."+nextTheme)))
@@ -1358,11 +1551,11 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
         <div id="offline-indicator" class="offline-indicator" role="status" aria-live="polite" hidden>%s</div>
         <div id="pwa-update-prompt" class="pwa-update-prompt" role="status" aria-live="polite" hidden><span>%s</span><button id="pwa-update-now" type="button">%s</button></div>
         <section id="pwa-install" class="pwa-install" aria-label="%s" hidden><button id="pwa-install-button" type="button">%s</button><details id="pwa-ios-install" hidden><summary>%s</summary><p>%s</p></details></section>
-        %s<footer role="contentinfo">%s · <a href="/server/about">%s</a> · <a href="/server/help">%s</a> · <a href="/server/privacy">%s</a> · <a href="/server/terms">%s</a> · <a href="/server/security">%s</a> · <a href="/server/preferences">%s</a> · <a href="/server/preferences#language" lang="%s">%s</a> · <a href="/server/docs/swagger">%s</a> · <a href="/server/docs/graphql">%s</a></footer>
+	        %s<footer role="contentinfo">%s%s · <a href="/server/about">%s</a> · <a href="/server/help">%s</a> · <a href="/server/privacy">%s</a> · <a href="/server/terms">%s</a> · <a href="/server/security">%s</a> · <a href="/server/preferences">%s</a> · <a href="/server/preferences#language" lang="%s">%s</a> · <a href="/server/docs/swagger">%s</a> · <a href="/server/docs/graphql">%s</a></footer>
     <script src="/static/js/app.js?v=%s" defer></script>
   </body>
 </html>
-	`, locale.Meta.Language, locale.Meta.Direction, theme, theme, template.HTMLEscapeString(stamp), template.HTMLEscapeString(requestBasePath(r)), template.HTMLEscapeString(seoDescription(r)), seoHeadMarkup(r, title), stampURL, stampURL, stampURL, stampURL, template.HTMLEscapeString(seoBrandingTitle()), stampURL, stampURL, robots, stampURL, stampURL, toolStyles, trackingTags, template.HTMLEscapeString(seoPageTitle(title)), trackingNoscript, tr(r, "nav.skip"), tr(r, "nav.skip_navigation"), consentBanner, tr(r, "nav.toggle"), brandingHeaderMarkup(r), tr(r, "nav.main"), nav, tr(r, "preferences.title"), headerThemeToggle, customHeader, containerClass, serverPageBreadcrumb(r), template.HTMLEscapeString(title), pageLead, body, tr(r, "nav.main"), tr(r, "nav.close"), nav, tr(r, "pwa.offline_indicator"), tr(r, "pwa.update_available"), tr(r, "pwa.update_now"), tr(r, "pwa.install_label"), tr(r, "pwa.install_button"), tr(r, "pwa.install_ios_title"), tr(r, "pwa.install_ios_instructions"), customFooter, template.HTMLEscapeString(seoBrandingTitle()), tr(r, "nav.about"), tr(r, "nav.help"), tr(r, "nav.privacy"), tr(r, "nav.terms"), tr(r, "nav.security"), tr(r, "preferences.title"), locale.Meta.Language, template.HTMLEscapeString(locale.Meta.NativeName), tr(r, "api.rest"), tr(r, "graphql.title"), stampURL)
+	`, locale.Meta.Language, locale.Meta.Direction, theme, theme, template.HTMLEscapeString(stamp), template.HTMLEscapeString(requestBasePath(r)), template.HTMLEscapeString(seoDescription(r)), seoHeadMarkup(r, title), stampURL, stampURL, stampURL, stampURL, template.HTMLEscapeString(seoBrandingTitle()), stampURL, stampURL, robots, stampURL, stampURL, toolStyles, trackingTags, template.HTMLEscapeString(seoPageTitle(title)), trackingNoscript, tr(r, "nav.skip"), tr(r, "nav.skip_navigation"), consentBanner, tr(r, "nav.toggle"), brandingHeaderMarkup(r), tr(r, "nav.main"), nav, tr(r, "preferences.title"), headerThemeToggle, customHeader, containerClass, serverPageBreadcrumb(r), template.HTMLEscapeString(title), pageLead, body, tr(r, "nav.main"), tr(r, "nav.close"), nav, tr(r, "pwa.offline_indicator"), tr(r, "pwa.update_available"), tr(r, "pwa.update_now"), tr(r, "pwa.install_label"), tr(r, "pwa.install_button"), tr(r, "pwa.install_ios_title"), tr(r, "pwa.install_ios_instructions"), customFooter, overlayFooter, template.HTMLEscapeString(seoBrandingTitle()), tr(r, "nav.about"), tr(r, "nav.help"), tr(r, "nav.privacy"), tr(r, "nav.terms"), tr(r, "nav.security"), tr(r, "preferences.title"), locale.Meta.Language, template.HTMLEscapeString(locale.Meta.NativeName), tr(r, "api.rest"), tr(r, "graphql.title"), stampURL)
 	pageHTML := prefixHTMLPaths(output.String(), requestBasePath(r))
 	if wantsFrontendText(r) {
 		writeText(w, http.StatusOK, formatHTMLText(pageHTML))
@@ -1370,6 +1563,27 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = io.WriteString(w, pageHTML)
+}
+
+func overlayFooterMarkup(r *http.Request) string {
+	statuses := overlayStatuses()
+	var output strings.Builder
+	if status, ok := statuses["tor"].(overlay.TorStatus); ok && status.Enabled && status.Running && status.Hostname != "" {
+		fmt.Fprintf(&output, `<p class="footer-onion"><a href="/server/help#tor-access" aria-label="%s">🧅</a> <code>%s</code> <button type="button" class="copy-btn" data-copy="%s" aria-live="polite" aria-label="%s">📋</button></p>`, template.HTMLEscapeString(tr(r, "overlay.support.tor")), template.HTMLEscapeString(status.Hostname), template.HTMLEscapeString(status.Hostname), template.HTMLEscapeString(tr(r, "overlay.copy.tor")))
+	}
+	if status, ok := statuses["i2p"].(overlay.I2PStatus); ok && status.Enabled && status.Running {
+		address := status.Hostname
+		if address == "" {
+			address = status.Address
+		}
+		if strings.HasSuffix(strings.ToLower(address), ".b32.i2p") {
+			fmt.Fprintf(&output, `<p class="footer-i2p"><a href="/server/help#i2p-access" aria-label="%s">🔗</a> <code>%s</code> <button type="button" class="copy-btn" data-copy="%s" aria-live="polite" aria-label="%s">📋</button></p>`, template.HTMLEscapeString(tr(r, "overlay.support.i2p")), template.HTMLEscapeString(address), template.HTMLEscapeString(address), template.HTMLEscapeString(tr(r, "overlay.copy.i2p")))
+		}
+	}
+	if output.Len() == 0 {
+		return ""
+	}
+	return output.String()
 }
 
 func serverRootRedirect(w http.ResponseWriter, r *http.Request) {
@@ -1674,7 +1888,8 @@ func helpPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body strings.Builder
-	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="help-start"><h2 id="help-start">%s</h2><p>%s</p>%s</section><section class="section-card" aria-labelledby="help-features"><h2 id="help-features">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "help.getting_started")), template.HTMLEscapeString(tr(r, "help.getting_started_body")), codeBlockWithCopy(r, "curl -q -LSsf "+BuildURL(r, APIBasePath()+"/types")+"\ncurl -q -LSsf "+BuildURL(r, APIBasePath()+"/conventions")+"\ncurl -q -LSsf -X POST -H 'Content-Type: application/json' -d '{\"type\":\"feat\",\"description\":\"add message search\"}' "+BuildURL(r, APIBasePath()+"/messages")), template.HTMLEscapeString(tr(r, "help.using_catalog")), template.HTMLEscapeString(tr(r, "help.using_catalog_body")))
+	overlays := overlayStatuses()
+	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="help-start"><h2 id="help-start">%s</h2><p>%s</p>%s</section><section class="section-card" aria-labelledby="help-features"><h2 id="help-features">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "help.getting_started")), template.HTMLEscapeString(tr(r, "help.getting_started_body")), codeBlockWithCopy(r, "curl -q -LSsf "+BuildURL(r, APIBasePath()+"/types")+"\ncurl -q -LSsf "+BuildURL(r, APIBasePath()+"/conventions")+"\ncurl -q -LSsf -X POST -H 'Content-Type: application/json' -d '{\"type\":\"feat\",\"description\":\"add localized commit examples\"}' "+BuildURL(r, APIBasePath()+"/messages")), template.HTMLEscapeString(tr(r, "help.using_catalog")), template.HTMLEscapeString(tr(r, "help.using_catalog_body")))
 	projectHelp := strings.TrimSpace(config.Get().Server.Pages.Help.Content)
 	if projectHelp == "" {
 		projectHelp = config.DefaultConfig().Server.Pages.Help.Content
@@ -1683,6 +1898,18 @@ func helpPage(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="help-resources"><h2 id="help-resources">%s</h2><p>%s <a href="/server/docs/swagger">%s</a> · <a href="/server/docs/graphql">%s</a></p></section>`, template.HTMLEscapeString(tr(r, "help.api_documentation")), template.HTMLEscapeString(tr(r, "help.api.docs")), template.HTMLEscapeString(tr(r, "api.rest")), template.HTMLEscapeString(tr(r, "graphql.title")))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="help-faq"><h2 id="help-faq">%s</h2><h3>%s</h3><p>%s</p><h3>%s</h3><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "help.faq")), template.HTMLEscapeString(tr(r, "help.account_question")), template.HTMLEscapeString(tr(r, "help.account_answer")), template.HTMLEscapeString(tr(r, "help.submission_question")), template.HTMLEscapeString(tr(r, "help.submission_answer")))
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="help-troubleshooting"><h2 id="help-troubleshooting">%s</h2><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "help.troubleshooting")), template.HTMLEscapeString(tr(r, "help.troubleshooting_body")))
+	if status, ok := overlays["tor"].(overlay.TorStatus); ok && status.Enabled && status.Running && status.Hostname != "" {
+		fmt.Fprintf(&body, `<section class="section-card" id="tor-access" aria-labelledby="tor-access-title"><h2 id="tor-access-title">%s</h2><p>%s</p><h3>%s</h3>%s<h3>%s</h3><ol><li>%s <a href="https://www.torproject.org/download/" target="_blank" rel="noopener noreferrer">%s</a></li><li>%s</li><li>%s</li></ol><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "overlay.tor.title")), template.HTMLEscapeString(tr(r, "overlay.tor.description")), template.HTMLEscapeString(tr(r, "overlay.address")), codeBlockWithCopy(r, status.Hostname), template.HTMLEscapeString(tr(r, "overlay.connect")), template.HTMLEscapeString(tr(r, "overlay.tor.step.download")), template.HTMLEscapeString(tr(r, "overlay.tor.browser")), template.HTMLEscapeString(tr(r, "overlay.tor.step.connect")), template.HTMLEscapeString(tr(r, "overlay.tor.step.open")), template.HTMLEscapeString(tr(r, "overlay.tor.note")))
+	}
+	if status, ok := overlays["i2p"].(overlay.I2PStatus); ok && status.Enabled && status.Running {
+		address := status.Hostname
+		if address == "" {
+			address = status.Address
+		}
+		if strings.HasSuffix(strings.ToLower(address), ".b32.i2p") {
+			fmt.Fprintf(&body, `<section class="section-card" id="i2p-access" aria-labelledby="i2p-access-title"><h2 id="i2p-access-title">%s</h2><p>%s</p><h3>%s</h3>%s<h3>%s</h3><ol><li>%s <a href="https://geti2p.net/en/download" target="_blank" rel="noopener noreferrer">%s</a> %s <a href="https://i2pd.website/" target="_blank" rel="noopener noreferrer">i2pd</a></li><li>%s</li><li>%s</li></ol><p>%s</p></section>`, template.HTMLEscapeString(tr(r, "overlay.i2p.title")), template.HTMLEscapeString(tr(r, "overlay.i2p.description")), template.HTMLEscapeString(tr(r, "overlay.address")), codeBlockWithCopy(r, address), template.HTMLEscapeString(tr(r, "overlay.connect")), template.HTMLEscapeString(tr(r, "overlay.i2p.step.install")), template.HTMLEscapeString(tr(r, "overlay.i2p.client")), template.HTMLEscapeString(tr(r, "overlay.i2p.or")), template.HTMLEscapeString(tr(r, "overlay.i2p.step.proxy")), template.HTMLEscapeString(tr(r, "overlay.i2p.step.open")), template.HTMLEscapeString(tr(r, "overlay.i2p.note")))
+		}
+	}
 	fmt.Fprintf(&body, `<section class="section-card" aria-labelledby="more-help"><h2 id="more-help">%s</h2><ul class="hub-list">%s</ul></section>`, template.HTMLEscapeString(tr(r, "help.more")), serverHubList(r, "/server/help"))
 	page(w, r, tr(r, "help.title"), template.HTML(body.String()))
 }
@@ -2386,9 +2613,86 @@ func swaggerJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 // BuildOpenAPISuperset produces the full localized route document for build-time embedding.
+func apiOperationResponseModel(id string) any {
+	switch id {
+	case "getApiIndex":
+		return map[string]any{"name": "", "version": "", "resources": []string{}, "server": []string{}}
+	case "getApiAutodiscover":
+		return map[string]any{"name": "", "version": "", "api": map[string]string{"current_version": ""}, "urls": map[string]string{}, "cli_versions": []string{}, "cli_min_version": ""}
+	case "listCommitTypes":
+		return []messages.CommitType{}
+	case "listConventions":
+		return []messages.Convention{}
+	case "listTemplates":
+		return []messages.Template{}
+	case "getHealth", "getApiHealthz":
+		return healthResponse{}
+	case "buildCommitMessage":
+		return map[string]string{"message": ""}
+	case "getRandomTemplate":
+		return messages.Template{}
+	case "getRandomExample":
+		return map[string]string{"type": "", "message": ""}
+	case "getAbout", "getTerms":
+		return map[string]string{"title": "", "content": "", "format": ""}
+	case "getHelp":
+		return map[string]any{"title": "", "content": "", "format": "", "pages": []map[string]string{{"title": "", "url": ""}}}
+	case "getMcpHelp":
+		return map[string]any{"enabled": false, "url": "", "aliases": []string{}, "auth": map[string]string{"scheme": ""}, "tools": []map[string]string{{"name": "", "description": ""}}, "project": ""}
+	case "getPrivacy":
+		return map[string]any{"summary": map[string]any{"data_stored_on_server": false, "data_sold": false, "user_control": false}, "cookies": map[string]any{"essential": map[string]any{"enabled": false, "description": ""}, "preferences": map[string]any{"enabled": false, "description": ""}, "analytics": map[string]any{"enabled": false, "description": ""}}, "data": map[string]any{"sold": false, "stored_on_server": false, "sharing": []map[string]string{{"condition": "", "when": "", "data": ""}}}, "tracking": map[string]any{"enabled": false, "type": "", "type_name": ""}, "retention": map[string]any{"period": "", "export_available": false, "deletion_available": false}, "third_party": map[string]any{"services": []map[string]string{{"name": "", "purpose": "", "data_sent": "", "policy_url": ""}}}, "ccpa": map[string]any{"applicable": false, "opt_out_url": "", "user_opted_out": false}, "content": map[string]string{"consent_message": "", "data_collection": "", "data_usage": "", "data_security": ""}}
+	case "getSecurity":
+		return map[string]any{"contacts": []map[string]string{{"type": "", "value": ""}}, "expires": "", "pgp": map[string]any{"available": false, "url": "", "fingerprint": ""}, "policy_url": "", "thanks_url": "", "report_url": ""}
+	case "getSecurityPolicy":
+		return map[string]string{"policy": ""}
+	case "getSecurityThanks":
+		return map[string]any{"entries": []thanksEntry{}}
+	case "getDataProtectionContact":
+		return map[string]string{"name": "", "email": "", "privacy_url": ""}
+	case "getContactForm":
+		return map[string]any{"fields": []map[string]any{{"name": "", "label": "", "type": "", "required": false}}, "captcha": map[string]any{"challenge": "", "expires_at": ""}, "form_token": "", "types": []string{}, "security_url": "", "abuse_email": ""}
+	case "submitContactReport":
+		return map[string]any{"message": "", "review": map[string]string{"type": "", "email": "", "subject": ""}, "review_token": "", "confirm_after_seconds": 0, "tracking_id": ""}
+	case "getPreferences", "savePreferences":
+		return map[string]any{"lang": "", "theme": "", "prefs": map[string]string{}, "applied": []string{}, "ignored": []string{}, "consent_required": false}
+	case "getPreferencesSync":
+		return map[string]any{"theme": "", "lang": "", "prefs": map[string]string{}, "url": "", "code": ""}
+	case "importPreferencesSync":
+		return map[string]any{"theme": "", "lang": "", "prefs": map[string]string{}, "applied": []string{}, "ignored": []string{}, "consent_required": false}
+	case "getOpenAPI", "getApiSwagger":
+		return map[string]any{"openapi": "", "info": map[string]string{}, "servers": []map[string]string{}, "components": map[string]any{}, "paths": map[string]any{}}
+	case "graphqlQuery", "graphqlQueryApiGraphql":
+		return map[string]any{"data": map[string]any{}, "errors": []map[string]string{{"message": ""}}}
+	case "listOwnerTokens":
+		token := map[string]any{"id": "", "name": "", "kind": "", "token_masked": "", "created_at": "", "last_used_at": nil, "expires_at": nil, "status": ""}
+		return map[string]any{"primary": token, "linked": []map[string]any{token}, "max_linked": 0}
+	case "createLinkedToken", "revealLinkedToken", "rotateLinkedToken":
+		return map[string]any{"token": map[string]any{"id": "", "name": "", "kind": "", "token_masked": "", "created_at": "", "last_used_at": nil, "expires_at": nil, "status": ""}, "linked_token": ""}
+	case "issuePrimaryToken", "revealPrimaryToken", "rotatePrimaryToken":
+		return map[string]string{"owner_token": ""}
+	case "revokePrimaryToken":
+		return map[string]int64{"tokens": 0, "resources": 0}
+	case "updateLinkedToken":
+		return map[string]any{"id": "", "name": "", "kind": "", "token_masked": "", "created_at": "", "last_used_at": nil, "expires_at": nil, "status": ""}
+	case "revokeLinkedToken":
+		return map[string]any{"id": "", "status": ""}
+	default:
+		return map[string]any{}
+	}
+}
+
+func apiOperationBareResponse(id string) bool {
+	switch id {
+	case "getHealth", "getApiHealthz", "getOpenAPI", "getApiSwagger", "graphqlQuery", "graphqlQueryApiGraphql", "mcpEndpoint", "mcpEndpointApiMcp", "mcpEndpointMcp":
+		return true
+	default:
+		return false
+	}
+}
+
 func BuildOpenAPISuperset(r *http.Request) map[string]any {
 	response := func(description string) map[string]any {
-		return map[string]any{"200": map[string]any{"description": description}}
+		return map[string]any{"200": map[string]any{"description": description, "content": map[string]any{"application/json": map[string]any{"schema": swaggerapi.SchemaFromModel(apiOperationResponseModel("graphqlQuery"))}}}}
 	}
 	mcpRequestSchema := map[string]any{
 		"type":     "object",
@@ -2405,7 +2709,7 @@ func BuildOpenAPISuperset(r *http.Request) map[string]any {
 		},
 	}
 	mcpOperation := map[string]any{"post": map[string]any{
-		"operationId": "mcp_endpoint",
+		"operationId": "mcpEndpoint",
 		"summary":     tr(r, "mcp.title"),
 		"description": tr(r, "mcp.help.description"),
 		"parameters": []map[string]any{
@@ -2416,89 +2720,79 @@ func BuildOpenAPISuperset(r *http.Request) map[string]any {
 		},
 		"requestBody": map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": mcpRequestSchema}}},
 		"security":    []map[string][]string{{"BearerAuth": {}}},
-		"responses":   map[string]any{"200": map[string]any{"description": tr(r, "mcp.help.description")}, "400": map[string]any{"description": "Invalid JSON-RPC request, unsupported version, or header mismatch."}, "403": map[string]any{"description": "Origin is not allowed."}, "406": map[string]any{"description": "Accept must include application/json and text/event-stream."}, "413": map[string]any{"description": "Request body exceeds 1 MiB."}, "415": map[string]any{"description": "Content-Type must be application/json."}, "429": map[string]any{"description": tr(r, "api.rate_limited")}},
+		"responses": map[string]any{
+			"200": map[string]any{"description": tr(r, "mcp.help.description"), "content": map[string]any{"application/json": map[string]any{"schema": swaggerapi.SchemaFromModel(mcpResponse{})}, "text/event-stream": map[string]any{"schema": map[string]any{"type": "string"}}}},
+			"400": map[string]any{"description": "Invalid JSON-RPC request, unsupported version, or header mismatch.", "content": map[string]any{"application/json": map[string]any{"schema": swaggerapi.SchemaFromModel(mcpResponse{})}}},
+			"403": map[string]any{"description": "Origin is not allowed."}, "406": map[string]any{"description": "Accept must include application/json and text/event-stream."},
+			"413": map[string]any{"description": "Request body exceeds 1 MiB."}, "415": map[string]any{"description": "Content-Type must be application/json."}, "429": map[string]any{"description": tr(r, "api.rate_limited")},
+		},
 	}}
+	apiErrorSchema := map[string]any{"type": "object", "required": []string{"ok", "error", "message"}, "properties": map[string]any{"ok": map[string]any{"type": "boolean", "const": false}, "error": map[string]any{"type": "string"}, "message": map[string]any{"type": "string"}, "details": map[string]any{"type": "object"}}}
 	operations := make([]swaggerapi.Operation, 0, len(apiOperationDefinitions(r))+24)
-	addOperation := func(path, operationMethod, name, summary, description string, input map[string]any, secured bool, pathParameters []string, mountedWhen string) {
-		parameters := make([]swaggerapi.Parameter, 0, len(pathParameters))
-		for _, parameter := range pathParameters {
-			parameters = append(parameters, swaggerapi.Parameter{Name: parameter, Location: "path", Required: true, Schema: map[string]any{"type": "string"}})
-		}
-		security := []string(nil)
-		if secured {
-			security = []string{"BearerAuth"}
-		}
-		operations = append(operations, swaggerapi.Operation{
-			Path: path, Method: operationMethod, ID: name, Summary: summary, Description: description,
-			RequestBody: input, Responses: map[string]any{"200": map[string]any{"description": description}, "400": map[string]any{"description": tr(r, "contact.error.invalid")}},
-			Parameters: parameters, Security: security, MountedWhen: mountedWhen,
-		})
-	}
 	for _, definition := range apiOperationDefinitions(r) {
 		if !definition.Listed || definition.Internal {
 			continue
 		}
-		responses := response(definition.description)
-		if definition.method == http.MethodPost {
-			responses = map[string]any{"200": map[string]any{"description": definition.description}, "400": map[string]any{"description": tr(r, "swagger.build_message.error")}}
+		responseSchema := swaggerapi.SchemaFromModel(definition.Response)
+		if !definition.BareResponse {
+			responseSchema = map[string]any{"type": "object", "required": []string{"ok", "data"}, "properties": map[string]any{"ok": map[string]any{"type": "boolean", "const": true}, "data": responseSchema}}
+		}
+		responses := map[string]any{"200": map[string]any{"description": definition.Description, "content": map[string]any{"application/json": map[string]any{"schema": responseSchema}}}}
+		responses["default"] = map[string]any{"description": tr(r, "api.error"), "content": map[string]any{"application/json": map[string]any{"schema": apiErrorSchema}}}
+		if definition.Method == http.MethodPost {
+			responses["400"] = map[string]any{"description": tr(r, "swagger.build_message.error"), "content": map[string]any{"application/json": map[string]any{"schema": apiErrorSchema}}}
+		}
+		if definition.OperationID == "createLinkedToken" || definition.OperationID == "issuePrimaryToken" {
+			responses["201"] = responses["200"]
+			delete(responses, "200")
+		}
+		parameters := make([]swaggerapi.Parameter, 0)
+		for _, segment := range strings.Split(definition.Path, "/") {
+			if len(segment) > 2 && segment[0] == '{' && segment[len(segment)-1] == '}' {
+				parameters = append(parameters, swaggerapi.Parameter{Name: segment[1 : len(segment)-1], Location: "path", Required: true, Schema: map[string]any{"type": "string"}})
+			}
+		}
+		var requestBody map[string]any
+		requestSchema := routeRequestSchema(definition.Request)
+		if definition.Method != http.MethodGet && requestSchema != nil {
+			if properties, _ := requestSchema["properties"].(map[string]any); len(properties) > 0 {
+				requestBody = requestSchema
+			} else if required, _ := requestSchema["required"].([]string); len(required) > 0 {
+				requestBody = requestSchema
+			}
+		}
+		var security []string
+		if definition.Auth != "" && definition.Auth != "none" {
+			security = []string{"BearerAuth"}
 		}
 		operations = append(operations, swaggerapi.Operation{
-			Path: definition.path, Method: definition.method, ID: definition.name, Summary: definition.summary,
-			Description: definition.description, DebugOnly: definition.DebugOnly, RequestBody: func() map[string]any {
-				if definition.method == http.MethodPost {
-					return definition.inputSchema
-				}
-				return nil
-			}(), Responses: responses,
+			Path: definition.Path, Method: definition.Method, ID: definition.OperationID, Summary: definition.Summary,
+			Description: definition.Description, DebugOnly: definition.DebugOnly, RequestBody: requestBody, Responses: responses,
+			Parameters: parameters, Security: security,
 		})
 	}
-	addOperation("/api/autodiscover", http.MethodGet, "get_api_autodiscover", tr(r, "api.rest"), tr(r, "api.resources"), nil, false, nil, "")
 	cliBinarySecurity := []string(nil)
 	if config.Get().CLI.BinaryDownload.RequireAuth {
 		cliBinarySecurity = []string{"BearerAuth"}
 	}
 	operations = append(operations, swaggerapi.Operation{
-		Path: "/cli/binaries/{binary}", Method: http.MethodGet, ID: "download_cli_binary",
+		Path: "/cli/binaries/{binary}", Method: http.MethodGet, ID: "downloadCliBinary",
 		Summary: tr(r, "api.rest"), Description: tr(r, "api.rest"),
 		Parameters: []swaggerapi.Parameter{{Name: "binary", Location: "path", Required: true, Schema: map[string]any{"type": "string"}}},
 		Responses:  map[string]any{"200": map[string]any{"description": tr(r, "api.rest"), "content": map[string]any{"application/octet-stream": map[string]any{"schema": map[string]any{"type": "string", "format": "binary"}}}}, "404": map[string]any{"description": tr(r, "contact.error.invalid")}},
 		Security:   cliBinarySecurity,
 	})
-	addOperation("/api/healthz", http.MethodGet, "get_api_healthz", tr(r, "health.title"), tr(r, "health.ok"), nil, false, nil, "")
-	addOperation("/api/swagger", http.MethodGet, "get_api_swagger", tr(r, "api.openapi"), tr(r, "api.rest"), nil, false, nil, "")
-	tokenPath := APIBasePath() + "/server/preferences/tokens"
-	primaryTokenPath := tokenPath + "/primary"
-	linkedTokenPath := tokenPath + "/{id}"
-	nameExpirySchema := map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string", "minLength": 1, "maxLength": 64}, "expiry": map[string]any{"type": "string", "enum": []string{"never", "7d", "30d", "90d", "1y"}}}, "additionalProperties": false}
-	addOperation(tokenPath, http.MethodGet, "list_owner_tokens", tr(r, "tokens.title"), tr(r, "tokens.title"), nil, true, nil, "")
-	addOperation(tokenPath, http.MethodPost, "create_linked_token", tr(r, "tokens.create_linked"), tr(r, "tokens.access"), nameExpirySchema, true, nil, "")
-	addOperation(primaryTokenPath, http.MethodPost, "issue_primary_token", tr(r, "tokens.new"), tr(r, "tokens.primary"), nil, false, nil, "")
-	addOperation(primaryTokenPath, http.MethodDelete, "revoke_primary_token", tr(r, "tokens.revoke_primary"), tr(r, "tokens.primary_revoke_summary"), map[string]any{"type": "object", "required": []string{"confirm"}, "properties": map[string]any{"confirm": map[string]any{"type": "string", "minLength": 4, "maxLength": 4}}, "additionalProperties": false}, true, nil, "")
-	addOperation(primaryTokenPath+"/reveal", http.MethodPost, "reveal_primary_token", tr(r, "tokens.reveal"), tr(r, "tokens.shown_once"), nil, true, nil, "")
-	addOperation(primaryTokenPath+"/rotate", http.MethodPost, "rotate_primary_token", tr(r, "tokens.rotate"), tr(r, "tokens.primary"), nil, true, nil, "")
-	addOperation(linkedTokenPath+"/reveal", http.MethodPost, "reveal_linked_token", tr(r, "tokens.reveal"), tr(r, "tokens.shown_once"), nil, true, []string{"id"}, "")
-	addOperation(linkedTokenPath+"/rotate", http.MethodPost, "rotate_linked_token", tr(r, "tokens.rotate"), tr(r, "tokens.primary"), nil, true, []string{"id"}, "")
-	addOperation(linkedTokenPath, http.MethodPatch, "update_linked_token", tr(r, "tokens.edit"), tr(r, "tokens.save"), nameExpirySchema, true, []string{"id"}, "")
-	addOperation(linkedTokenPath, http.MethodDelete, "revoke_linked_token", tr(r, "tokens.revoke"), tr(r, "tokens.revoke"), nil, true, []string{"id"}, "")
-	metricsConfig := config.Get().Server.Metrics
-	metricsSecured := !metricsConfig.Auth.AllowUnauthenticated
-	for _, prefix := range []string{"/server/metrics", APIBasePath() + "/server/metrics", "/api/metrics"} {
-		for _, service := range []string{"", "/prometheus", "/grafana", "/loki"} {
-			path := prefix + service
-			addOperation(path, http.MethodGet, swaggerOperationID("get_metrics", path), tr(r, "swagger.metrics.summary"), tr(r, "swagger.metrics.response"), nil, metricsSecured, nil, "server.metrics.enabled")
+	additionalPaths := make(map[string]any)
+	for _, definition := range apiOperationDefinitions(r) {
+		if strings.HasPrefix(definition.OperationID, "mcpEndpoint") {
+			additionalPaths[definition.Path] = withOperationID(mcpOperation, "post", definition.OperationID)
 		}
 	}
-	for _, service := range []string{"", "/prometheus", "/grafana", "/loki"} {
-		path := "/metrics" + service
-		addOperation(path, http.MethodGet, swaggerOperationID("get_root_metrics", path), tr(r, "swagger.metrics.summary"), tr(r, "swagger.metrics.response"), nil, metricsSecured, nil, "server.metrics.root.enabled")
-	}
-	additionalPaths := make(map[string]any)
-	for _, path := range []string{APIBasePath() + "/server/mcp", "/api/mcp", "/mcp"} {
-		additionalPaths[path] = withOperationID(mcpOperation, "post", swaggerOperationID("mcp_endpoint", path))
-	}
-	graphqlPost := map[string]any{"operationId": "graphql_query", "summary": tr(r, "graphql.title"), "description": tr(r, "graphql.description"), "requestBody": map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": graphqlInputSchema(r)}}}, "responses": response(tr(r, "graphql.description"))}
-	for _, path := range []string{"/api/graphql", APIBasePath() + "/server/graphql"} {
-		additionalPaths[path] = map[string]any{"post": withOperationID(map[string]any{"post": graphqlPost}, "post", swaggerOperationID("graphql_query", path))["post"]}
+	graphqlPost := map[string]any{"operationId": "graphqlQuery", "summary": tr(r, "graphql.title"), "description": tr(r, "graphql.description"), "requestBody": map[string]any{"required": true, "content": map[string]any{"application/json": map[string]any{"schema": graphqlInputSchema(r)}}}, "responses": response(tr(r, "graphql.description"))}
+	for _, definition := range apiOperationDefinitions(r) {
+		if definition.Path == "/api/graphql" {
+			additionalPaths[definition.Path] = map[string]any{"post": withOperationID(map[string]any{"post": graphqlPost}, "post", definition.OperationID)["post"]}
+		}
 	}
 	document := swaggerapi.Document{
 		Title: seoBrandingTitle() + " API", Version: serverVersion, Description: tr(r, "swagger.info.description"), ServerURL: BuildURL(r, ""),
@@ -2519,7 +2813,20 @@ func swaggerOperationID(prefix, path string) string {
 			separator = true
 		}
 	}
-	return strings.TrimRight(prefix+"_"+identifier.String(), "_")
+	parts := strings.FieldsFunc(prefix+"_"+identifier.String(), func(character rune) bool { return character == '_' })
+	if len(parts) == 0 {
+		return ""
+	}
+	var operationID strings.Builder
+	operationID.WriteString(parts[0])
+	for _, part := range parts[1:] {
+		if part == "" {
+			continue
+		}
+		operationID.WriteString(strings.ToUpper(part[:1]))
+		operationID.WriteString(part[1:])
+	}
+	return operationID.String()
 }
 
 func withOperationID(paths map[string]any, method, id string) map[string]any {
