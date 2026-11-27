@@ -14,7 +14,9 @@ The primary token card shows its final four characters without decrypting the st
 
 ## Create and manage linked tokens
 
-Use one linked token per automation client. A linked token has the owner's resource access, but cannot manage tokens. The tokens page supports reveal, rotation, rename, expiry changes and revocation. Available expiries are never, 7, 30 or 90 days, one year, or a chosen date. A maximum of 25 active linked tokens is allowed by default.
+Use one linked token per automation client. Choose `read` for GET, HEAD and OPTIONS requests on the owner's resources, or `read-write` to add POST, PUT, PATCH and DELETE; `read-write` is the default. Linked tokens cannot manage tokens. The tokens page supports reveal, rotation, rename, expiry changes and revocation. Available expiries are never, 7, 30 or 90 days, one year, or a chosen date. A maximum of 25 active linked tokens is allowed by default.
+
+Create requests use `name`, optional `scope` (`read` or `read-write`, default `read-write`), and either `expires` (`never`, `7d`, `30d`, `90d`, or `1y`) or `expires_on` (`YYYY-MM-DD` UTC); the two expiry fields cannot be combined. Token IDs are UUID v7 values and are the only identifiers used in URLs and JSON. The response returns the masked token object and the one-time raw value as `data.linked_token`. Reveal and rotate also return `linked_token`; list responses contain only masked values. A linked-token object includes `id`, `name`, `kind`, `token_masked`, `created_at`, `last_used_at`, `expires_at`, and `status`. Updates accept any of `name`, `expires`, or `expires_on`; a response contains the updated masked object and never the raw token.
 
 The API mirror requires the primary token as `Authorization: Bearer …` and never reads cookies:
 
@@ -35,4 +37,4 @@ The operator `adm_` token lives in `secrets.yml` and grants operator scope. Owne
 
 ## MCP
 
-MCP requires `Authorization: Bearer …` on every request and uses the same operator or owner token as the API. Cookies are ignored. A linked token is recommended for each MCP client. Token issuance and management are not exposed as MCP tools. See [API](api.md#model-context-protocol) for transport details.
+MCP requires `Authorization: Bearer …` on every request and uses the same operator or owner token as the API. Cookies are ignored. A linked token is recommended for each MCP client. Read-only linked tokens may call only read-only tools; write operations require a `read-write` or primary token. Token issuance and management are not exposed as MCP tools. See [API](api.md#model-context-protocol) for transport details.
