@@ -130,6 +130,9 @@ func TestNewestBackupFileSelectionUsesFullDateAndIncrementalModificationTime(t *
 	if err != nil || selected != hourly {
 		t.Fatalf("newest incremental selection = %q, %v; want %q by modification time", selected, err, hourly)
 	}
+	if selected, err := newestFullBackupFile(backupDir); err == nil || selected != "" {
+		t.Fatalf("newestFullBackupFile() = %q, %v; want no full backup error", selected, err)
+	}
 }
 
 func TestBackupSizeParsingAndHardRetentionLimit(t *testing.T) {

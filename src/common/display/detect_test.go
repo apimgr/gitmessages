@@ -63,6 +63,19 @@ func TestColorAndEmojiOverrides(t *testing.T) {
 	if !EmojiEnabled(environment, "auto") {
 		t.Fatal("emoji should be enabled in a capable terminal")
 	}
+	t.Setenv("NO_COLOR", "1")
+	if !EmojiEnabled(environment, "yes") {
+		t.Fatal("explicit emoji=true should override NO_COLOR")
+	}
+	if EmojiEnabled(environment, "auto") {
+		t.Fatal("automatic emoji should respect NO_COLOR")
+	}
+	environment.TerminalType = "dumb"
+	if EmojiEnabled(environment, "yes") {
+		t.Fatal("TERM=dumb must disable emoji even with an explicit override")
+	}
+	environment.TerminalType = "xterm"
+	t.Setenv("NO_COLOR", "")
 	if EmojiEnabled(environment, "no") {
 		t.Fatal("color=no should disable decorative output")
 	}

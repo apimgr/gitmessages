@@ -286,6 +286,19 @@ func newestBackupFile(backupDir string) (string, error) {
 	return "", errors.New("no backup archive was found")
 }
 
+// newestFullBackupFile selects the newest full archive without falling back to
+// an incremental archive, which cannot restore independently.
+func newestFullBackupFile(backupDir string) (string, error) {
+	selected, err := newestBackupFile(backupDir)
+	if err != nil {
+		return "", err
+	}
+	if _, ok := fullBackupDate(filepath.Base(selected)); !ok {
+		return "", errors.New("no full backup archive was found")
+	}
+	return selected, nil
+}
+
 func fullBackupDate(name string) (time.Time, bool) {
 	prefix := paths.ProjectName + "_backup_"
 	if !strings.HasPrefix(name, prefix) {

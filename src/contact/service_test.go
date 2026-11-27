@@ -60,7 +60,7 @@ type testSender struct {
 	contacts, notices, acknowledgments int
 }
 
-func (s *testSender) SendContact(_, _, _, _, _ string) error {
+func (s *testSender) SendContact(_, _, _, _, _ string, _ bool) error {
 	s.contacts++
 	return nil
 }
@@ -70,7 +70,7 @@ func (s *testSender) SendResearcher(_, _, _ string) error {
 	return nil
 }
 
-func (s *testSender) SendSecurityNotification(_, _, _, _ string, _ []byte) error {
+func (s *testSender) SendSecurityNotification(_, _, _, _ string, _ []byte, _ bool, _, _, _ string) error {
 	s.notices++
 	return nil
 }

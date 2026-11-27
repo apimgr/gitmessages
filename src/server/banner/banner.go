@@ -47,6 +47,7 @@ type ServerBannerInfo struct {
 	SMTPAddress     string
 	SetupToken      string
 	ForceColor      *bool
+	ForceEmoji      *bool
 	Lang            string
 }
 
@@ -65,13 +66,21 @@ func PrintServerStartupBanner(info ServerBannerInfo) {
 			colorMode = "no"
 		}
 	}
+	emojiMode := "auto"
+	if info.ForceEmoji != nil {
+		if *info.ForceEmoji {
+			emojiMode = "yes"
+		} else {
+			emojiMode = "no"
+		}
+	}
 	startupDatetime := info.StartupDatetime
 	if startupDatetime == "" {
 		startupDatetime = FormatStartupDatetime(time.Now(), os.Getenv("TZ"))
 	}
 	var output bytes.Buffer
 	printServerStartupBanner(&output, info, startupDatetime, width,
-		display.ColorEnabled(&environment, colorMode), display.EmojiEnabled(&environment, colorMode))
+		display.ColorEnabled(&environment, colorMode), display.EmojiEnabled(&environment, emojiMode))
 	consoleWriteMu.Lock()
 	defer consoleWriteMu.Unlock()
 	_, _ = os.Stdout.Write(output.Bytes())

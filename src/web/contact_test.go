@@ -272,6 +272,71 @@ func TestContactPagesExposeProviderFallbackAndFreshCaptchaErrors(t *testing.T) {
 	}
 }
 
+func TestContactWebhookTransportFallbackAndPrivacyRole(t *testing.T) {
+	cfg := config.ContactConfig{
+		Admin:   config.ContactRecipientConfig{Webhooks: map[string]string{"generic": "https://admin.example.test/hook"}},
+		Abuse:   config.ContactRecipientConfig{Webhooks: map[string]string{"discord": "https://abuse.example.test/hook"}},
+		General: config.ContactRecipientConfig{Webhooks: map[string]string{"slack": "https://general.example.test/hook"}},
+	}
+	privacyRole := map[string]string{"privacy": "general"}["privacy"]
+	privacyDeliveries := contactWebhookRecipients(cfg, privacyRole)
+	privacyRoles := make(map[string]string, len(privacyDeliveries))
+	for _, delivery := range privacyDeliveries {
+		for transport := range delivery.hooks {
+			if !strings.HasSuffix(transport, "_secret") {
+				privacyRoles[transport] = delivery.role
+			}
+		}
+	}
+	if privacyRoles["slack"] != "general" || privacyRoles["generic"] != "admin" {
+		t.Fatalf("privacy webhook roles = %#v, want general Slack and admin generic", privacyRoles)
+	}
+	abuseDeliveries := contactWebhookRecipients(cfg, "abuse")
+	abuseRoles := make(map[string]string, len(abuseDeliveries))
+	for _, delivery := range abuseDeliveries {
+		for transport := range delivery.hooks {
+			if !strings.HasSuffix(transport, "_secret") {
+				abuseRoles[transport] = delivery.role
+			}
+		}
+	}
+	if abuseRoles["discord"] != "abuse" || abuseRoles["slack"] != "general" || abuseRoles["generic"] != "admin" {
+		t.Fatalf("abuse webhook roles = %#v, want abuse Discord, general Slack, and admin generic", abuseRoles)
+	}
+	cfg.Abuse.Webhooks = map[string]string{"discord_secret": "secret-only"}
+	abuseDeliveries = contactWebhookRecipients(cfg, "abuse")
+	abuseRoles = make(map[string]string, len(abuseDeliveries))
+	for _, delivery := range abuseDeliveries {
+		for transport := range delivery.hooks {
+			if !strings.HasSuffix(transport, "_secret") {
+				abuseRoles[transport] = delivery.role
+			}
+		}
+	}
+	if len(abuseRoles) != 2 || abuseRoles["slack"] != "general" || abuseRoles["generic"] != "admin" {
+		t.Fatalf("abuse webhook fallback roles = %#v, want general Slack and admin generic", abuseRoles)
+	}
+}
+
+func TestPrivacyEmailRecipientFallback(t *testing.T) {
+	cfg := config.ContactConfig{
+		Admin:   config.ContactRecipientConfig{Email: "admin@example.test"},
+		General: config.ContactRecipientConfig{Email: "general@example.test"},
+		DPO:     config.DPOContactConfig{Name: "Privacy Officer", Email: "dpo@example.test"},
+	}
+	if got := contactRecipient(cfg, "privacy"); got != "dpo@example.test" {
+		t.Fatalf("privacy recipient = %q, want DPO address", got)
+	}
+	cfg.DPO.Email = ""
+	if got := contactRecipient(cfg, "privacy"); got != "general@example.test" {
+		t.Fatalf("privacy recipient = %q, want general fallback", got)
+	}
+	cfg.General.Email = ""
+	if got := contactRecipient(cfg, "privacy"); got != "admin@example.test" {
+		t.Fatalf("privacy recipient = %q, want admin fallback", got)
+	}
+}
+
 func solveSimpleCaptcha(question string) (string, error) {
 	parts := strings.Fields(question)
 	if len(parts) != 3 {
@@ -419,5 +484,30 @@ func TestSecurityURLsUseTrustedProxyBuildURL(t *testing.T) {
 	contactSecurityPage(pageResponse, pageRequest)
 	if !strings.Contains(pageResponse.Body.String(), `href="https://public.example.test/app/server/security/policy"`) {
 		t.Fatal("security page link did not use BuildURL")
+	}
+}
+
+func TestContactWebhookFallbackResolvesEachTransport(t *testing.T) {
+	cfg := config.ContactConfig{
+		Admin:    config.ContactRecipientConfig{Webhooks: map[string]string{"telegram": "https://admin.example.test/bot", "telegram_secret": "admin-key"}},
+		Security: config.ContactRecipientConfig{Webhooks: map[string]string{"discord": "https://security.example.test/hook", "discord_secret": "security-key"}},
+	}
+	deliveries := contactWebhookRecipients(cfg, "security")
+	if len(deliveries) != 2 {
+		t.Fatalf("security webhook deliveries = %d, want 2", len(deliveries))
+	}
+	got := make(map[string]contactWebhookDelivery, len(deliveries))
+	for _, delivery := range deliveries {
+		for transport := range delivery.hooks {
+			if !strings.HasSuffix(transport, "_secret") {
+				got[transport] = delivery
+			}
+		}
+	}
+	if delivery := got["discord"]; delivery.role != "security" || delivery.hooks["discord"] != "https://security.example.test/hook" || delivery.hooks["discord_secret"] != "security-key" {
+		t.Fatalf("security Discord delivery = %#v", delivery)
+	}
+	if delivery := got["telegram"]; delivery.role != "admin" || delivery.hooks["telegram"] != "https://admin.example.test/bot" || delivery.hooks["telegram_secret"] != "admin-key" {
+		t.Fatalf("admin Telegram fallback delivery = %#v", delivery)
 	}
 }

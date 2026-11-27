@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/apimgr/gitmessages/src/config"
+	"github.com/apimgr/gitmessages/src/mode"
+	projectpaths "github.com/apimgr/gitmessages/src/paths"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -534,13 +536,16 @@ func hostnameValue() string {
 }
 
 func resolveStartupFQDN(domain, osHostname, envHostname string, addresses []net.IP) string {
-	if configured := domainList("", domain); len(configured) > 0 && validURLDisplayHost(configured[0]) {
-		return configured[0]
+	for _, candidate := range strings.Split(domain, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if IsValidEnvironmentHost(candidate, mode.Get() == mode.Development, projectpaths.ProjectName) {
+			return candidate
+		}
 	}
 	if validURLDisplayHost(osHostname) {
 		return strings.TrimSpace(osHostname)
 	}
-	if validURLDisplayHost(envHostname) {
+	if IsValidEnvironmentHost(envHostname, mode.Get() == mode.Development, projectpaths.ProjectName) {
 		return strings.TrimSpace(envHostname)
 	}
 	for _, wantIPv4 := range []bool{false, true} {
@@ -555,6 +560,54 @@ func resolveStartupFQDN(domain, osHostname, envHostname string, addresses []net.
 		}
 	}
 	return ""
+}
+
+// IsValidHost applies the server mode's public-host validation rules.
+func IsValidHost(host string, devMode bool, projectName string) bool {
+	lower := strings.ToLower(strings.TrimSpace(host))
+	if lower == "" || !validHostname(lower) || net.ParseIP(lower) != nil {
+		return false
+	}
+	if lower == "localhost" {
+		return devMode
+	}
+	if !strings.Contains(lower, ".") {
+		return false
+	}
+	if strings.HasSuffix(lower, ".onion") || strings.HasSuffix(lower, ".i2p") || strings.HasSuffix(lower, ".exit") {
+		return true
+	}
+	if projectName != "" && strings.HasSuffix(lower, "."+strings.ToLower(projectName)) {
+		return devMode
+	}
+	suffix, icann := publicsuffix.PublicSuffix(lower)
+	switch suffix {
+	case "localhost", "test", "example", "invalid", "local", "lan", "internal", "home", "localdomain", "intranet", "corp", "private":
+		return devMode
+	}
+	if !devMode && !icann {
+		return false
+	}
+	registrable, err := publicsuffix.EffectiveTLDPlusOne(lower)
+	return err == nil && registrable != ""
+}
+
+// IsValidEnvironmentHost rejects app-managed overlay names as operator overrides.
+func IsValidEnvironmentHost(host string, devMode bool, projectName string) bool {
+	lower := strings.ToLower(strings.TrimSpace(host))
+	if strings.HasSuffix(lower, ".onion") || strings.HasSuffix(lower, ".i2p") || strings.HasSuffix(lower, ".exit") {
+		return false
+	}
+	return IsValidHost(lower, devMode, projectName)
+}
+
+// IsValidSSLHost reports whether a hostname is suitable for a public ACME certificate.
+func IsValidSSLHost(host string) bool {
+	lower := strings.ToLower(strings.TrimSpace(host))
+	if strings.HasSuffix(lower, ".onion") || strings.HasSuffix(lower, ".i2p") || strings.HasSuffix(lower, ".exit") {
+		return false
+	}
+	return IsValidHost(lower, false, "")
 }
 
 func validURLDisplayHost(host string) bool {

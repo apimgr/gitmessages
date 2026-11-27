@@ -78,6 +78,8 @@ var startedElevated = privilege.IsElevated()
 var pendingUpdateFailure string
 
 var updateRestartRequests = make(chan struct{}, 1)
+var invalidHostWarningMu sync.Mutex
+var invalidHostWarnings = make(map[string]struct{})
 
 type optionalUpdate string
 
@@ -165,11 +167,48 @@ func configuredTLSHosts(configuration *config.Config) []string {
 	if configuration == nil {
 		return nil
 	}
-	fqdn := strings.TrimSpace(strings.Split(os.Getenv("DOMAIN"), ",")[0])
-	if fqdn == "" {
-		return nil
+	domains := make([]string, 0)
+	for _, fqdn := range strings.Split(os.Getenv("DOMAIN"), ",") {
+		fqdn = strings.TrimSpace(fqdn)
+		if fqdn == "" {
+			continue
+		}
+		valid := web.IsValidEnvironmentHost(fqdn, mode.Get() == mode.Development, paths.ProjectName)
+		if configuration.Server.SSL.LetsEncrypt.Enabled {
+			valid = web.IsValidSSLHost(fqdn)
+		}
+		if !valid {
+			warnInvalidHost("DOMAIN", fqdn)
+			continue
+		}
+		domains = append(domains, fqdn)
 	}
-	return []string{fqdn}
+	return domains
+}
+
+func warnInvalidHost(source, value string) {
+	key := source + "\x00" + value
+	invalidHostWarningMu.Lock()
+	if _, warned := invalidHostWarnings[key]; warned {
+		invalidHostWarningMu.Unlock()
+		return
+	}
+	invalidHostWarnings[key] = struct{}{}
+	invalidHostWarningMu.Unlock()
+	log.Printf("WARN invalid %s value skipped: %q", source, value)
+}
+
+func warnInvalidHostEnvironment() {
+	devMode := mode.Get() == mode.Development
+	for _, value := range strings.Split(os.Getenv("DOMAIN"), ",") {
+		value = strings.TrimSpace(value)
+		if value != "" && !web.IsValidEnvironmentHost(value, devMode, paths.ProjectName) {
+			warnInvalidHost("DOMAIN", value)
+		}
+	}
+	if hostname := strings.TrimSpace(os.Getenv("HOSTNAME")); hostname != "" && !web.IsValidEnvironmentHost(hostname, devMode, paths.ProjectName) {
+		warnInvalidHost("HOSTNAME", hostname)
+	}
 }
 
 type serverListener struct {
@@ -592,13 +631,14 @@ func main() {
 		cfg.Server.BaseURL = baseURL
 	}
 	web.SetCORSOrigins(cfg.Server.CORS.AllowedOrigins)
-	web.SetServerFQDN(web.ResolveStartupFQDN())
-	web.SetDefaultTheme(cfg.Web.UI.Theme)
 	var debugOverride *bool
 	if flagWasProvided("debug") {
 		debugOverride = debugFlag
 	}
 	mode.InitializeWithConfig(*modeFlag, cfg.Server.Mode, debugOverride)
+	warnInvalidHostEnvironment()
+	web.SetServerFQDN(web.ResolveStartupFQDN())
+	web.SetDefaultTheme(cfg.Web.UI.Theme)
 	mode.SetProfilingRates(cfg.Server.Debug.BlockProfileRate, cfg.Server.Debug.MutexProfileFraction)
 	if err := configureStructuredLogger(cfg.Server.Logging.Level); err != nil {
 		log.Fatalf("configure structured logger: %v", err)
@@ -964,6 +1004,8 @@ func main() {
 	if *colorFlag != "auto" {
 		forced := *colorFlag == "yes"
 		forceColor = &forced
+	} else if cfg.Output.Color != nil {
+		forceColor = cfg.Output.Color
 	}
 	appName := strings.TrimSpace(cfg.Server.Branding.Title)
 	if appName == "" {
@@ -978,7 +1020,7 @@ func main() {
 		StartupDatetime: serverbanner.FormatStartupDatetime(time.Now(), os.Getenv("TZ")),
 		URLs:            urls, OnionAddress: startupOverlayURL(torAddress, cfg.Server.BaseURL),
 		I2PAddress: startupOverlayURL(i2pAddress, cfg.Server.BaseURL), SMTPAddress: smtpAddress, SetupToken: setupToken,
-		ForceColor: forceColor, Lang: os.Getenv("GITMESSAGES_LANG"),
+		ForceColor: forceColor, ForceEmoji: cfg.Output.Emoji, Lang: os.Getenv("GITMESSAGES_LANG"),
 	})
 	reloadConfiguration := func() {
 		loaded, err := config.Load(configPath)
@@ -1980,7 +2022,7 @@ Maintenance Commands:
   --maintenance backup [file]   Back up configuration and server.db
       --include-ssl             Include SSL files
       --include-data            Include data files
-  --maintenance restore [file]  Restore from backup
+  --maintenance restore [file]  Restore from backup (default: newest full backup)
   --maintenance update          Check for updates
   --maintenance pgp generate|rotate|publish|export|import|delete  Manage the security PGP key
   --maintenance secret rotate installation_secret|encryption_key   Rotate a project secret
@@ -2261,9 +2303,20 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, bac
 		if configuration.Server.Database.Driver == "libsql" {
 			log.Fatalf("remote libSQL restore is unavailable")
 		}
-		if len(args) != 1 {
-			fmt.Println("Usage: gitmessages --maintenance restore <backup-file>")
+		if len(args) > 1 {
+			fmt.Println(i18n.T(os.Getenv("GITMESSAGES_LANG"), "cli.restore_usage"))
 			os.Exit(2)
+		}
+		backupFile := ""
+		var err error
+		defaultRestore := len(args) == 0
+		if defaultRestore {
+			backupFile, err = newestFullBackupFile(backupDir)
+			if err != nil {
+				log.Fatalf("select full backup for restore: %v", err)
+			}
+		} else {
+			backupFile = args[0]
 		}
 		databaseEmpty, err := applicationDatabaseEmpty(filepath.Join(databaseDir, "server.db"))
 		if err != nil {
@@ -2281,19 +2334,24 @@ func handleMaintenanceCommand(cmd, configDir, dataDir, databaseDir, logsDir, bac
 		if err := authorizeApplicationRestore(configuration.Server.Token, suppliedToken, databaseEmpty, privilege.IsElevated(), serviceUser, os.Stdin, os.Stderr); err != nil {
 			log.Fatalf("restore authorization failed: %v", err)
 		}
+		if defaultRestore {
+			if err := confirmDefaultRestore(os.Stdin, os.Stderr); err != nil {
+				log.Fatalf("restore confirmation failed: %v", err)
+			}
+		}
 		password := ""
-		if strings.HasSuffix(strings.ToLower(args[0]), ".enc") {
+		if strings.HasSuffix(strings.ToLower(backupFile), ".enc") {
 			password, err = promptBackupPassword(os.Stdin, os.Stderr)
 			if err != nil {
 				log.Fatalf("read backup password: %v", err)
 			}
 		}
-		if err := restoreApplicationBackup(context.Background(), args[0], configDir, dataDir, databaseDir, pidPath, configuration.Server.Address, configuration.Server.Port, configuration.Server.Restore, password); err != nil {
+		if err := restoreApplicationBackup(context.Background(), backupFile, configDir, dataDir, databaseDir, pidPath, configuration.Server.Address, configuration.Server.Port, configuration.Server.Restore, password); err != nil {
 			log.Fatalf("restore failed: %v", err)
 		}
-		if info, err := os.Stat(args[0]); err == nil {
+		if info, err := os.Stat(backupFile); err == nil {
 			if restoredStore, openErr := database.OpenSQLite(filepath.Join(databaseDir, "server.db"), 1); openErr == nil {
-				if auditErr := recordBackupEvent(context.Background(), restoredStore, "backup.restored", args[0], info.Size(), strings.HasSuffix(strings.ToLower(args[0]), ".enc"), true, "verified"); auditErr != nil {
+				if auditErr := recordBackupEvent(context.Background(), restoredStore, "backup.restored", backupFile, info.Size(), strings.HasSuffix(strings.ToLower(backupFile), ".enc"), true, "verified"); auditErr != nil {
 					log.Printf("WARN backup.audit_write_failed error=%q", auditErr)
 				}
 				if closeErr := restoredStore.Close(); closeErr != nil {

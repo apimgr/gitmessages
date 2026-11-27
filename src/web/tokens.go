@@ -161,7 +161,7 @@ func currentAuthStore() *auth.Store {
 }
 
 func registerTokenRoutes(mux routeRegistrar) {
-	mux.HandleFunc("/server/preferences/tokens", tokenPageOrAction)
+	mux.HandleFunc("/server/preferences/tokens", frontendPage(tokenPageOrAction, tokenAPI, "/server/preferences/tokens"))
 	mux.HandleFunc("/server/preferences/token/create", tokenWebAction("create"))
 	mux.HandleFunc("/server/preferences/token/restore", tokenWebAction("restore"))
 	mux.HandleFunc("/server/preferences/token/forget", tokenWebAction("forget"))

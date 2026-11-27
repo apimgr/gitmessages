@@ -66,13 +66,13 @@ type Outcome struct {
 }
 
 type Sender interface {
-	SendContact(to, from, name, subject, body string) error
+	SendContact(to, from, name, subject, body string, tunneled bool) error
 }
 type ResearcherSender interface {
 	SendResearcher(to, subject, body string) error
 }
 type SecurityNotificationSender interface {
-	SendSecurityNotification(to, subject, body, filename string, encrypted []byte) error
+	SendSecurityNotification(to, subject, body, filename string, encrypted []byte, tunneled bool, trackingID, component, severity string) error
 }
 type EncryptedResearcherSender interface {
 	SendResearcherEncrypted(to, subject string, encrypted []byte) error
@@ -674,7 +674,7 @@ func (s *Service) Confirm(ctx context.Context, input Message, ip string, now tim
 		return s.storeSecurity(ctx, input, now)
 	}
 	if s.sender != nil {
-		if err := s.sender.SendContact(input.Type, input.Email, input.Name, "[contact] "+input.Subject, contactBody(input)); err != nil {
+		if err := s.sender.SendContact(input.Type, input.Email, input.Name, "[contact] "+input.Subject, contactBody(input), input.Tunneled); err != nil {
 			return Outcome{}, err
 		}
 	}
@@ -847,9 +847,9 @@ func (s *Service) storeSecurity(ctx context.Context, in Message, now time.Time) 
 		}
 		subject := "[security] report " + id + ": " + in.Fields["summary"]
 		if notification, ok := s.sender.(SecurityNotificationSender); ok {
-			_ = notification.SendSecurityNotification(to, subject, notice, id+".enc", encrypted)
+			_ = notification.SendSecurityNotification(to, subject, notice, id+".enc", encrypted, in.Tunneled, id, component, severity)
 		} else {
-			_ = s.sender.SendContact("security", "", "", subject, notice+"\n\nEncrypted report data (AES-256-GCM): "+base64.StdEncoding.EncodeToString(encrypted))
+			_ = s.sender.SendContact("security", "", "", subject, notice+"\n\nEncrypted report data (AES-256-GCM): "+base64.StdEncoding.EncodeToString(encrypted), in.Tunneled)
 		}
 	}
 	ackSent := false

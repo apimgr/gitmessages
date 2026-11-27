@@ -130,23 +130,23 @@ func Handler(version string, commit ...string) http.Handler {
 	activeMetricsExporter = exporter
 	metricsExporterMu.Unlock()
 	mux.HandleFunc("/", home)
-	mux.HandleFunc("/types", typesPage)
-	mux.HandleFunc("/templates", templatesPage)
-	mux.HandleFunc("/builder", builderPage)
+	mux.HandleFunc("/types", frontendPage(typesPage, apiTypes, "/types"))
+	mux.HandleFunc("/templates", frontendPage(templatesPage, apiTemplates, "/templates"))
+	mux.HandleFunc("/builder", frontendPage(builderPage, apiMessageForm, "/messages"))
 	mux.HandleFunc("/server", serverRootRedirect)
 	mux.HandleFunc("/server/tracking.js", trackingScriptPage)
-	mux.HandleFunc("/server/about", aboutPage)
-	mux.HandleFunc("/server/help", helpPage)
-	mux.HandleFunc("/server/help/mcp", mcpHelpPage)
-	mux.HandleFunc("/server/privacy", privacyPage)
-	mux.HandleFunc("/server/terms", termsPage)
-	mux.HandleFunc("/server/preferences", preferencesPage)
+	mux.HandleFunc("/server/about", frontendPage(aboutPage, apiAbout, "/server/about"))
+	mux.HandleFunc("/server/help", frontendPage(helpPage, apiHelp, "/server/help"))
+	mux.HandleFunc("/server/help/mcp", frontendPage(mcpHelpPage, apiMCPHelp, "/server/help/mcp"))
+	mux.HandleFunc("/server/privacy", frontendPage(privacyPage, apiPrivacy, "/server/privacy"))
+	mux.HandleFunc("/server/terms", frontendPage(termsPage, apiTerms, "/server/terms"))
+	mux.HandleFunc("/server/preferences", frontendPage(preferencesPage, apiPreferences, "/server/preferences"))
 	mux.HandleFunc("/server/ccpa", ccpaOptOutPage)
 	mux.HandleFunc("/server/consent", consentPage)
 	registerPreferenceSyncRoutes(mux)
-	mux.HandleFunc("/server/healthz", healthPage)
+	mux.HandleFunc("/server/healthz", frontendPage(healthPage, apiHealth, "/server/healthz"))
 	if config.Get().Server.Healthz.Root.Enabled {
-		mux.HandleFunc("/healthz", healthPage)
+		mux.HandleFunc("/healthz", frontendPage(healthPage, apiHealth, "/server/healthz"))
 	}
 	mux.HandleFunc("/manifest.json", manifest)
 	mux.HandleFunc("/offline.html", offlinePage)
@@ -156,6 +156,7 @@ func Handler(version string, commit ...string) http.Handler {
 	mux.HandleFunc("/static/splash/", pwaSplash)
 	mux.HandleFunc("/sw.js", serviceWorker)
 	mux.HandleFunc("/styles.css", styles)
+	mux.HandleFunc("/static/css/", stylesheetAsset)
 	mux.HandleFunc("/static/vendor/swagger-ui/", swaggerStaticAsset)
 	mux.HandleFunc("/static/vendor/graphiql/", graphQLStaticAsset)
 	mux.HandleFunc("/static/js/", documentationScript)
@@ -812,6 +813,46 @@ func wantsFrontendText(r *http.Request) bool {
 	return strings.Contains(accept, "text/plain") || isTextClient(r.UserAgent())
 }
 
+func frontendPage(page http.HandlerFunc, api http.HandlerFunc, apiPath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Accept")
+		if r.Method == http.MethodGet && acceptsJSON(r.Header.Get("Accept")) {
+			request := r.Clone(r.Context())
+			request.URL = new(url.URL)
+			*request.URL = *r.URL
+			request.URL.Path = APIBasePath() + apiPath
+			api(w, request)
+			return
+		}
+		page(w, r)
+	}
+}
+
+func acceptsJSON(header string) bool {
+	for _, mediaRange := range strings.Split(header, ",") {
+		parts := strings.Split(mediaRange, ";")
+		if !strings.EqualFold(strings.TrimSpace(parts[0]), "application/json") {
+			continue
+		}
+		quality := 1.0
+		for _, parameter := range parts[1:] {
+			key, value, found := strings.Cut(strings.TrimSpace(parameter), "=")
+			if found && strings.EqualFold(strings.TrimSpace(key), "q") {
+				parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+				if err != nil || parsed <= 0 || parsed > 1 {
+					quality = 0
+				} else {
+					quality = parsed
+				}
+			}
+		}
+		if quality > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func isTextClient(userAgent string) bool {
 	userAgent = strings.ToLower(userAgent)
 	return strings.Contains(userAgent, "curl/") || strings.Contains(userAgent, "wget/") || strings.Contains(userAgent, "httpie/")
@@ -1313,6 +1354,13 @@ func apiMessages(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, r, map[string]string{"message": result})
 }
 
+func apiMessageForm(w http.ResponseWriter, r *http.Request) {
+	if !method(w, r, http.MethodGet) {
+		return
+	}
+	writeSuccess(w, r, map[string]any{"fields": buildMessageInputSchema(r)})
+}
+
 func apiRandom(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
@@ -1487,12 +1535,18 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
 	if old, err := r.Cookie("gitmessages_build"); err == nil && old.Value != stamp && isTopLevelHTMLNavigation(r) {
 		w.Header().Set("Clear-Site-Data", `"cache", "storage"`)
 	}
-	http.SetCookie(w, &http.Cookie{Name: "gitmessages_build", Value: stamp, Path: "/", MaxAge: 365 * 24 * 60 * 60, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: requestIsSecure(r)})
+	http.SetCookie(w, &http.Cookie{Name: "gitmessages_build", Value: stamp, Path: "/", MaxAge: 365 * 24 * 60 * 60, HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: requestIsSecure(r) && secureOwnerCookie(r)})
 	locale := i18n.Get(r.Header.Get("X-GitMessages-Language"))
 	csrf := ensureCSRFCookie(w, r)
 	theme := selectedTheme(r)
 	var output bytes.Buffer
 	stampURL := template.HTMLEscapeString(url.QueryEscape(stamp))
+	offlineStrings, _ := json.Marshal(map[string]string{
+		"title":   tr(r, "common.offline"),
+		"heading": tr(r, "common.offline"),
+		"message": tr(r, "common.offline_body"),
+		"reload":  tr(r, "offline.reload"),
+	})
 	nav := navigationMarkup(r)
 	nextTheme := nextTheme(theme)
 	themeLabel := strings.ReplaceAll(tr(r, "theme.switch_label"), "{theme}", tr(r, "theme."+theme))
@@ -1539,12 +1593,14 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
     <link rel="apple-touch-startup-image" href="/static/splash/iphone-1284x2778.png?v=%s" media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3)">
     %s
     <link rel="manifest" href="/manifest.json?v=%s">
-    <link rel="stylesheet" href="/styles.css?v=%s">
+	    <link rel="stylesheet" href="/static/css/common.css?v=%s">
+	    <link rel="stylesheet" href="/static/css/components.css?v=%s">
+	    <link rel="stylesheet" href="/static/css/public.css?v=%s">
     %s
     %s
     <title>%s</title>
   </head>
-	  <body>%s
+	  <body>%s<script type="application/json" id="offline-strings">%s</script>
 	    <a class="skip-link" href="#main-content">%s</a><a class="skip-link skip-link-secondary" href="#navigation">%s</a>%s<input type="checkbox" id="nav-toggle" class="nav-checkbox" aria-label="%s"><header role="banner"><a class="brand" href="/">%s</a><nav class="nav-links" id="navigation" aria-label="%s">%s</nav><label class="nav-toggle" for="nav-toggle" aria-hidden="true">☰</label><div class="header-actions"><a href="/server/preferences">%s</a>%s</div>%s</header>
     <main id="main-content" role="main" tabindex="-1"><div class="container %s"><header class="page-header">%s<h1 class="page-title">%s</h1>%s</header>%s</div></main>
         <nav class="nav-panel" id="nav-panel" aria-label="%s"><label for="nav-toggle" class="nav-close" aria-label="%s">✕</label>%s</nav><label for="nav-toggle" class="nav-overlay" aria-hidden="true"></label>
@@ -1555,7 +1611,7 @@ func page(w http.ResponseWriter, r *http.Request, title string, body template.HT
     <script src="/static/js/app.js?v=%s" defer></script>
   </body>
 </html>
-	`, locale.Meta.Language, locale.Meta.Direction, theme, theme, template.HTMLEscapeString(stamp), template.HTMLEscapeString(requestBasePath(r)), template.HTMLEscapeString(seoDescription(r)), seoHeadMarkup(r, title), stampURL, stampURL, stampURL, stampURL, template.HTMLEscapeString(seoBrandingTitle()), stampURL, stampURL, robots, stampURL, stampURL, toolStyles, trackingTags, template.HTMLEscapeString(seoPageTitle(title)), trackingNoscript, tr(r, "nav.skip"), tr(r, "nav.skip_navigation"), consentBanner, tr(r, "nav.toggle"), brandingHeaderMarkup(r), tr(r, "nav.main"), nav, tr(r, "preferences.title"), headerThemeToggle, customHeader, containerClass, serverPageBreadcrumb(r), template.HTMLEscapeString(title), pageLead, body, tr(r, "nav.main"), tr(r, "nav.close"), nav, tr(r, "pwa.offline_indicator"), tr(r, "pwa.update_available"), tr(r, "pwa.update_now"), tr(r, "pwa.install_label"), tr(r, "pwa.install_button"), tr(r, "pwa.install_ios_title"), tr(r, "pwa.install_ios_instructions"), customFooter, overlayFooter, template.HTMLEscapeString(seoBrandingTitle()), tr(r, "nav.about"), tr(r, "nav.help"), tr(r, "nav.privacy"), tr(r, "nav.terms"), tr(r, "nav.security"), tr(r, "preferences.title"), locale.Meta.Language, template.HTMLEscapeString(locale.Meta.NativeName), tr(r, "api.rest"), tr(r, "graphql.title"), stampURL)
+	`, locale.Meta.Language, locale.Meta.Direction, theme, theme, template.HTMLEscapeString(stamp), template.HTMLEscapeString(requestBasePath(r)), template.HTMLEscapeString(seoDescription(r)), seoHeadMarkup(r, title), stampURL, stampURL, stampURL, stampURL, template.HTMLEscapeString(seoBrandingTitle()), stampURL, stampURL, robots, stampURL, stampURL, stampURL, stampURL, toolStyles, trackingTags, template.HTMLEscapeString(seoPageTitle(title)), trackingNoscript, string(offlineStrings), tr(r, "nav.skip"), tr(r, "nav.skip_navigation"), consentBanner, tr(r, "nav.toggle"), brandingHeaderMarkup(r), tr(r, "nav.main"), nav, tr(r, "preferences.title"), headerThemeToggle, customHeader, containerClass, serverPageBreadcrumb(r), template.HTMLEscapeString(title), pageLead, body, tr(r, "nav.main"), tr(r, "nav.close"), nav, tr(r, "pwa.offline_indicator"), tr(r, "pwa.update_available"), tr(r, "pwa.update_now"), tr(r, "pwa.install_label"), tr(r, "pwa.install_button"), tr(r, "pwa.install_ios_title"), tr(r, "pwa.install_ios_instructions"), customFooter, overlayFooter, template.HTMLEscapeString(seoBrandingTitle()), tr(r, "nav.about"), tr(r, "nav.help"), tr(r, "nav.privacy"), tr(r, "nav.terms"), tr(r, "nav.security"), tr(r, "preferences.title"), locale.Meta.Language, template.HTMLEscapeString(locale.Meta.NativeName), tr(r, "api.rest"), tr(r, "graphql.title"), stampURL)
 	pageHTML := prefixHTMLPaths(output.String(), requestBasePath(r))
 	if wantsFrontendText(r) {
 		writeText(w, http.StatusOK, formatHTMLText(pageHTML))
@@ -2292,7 +2348,7 @@ func offlinePage(w http.ResponseWriter, r *http.Request) {
 	if !method(w, r, http.MethodGet) {
 		return
 	}
-	content := `<section class="section-card" aria-labelledby="offline-title"><h2 id="offline-title">` + template.HTMLEscapeString(tr(r, "common.offline")) + `</h2><p>` + template.HTMLEscapeString(tr(r, "common.offline_body")) + `</p></section>`
+	content := `<section class="section-card" aria-labelledby="offline-title"><h2 id="offline-title">` + template.HTMLEscapeString(tr(r, "common.offline")) + `</h2><p>` + template.HTMLEscapeString(tr(r, "common.offline_body")) + `</p><p><a href="` + template.HTMLEscapeString(BuildURL(r, "/")) + `">` + template.HTMLEscapeString(tr(r, "offline.reload")) + `</a></p></section>`
 	page(w, r, tr(r, "common.offline"), template.HTML(content))
 }
 
@@ -2358,6 +2414,16 @@ func styles(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	_, _ = w.Write(content)
+}
+
+func stylesheetAsset(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/static/css/")
+	if name != "common.css" && name != "components.css" && name != "public.css" {
+		http.NotFound(w, r)
+		return
+	}
+	content, err := documentationAssets.ReadFile("static/css/" + name)
+	serveEmbeddedAsset(w, r, content, err, "text/css; charset=utf-8")
 }
 
 func serveEmbeddedAsset(w http.ResponseWriter, r *http.Request, content []byte, err error, contentType string) {
@@ -2459,7 +2525,9 @@ func serviceWorker(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
 	offlineTitle := template.HTMLEscapeString(tr(r, "common.offline"))
 	offlineBody := template.HTMLEscapeString(tr(r, "common.offline_body"))
-	offlineHTML, _ := json.Marshal(fmt.Sprintf(`<!doctype html><html lang="%s"><title>%s</title><h1>%s</h1><p>%s</p></html>`, template.HTMLEscapeString(languageCode(r)), offlineTitle, offlineTitle, offlineBody))
+	offlineReload := template.HTMLEscapeString(tr(r, "offline.reload"))
+	offlineURL := template.HTMLEscapeString(BuildURL(r, "/"))
+	offlineHTML, _ := json.Marshal(fmt.Sprintf(`<!doctype html><html lang="%s"><title>%s</title><main><h1>%s</h1><p>%s</p><p><a href="%s">%s</a></p></main></html>`, template.HTMLEscapeString(languageCode(r)), offlineTitle, offlineTitle, offlineBody, offlineURL, offlineReload))
 	_, _ = fmt.Fprintf(w, `const BASE=%q;
 const appURL=value=>BASE+value;
 const appPath=value=>value===BASE||value.startsWith(BASE+'/')?(value.slice(BASE.length)||'/'):null;
@@ -2468,9 +2536,9 @@ const CACHE_NAME=CACHE_PREFIX+%q;
 const MAX_CACHE_BYTES=50*1024*1024;
 const MAX_AGE_MS=7*24*60*60*1000;
 const NAV_TIMEOUT_MS=8000;
-const PRECACHE=[appURL('/styles.css?v=%s'),appURL('/static/js/app.js?v=%s'),appURL('/manifest.json?v=%s'),appURL('/icon.svg?v=%s'),appURL('/static/icons/icon-192.png?v=%s'),appURL('/static/icons/icon-512.png?v=%s'),appURL('/static/vendor/swagger-ui/swagger-ui-bundle.js?v=%s'),appURL('/static/vendor/swagger-ui/swagger-ui-standalone-preset.js?v=%s'),appURL('/static/vendor/swagger-ui/swagger-ui.css?v=%s'),appURL('/static/vendor/swagger-ui/theme.css?v=%s'),appURL('/static/js/docs-swagger.js?v=%s'),appURL('/static/vendor/graphiql/react.production.min.js?v=%s'),appURL('/static/vendor/graphiql/react-dom.production.min.js?v=%s'),appURL('/static/js/graphiql-compat.js?v=%s'),appURL('/static/vendor/graphiql/graphiql.min.js?v=%s'),appURL('/static/vendor/graphiql/graphiql.css?v=%s'),appURL('/static/vendor/graphiql/theme.css?v=%s'),appURL('/static/js/docs-graphql.js?v=%s'),appURL('/offline.html')];
+const PRECACHE=[appURL('/static/css/common.css?v=%s'),appURL('/static/css/components.css?v=%s'),appURL('/static/css/public.css?v=%s'),appURL('/styles.css?v=%s'),appURL('/static/js/app.js?v=%s'),appURL('/manifest.json?v=%s'),appURL('/icon.svg?v=%s'),appURL('/static/icons/icon-192.png?v=%s'),appURL('/static/icons/icon-512.png?v=%s'),appURL('/static/vendor/swagger-ui/swagger-ui-bundle.js?v=%s'),appURL('/static/vendor/swagger-ui/swagger-ui-standalone-preset.js?v=%s'),appURL('/static/vendor/swagger-ui/swagger-ui.css?v=%s'),appURL('/static/vendor/swagger-ui/theme.css?v=%s'),appURL('/static/js/docs-swagger.js?v=%s'),appURL('/static/vendor/graphiql/react.production.min.js?v=%s'),appURL('/static/vendor/graphiql/react-dom.production.min.js?v=%s'),appURL('/static/js/graphiql-compat.js?v=%s'),appURL('/static/vendor/graphiql/graphiql.min.js?v=%s'),appURL('/static/vendor/graphiql/graphiql.css?v=%s'),appURL('/static/vendor/graphiql/theme.css?v=%s'),appURL('/static/js/docs-graphql.js?v=%s'),appURL('/offline.html')];
 const PUBLIC_PAGES=new Set(['/','/types','/templates','/server/about','/server/help','/server/help/mcp','/server/privacy','/server/terms','/server/security','/offline.html']);
-const STATIC_PATH=path=>path==='/styles.css'||path==='/static/js/app.js'||path==='/manifest.json'||path==='/icon.svg'||path.startsWith('/locales/')||path.startsWith('/static/icons/')||path.startsWith('/static/splash/')||path.startsWith('/static/js/')||path.startsWith('/static/vendor/');
+const STATIC_PATH=path=>path==='/styles.css'||path.startsWith('/static/css/')||path==='/static/js/app.js'||path==='/manifest.json'||path==='/icon.svg'||path.startsWith('/locales/')||path.startsWith('/static/icons/')||path.startsWith('/static/splash/')||path.startsWith('/static/js/')||path.startsWith('/static/vendor/');
 
 async function cacheResponse(request,response){
   if(!response.ok||response.redirected||response.type==='opaque')return;
@@ -2560,7 +2628,7 @@ self.addEventListener('fetch',event=>{
       }catch(error){return new Response('',{status:504,statusText:'Gateway Timeout'});}
     })());
   }
-	});`, requestBasePath(r), assetStamp(), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), string(offlineHTML))
+	});`, requestBasePath(r), assetStamp(), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), url.QueryEscape(assetStamp()), string(offlineHTML))
 }
 
 func swaggerJSON(w http.ResponseWriter, r *http.Request) {

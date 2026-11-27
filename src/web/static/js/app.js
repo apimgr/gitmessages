@@ -4,6 +4,51 @@ const root=document.documentElement;
 const stamp=root.dataset.build||'';
 const base=root.dataset.basePath||'';
 const appURL=value=>base+value;
+const offlineData=document.getElementById('offline-strings');
+let offlineStrings={title:'Offline',heading:'Offline',message:'This page is not available offline.',reload:'Reload page'};
+try{
+  const stored=JSON.parse(localStorage.getItem('gitmessages_offline_strings')||'null');
+  if(stored&&typeof stored==='object')offlineStrings={...offlineStrings,...stored};
+}catch{}
+try{
+  if(offlineData){
+    const translated=JSON.parse(offlineData.textContent||'{}');
+    offlineStrings={...offlineStrings,...translated};
+    localStorage.setItem('gitmessages_offline_strings',JSON.stringify(offlineStrings));
+  }
+}catch{}
+const bootTimer=window.setTimeout(async()=>{
+  let recovered=false;
+  try{recovered=sessionStorage.getItem('gitmessages_recovered')==='true'}catch{}
+  if(recovered){
+    const panel=document.createElement('main');
+    const section=document.createElement('section');
+    const heading=document.createElement('h1');
+    const message=document.createElement('p');
+    const reload=document.createElement('a');
+    section.setAttribute('aria-labelledby','offline-recovery-title');
+    heading.id='offline-recovery-title';
+    heading.textContent=offlineStrings.heading||offlineStrings.title;
+    message.textContent=offlineStrings.message;
+    reload.href=window.location.href;
+    reload.textContent=offlineStrings.reload;
+    section.append(heading,message,reload);
+    panel.append(section);
+    document.body.replaceChildren(panel);
+    return;
+  }
+  try{sessionStorage.setItem('gitmessages_recovered','true')}catch{}
+  try{
+    const registrations=await navigator.serviceWorker?.getRegistrations?.()||[];
+    await Promise.all(registrations.map(registration=>registration.unregister()));
+  }catch{}
+  try{
+    const keys=await caches.keys();
+    await Promise.all(keys.map(key=>caches.delete(key)));
+  }catch{}
+  window.location.reload();
+},10000);
+requestAnimationFrame(()=>requestAnimationFrame(()=>window.clearTimeout(bootTimer)));
 const consentCookie=()=>document.cookie.split('; ').find(item=>item.startsWith('cookie_consent='));
 const preferenceConsent=()=>{
   const cookie=consentCookie();
@@ -68,8 +113,8 @@ document.querySelectorAll('form').forEach(form=>{
 });
 const hasDirtyForm=()=>[...document.forms].some(form=>dirtyForms.has(form));
 const reloadOnce=nextStamp=>{
-  if(sessionStorage.getItem('gitmessages_recovered')===nextStamp)return;
-  sessionStorage.setItem('gitmessages_recovered',nextStamp);
+	if(sessionStorage.getItem('gitmessages_update_reloaded')===nextStamp)return;
+	sessionStorage.setItem('gitmessages_update_reloaded',nextStamp);
   window.location.reload();
 };
 let deferredInstallPrompt;

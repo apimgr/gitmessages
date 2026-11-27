@@ -141,6 +141,22 @@ func authorizeApplicationRestore(serverToken, suppliedToken string, databaseEmpt
 	return nil
 }
 
+// confirmDefaultRestore requires an explicit operator acknowledgement when
+// restore chooses an archive automatically.
+func confirmDefaultRestore(confirm io.Reader, confirmWriter io.Writer) error {
+	if confirm == nil || confirmWriter == nil {
+		return errors.New("default restore requires interactive confirmation")
+	}
+	if _, err := fmt.Fprint(confirmWriter, i18n.T(os.Getenv("GITMESSAGES_LANG"), "cli.restore_confirm_prompt")); err != nil {
+		return err
+	}
+	var response string
+	if _, err := fmt.Fscanln(confirm, &response); err != nil || response != "RESTORE" {
+		return errors.New("restore confirmation failed")
+	}
+	return nil
+}
+
 // promptBackupPassword reads a backup password without echoing it to the terminal.
 func promptBackupPassword(input *os.File, output io.Writer) (string, error) {
 	if input == nil || output == nil || !term.IsTerminal(int(input.Fd())) {

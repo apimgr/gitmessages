@@ -18,7 +18,41 @@ env:
   PROJECT_NAME: gitmessages
 
 jobs:
+  validate-tag:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Ensure release tag
+        env:
+          RELEASE_REF: ${{ gitea.ref }}
+        run: |
+          ref="$RELEASE_REF"
+          if [[ "$ref" != refs/tags/* ]]; then
+            echo "::error::release.yml requires an existing release tag ref; got '$ref'." >&2
+            exit 1
+          fi
+          tag="${ref#refs/tags/}"
+          if printf '%s' "$tag" | grep -qP '[[:space:][:cntrl:]]'; then
+            echo "::error::Release tag contains whitespace or control characters." >&2
+            exit 1
+          fi
+          if [[ ! "$tag" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Release tag '$tag' must be stable SemVer, with an optional v prefix." >&2
+            exit 1
+          fi
+          if ! tag_commit=$(git rev-parse -q --verify "refs/tags/$tag^{commit}"); then
+            echo "::error::Release tag '$tag' does not exist in the checkout." >&2
+            exit 1
+          fi
+          if [[ "$tag_commit" != "$(git rev-parse HEAD)" ]]; then
+            echo "::error::Release tag '$tag' does not point at the checked-out commit." >&2
+            exit 1
+          fi
+
   build:
+    needs: validate-tag
     runs-on: ubuntu-26.04
     container:
       image: casjaysdev/go:latest
@@ -125,17 +159,11 @@ jobs:
 
       - name: Set version
         run: |
-          TAG="${GITEA_REF_NAME}"
+          TAG="$GITEA_REF_NAME"
           # VERSION for version.txt (strip v if present)
           echo "VERSION=${TAG#v}" >> $GITEA_ENV
-          # RELEASE_TAG: add v prefix only if semver without v
-          if [[ "$TAG" == v* ]]; then
-            echo "RELEASE_TAG=$TAG" >> $GITEA_ENV
-          elif [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            echo "RELEASE_TAG=v$TAG" >> $GITEA_ENV
-          else
-            echo "RELEASE_TAG=$TAG" >> $GITEA_ENV
-          fi
+          # Keep the release attached to the exact immutable tag that triggered this run.
+          echo "RELEASE_TAG=$TAG" >> $GITEA_ENV
 
       - name: Create version.txt
         run: echo "${{ env.VERSION }}" > binaries/version.txt
@@ -163,4 +191,5 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
+          name: v${{ env.VERSION }}
           files: binaries/*

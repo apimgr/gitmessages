@@ -33,6 +33,13 @@ type Config struct {
 	Web    WebConfig    `yaml:"web"`
 	Data   DataConfig   `yaml:"data"`
 	CLI    CLIConfig    `yaml:"cli"`
+	Output OutputConfig `yaml:"output"`
+}
+
+// OutputConfig stores explicit output preferences; nil retains automatic detection.
+type OutputConfig struct {
+	Color *bool `yaml:"color,omitempty"`
+	Emoji *bool `yaml:"emoji,omitempty"`
 }
 
 // DefaultAPIVersion is the canonical API prefix used when no version is configured.
@@ -468,7 +475,8 @@ type ContactConfig struct {
 }
 
 type ContactRecipientConfig struct {
-	Email string `yaml:"email"`
+	Email    string            `yaml:"email"`
+	Webhooks map[string]string `yaml:"webhooks"`
 }
 
 type DPOContactConfig struct {
@@ -1765,6 +1773,28 @@ func ensureGeneratedSecrets(path string) error {
 	}
 	changed := false
 	var generated []string
+	contactSettings, err := readWebhookSettings(configPath)
+	if err != nil {
+		return fmt.Errorf("read webhook settings: %w", err)
+	}
+	for role, transports := range contactSettings {
+		for transport, endpoint := range transports {
+			if strings.TrimSpace(endpoint) == "" {
+				continue
+			}
+			secretPath := []string{"server", "contact", role, "webhooks", transport + "_secret"}
+			if value, exists := getConfigPath(secrets, secretPath); exists && strings.TrimSpace(fmt.Sprint(value)) != "" {
+				continue
+			}
+			raw := make([]byte, 32)
+			if _, err := cryptorand.Read(raw); err != nil {
+				return fmt.Errorf("generate %s webhook secret: %w", role+"."+transport, err)
+			}
+			putConfigPath(secrets, secretPath, base64.RawURLEncoding.EncodeToString(raw))
+			changed = true
+			generated = append(generated, strings.Join(secretPath, "."))
+		}
+	}
 	operator, ok := getConfigPath(secrets, []string{"server", "token"})
 	if !ok || strings.TrimSpace(fmt.Sprint(operator)) == "" {
 		token, err := generatedToken("adm_")
@@ -1817,6 +1847,37 @@ func ensureGeneratedSecrets(path string) error {
 	generatedSecretNames = append(generatedSecretNames, generated...)
 	generatedSecretMu.Unlock()
 	return nil
+}
+
+func readWebhookSettings(path string) (map[string]map[string]string, error) {
+	root := make(map[string]any)
+	for _, candidate := range []string{path, filepath.Join(filepath.Dir(path), "yaml.d", "contact.yml")} {
+		values, err := readConfigMap(candidate)
+		if err != nil {
+			continue
+		}
+		mergeMaps(root, values)
+	}
+	server := nestedMap(root, "server")
+	contact := nestedMap(server, "contact")
+	result := make(map[string]map[string]string)
+	for _, role := range []string{"admin", "security", "abuse", "general"} {
+		roleConfig := nestedMap(contact, role)
+		webhooks := nestedMap(roleConfig, "webhooks")
+		if len(webhooks) == 0 {
+			continue
+		}
+		result[role] = make(map[string]string)
+		for transport, value := range webhooks {
+			if strings.HasSuffix(transport, "_secret") {
+				continue
+			}
+			if endpoint, ok := value.(string); ok {
+				result[role][transport] = endpoint
+			}
+		}
+	}
+	return result, nil
 }
 
 func encryptDNSCredentials(path string) error {
@@ -2041,7 +2102,10 @@ func migrateSecretsFromServer(configPath string) error {
 		{"server", "ssl", "letsencrypt", "dns_credentials"},
 		{"server", "backup", "encryption_password"},
 		{"server", "metrics", "auth", "tokens"},
-		{"server", "contact", "webhooks"},
+		{"server", "contact", "admin", "webhooks"},
+		{"server", "contact", "security", "webhooks"},
+		{"server", "contact", "abuse", "webhooks"},
+		{"server", "contact", "general", "webhooks"},
 		{"data", "cve", "api_key"},
 	}
 	changed := false
@@ -2206,7 +2270,10 @@ func migrateAreaFiles(configFile string) {
 		{"server", "ssl", "letsencrypt", "dns_credentials"},
 		{"server", "backup", "encryption_password"},
 		{"server", "metrics", "auth", "tokens"},
-		{"server", "contact", "webhooks"},
+		{"server", "contact", "admin", "webhooks"},
+		{"server", "contact", "security", "webhooks"},
+		{"server", "contact", "abuse", "webhooks"},
+		{"server", "contact", "general", "webhooks"},
 		{"server", "auth", "ldap", "providers"},
 		{"server", "auth", "oidc", "providers"},
 		{"data", "cve", "api_key"},

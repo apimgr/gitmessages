@@ -24,10 +24,24 @@ jobs:
       version: ${{ steps.set.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
       - name: Use pushed beta tag
         id: set
         run: |
-          case "$GITHUB_REF_NAME" in *-beta) ;; *) echo "Beta releases require a *-beta tag" >&2; exit 1 ;; esac
+          if [[ "$GITHUB_REF_TYPE" != tag || "$GITHUB_REF" != refs/tags/*-beta ]]; then
+            echo "::error::beta.yml requires an existing *-beta tag ref; got '$GITHUB_REF'." >&2
+            exit 1
+          fi
+          tag="$GITHUB_REF_NAME"
+          if ! tag_commit=$(git rev-parse -q --verify "refs/tags/$tag^{commit}"); then
+            echo "::error::Beta tag '$tag' does not exist in the checkout." >&2
+            exit 1
+          fi
+          if [[ "$tag_commit" != "$(git rev-parse HEAD)" ]]; then
+            echo "::error::Beta tag '$tag' does not point at the checked-out commit." >&2
+            exit 1
+          fi
           echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
 
   build:

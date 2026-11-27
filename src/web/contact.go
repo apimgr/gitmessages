@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ import (
 	"github.com/apimgr/gitmessages/src/contact"
 	"github.com/apimgr/gitmessages/src/database"
 	"github.com/apimgr/gitmessages/src/email"
+	"github.com/apimgr/gitmessages/src/notify"
 	"github.com/apimgr/gitmessages/src/paths"
 )
 
@@ -44,12 +46,12 @@ func ConfigureContact(store *database.Store) {
 }
 
 func registerContactRoutes(mux routeRegistrar) {
-	mux.HandleFunc("/server/contact", contactPage)
-	mux.HandleFunc("/server/security", contactSecurityPage)
-	mux.HandleFunc("/server/security/policy", securityPolicyPage)
-	mux.HandleFunc("/server/security/thanks", securityThanksPage)
+	mux.HandleFunc("/server/contact", frontendPage(contactPage, apiContact, "/server/contact"))
+	mux.HandleFunc("/server/security", frontendPage(contactSecurityPage, apiContactSecurity, "/server/security"))
+	mux.HandleFunc("/server/security/policy", frontendPage(securityPolicyPage, apiSecurityPolicy, "/server/security/policy"))
+	mux.HandleFunc("/server/security/thanks", frontendPage(securityThanksPage, apiSecurityThanks, "/server/security/thanks"))
 	mux.HandleFunc("/server/security/report/", securityReportPage)
-	mux.HandleFunc("/server/dpo", dpoPage)
+	mux.HandleFunc("/server/dpo", frontendPage(dpoPage, apiDPO, "/server/dpo"))
 	mux.HandleFunc("/.well-known/security.txt", contactSecurityTxt)
 	mux.HandleFunc("/.well-known/llms.txt", llmsTxt)
 	mux.HandleFunc("/llms.txt", llmsTxt)
@@ -101,22 +103,145 @@ func currentContactService() (*contact.Service, error) {
 
 type contactEmailSender struct{}
 
-func (contactEmailSender) SendContact(role, from, name, subject, body string) error {
+func (contactEmailSender) SendContact(role, from, name, subject, body string, tunneled bool) error {
 	cfg := config.Get().Server
 	mailcfg := cfg.Notifications.Email
-	if !mailcfg.Enabled || mailcfg.SMTP.Host == "" {
-		return errors.New("email features require SMTP configuration")
-	}
 	to := contactRecipient(cfg.Contact, role)
-	if to == "" {
-		return errors.New("contact recipient is not configured")
-	}
-	_ = name
 	if role != "security" {
 		subject = "[" + seoBrandingTitle() + " contact] " + subject
 	}
-	mailer := contactMailer(cfg)
-	return mailer.Send(context.Background(), email.Message{To: to, ReplyTo: from, Subject: subject, Text: body})
+	var emailErr error
+	if mailcfg.Enabled && mailcfg.SMTP.Host != "" && to != "" {
+		emailErr = contactMailer(cfg).Send(context.Background(), email.Message{To: to, ReplyTo: from, Subject: subject, Text: body})
+	} else if mailcfg.Enabled && mailcfg.SMTP.Host != "" {
+		emailErr = errors.New("contact recipient is not configured")
+	} else {
+		emailErr = errors.New("email features require SMTP configuration")
+	}
+	if hasContactWebhook(cfg.Contact, role) {
+		if tunneled {
+			log.Printf("WARN: skipped contact webhook for tunneled %s submission", role)
+		} else {
+			dispatchContactWebhook(cfg.Contact, role, "", "", "")
+		}
+	}
+	return emailErr
+}
+
+func dispatchContactWebhook(cfg config.ContactConfig, role, trackingID, component, severity string) bool {
+	webhookRole := role
+	if webhookRole == "privacy" || webhookRole == "dmca" {
+		webhookRole = map[string]string{"privacy": "general", "dmca": "abuse"}[role]
+	}
+	deliveries := contactWebhookRecipients(cfg, webhookRole)
+	if len(deliveries) == 0 {
+		return false
+	}
+	if severity == "" {
+		severity = "info"
+	}
+	body := "A " + role + " submission was received. Review it through the configured email recipient."
+	if role == "security" {
+		component = safeWebhookComponent(component)
+		body = fmt.Sprintf("Tracking ID: %s\nComponent: %s\nSeverity: %s\nRead the encrypted report with: %s --maintenance security export %s --output FILE", trackingID, component, severity, paths.ProjectName, trackingID)
+	}
+	event := notify.Event{
+		Name: paths.ProjectName, Version: serverVersion, AppURL: "https://" + config.Get().Server.FQDN,
+		Event: "contact." + role + ".received", Subject: "Contact " + role + " submission received",
+		Body: body, Severity: severity,
+	}
+	queued := false
+	for _, delivery := range deliveries {
+		queued = notify.DispatchAsync(delivery.role, delivery.hooks, event) || queued
+	}
+	return queued
+}
+
+func hasContactWebhook(cfg config.ContactConfig, role string) bool {
+	if role == "privacy" {
+		role = "general"
+	} else if role == "dmca" {
+		role = "abuse"
+	}
+	return len(contactWebhookRecipients(cfg, role)) > 0
+}
+
+func safeWebhookComponent(component string) string {
+	var builder strings.Builder
+	for _, r := range component {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune(" ._/-", r) {
+			builder.WriteRune(r)
+		}
+		if builder.Len() >= 255 {
+			break
+		}
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+type contactWebhookDelivery struct {
+	role  string
+	hooks notify.WebhookConfig
+}
+
+func contactWebhookRecipients(cfg config.ContactConfig, role string) []contactWebhookDelivery {
+	chain := []string{role}
+	switch role {
+	case "security":
+		chain = append(chain, "admin")
+	case "abuse":
+		chain = append(chain, "general", "admin")
+	case "general":
+		chain = append(chain, "admin")
+	default:
+		return nil
+	}
+	var transports []string
+	seen := make(map[string]struct{})
+	for _, candidate := range chain {
+		for transport := range webhookRecipientConfig(cfg, candidate).Webhooks {
+			if strings.HasSuffix(transport, "_secret") {
+				continue
+			}
+			if _, exists := seen[transport]; !exists {
+				seen[transport] = struct{}{}
+				transports = append(transports, transport)
+			}
+		}
+	}
+	sort.Strings(transports)
+	deliveries := make([]contactWebhookDelivery, 0, len(transports))
+	for _, transport := range transports {
+		for _, candidate := range chain {
+			recipient := webhookRecipientConfig(cfg, candidate)
+			endpoint := strings.TrimSpace(recipient.Webhooks[transport])
+			if endpoint == "" {
+				continue
+			}
+			hooks := notify.WebhookConfig{transport: endpoint}
+			if secret := recipient.Webhooks[transport+"_secret"]; secret != "" {
+				hooks[transport+"_secret"] = secret
+			}
+			deliveries = append(deliveries, contactWebhookDelivery{role: candidate, hooks: hooks})
+			break
+		}
+	}
+	return deliveries
+}
+
+func webhookRecipientConfig(cfg config.ContactConfig, role string) config.ContactRecipientConfig {
+	switch role {
+	case "admin":
+		return cfg.Admin
+	case "security":
+		return cfg.Security
+	case "abuse":
+		return cfg.Abuse
+	case "general":
+		return cfg.General
+	default:
+		return config.ContactRecipientConfig{}
+	}
 }
 
 func contactMailer(cfg config.ServerConfig) email.Mailer {
@@ -135,16 +260,52 @@ func contactMailer(cfg config.ServerConfig) email.Mailer {
 	return email.Mailer{SMTP: email.SMTPConfig{Host: mailcfg.SMTP.Host, Port: mailcfg.SMTP.Port, Username: mailcfg.SMTP.Username, Password: mailcfg.SMTP.Password, TLS: mailcfg.SMTP.TLS}, Sender: email.Sender{Name: fromName, Address: fromAddress, FQDN: fallbackHostname()}}
 }
 
-func (contactEmailSender) SendSecurityNotification(_ string, subject, body, filename string, encrypted []byte) error {
+func (contactEmailSender) SendSecurityNotification(_ string, subject, body, filename string, encrypted []byte, tunneled bool, trackingID, component, severity string) error {
 	cfg := config.Get().Server
+	webhookQueued := false
+	if hasContactWebhook(cfg.Contact, "security") {
+		if tunneled {
+			log.Printf("WARN: skipped security webhook for tunneled report")
+		} else {
+			webhookQueued = dispatchSecurityWebhook(cfg.Contact, trackingID, component, severity)
+		}
+	}
 	if !cfg.Notifications.Email.Enabled || cfg.Notifications.Email.SMTP.Host == "" {
+		if webhookQueued {
+			return nil
+		}
 		return errors.New("email features require SMTP configuration")
 	}
-	recipient := contactRecipient(cfg.Contact, "security")
-	if recipient == "" {
-		return errors.New("security recipient is not configured")
+	if strings.TrimSpace(cfg.Contact.Security.Email) == "" {
+		recipient := strings.TrimSpace(cfg.Contact.Admin.Email)
+		if recipient == "" {
+			return errors.New("security and admin recipients are not configured")
+		}
+		return contactMailer(cfg).Send(context.Background(), email.Message{To: recipient, Subject: "Security report received", Text: securitySummary(trackingID, component, severity)})
 	}
-	return contactMailer(cfg).Send(context.Background(), email.Message{To: recipient, Subject: subject, Text: body, Attachments: []email.Attachment{{Name: filename, ContentType: "application/octet-stream", Data: encrypted}}})
+	return contactMailer(cfg).Send(context.Background(), email.Message{To: cfg.Contact.Security.Email, Subject: subject, Text: body, Attachments: []email.Attachment{{Name: filename, ContentType: "application/octet-stream", Data: encrypted}}})
+}
+
+func securitySummary(trackingID, component, severity string) string {
+	component = safeWebhookComponent(component)
+	return fmt.Sprintf("Tracking ID: %s\nComponent: %s\nSeverity: %s\nRead the encrypted report with: %s --maintenance security export %s --output FILE", trackingID, component, severity, paths.ProjectName, trackingID)
+}
+
+func dispatchSecurityWebhook(cfg config.ContactConfig, trackingID, component, severity string) bool {
+	deliveries := contactWebhookRecipients(cfg, "security")
+	if len(deliveries) == 0 {
+		return false
+	}
+	event := notify.Event{
+		Name: paths.ProjectName, Version: serverVersion, AppURL: "https://" + config.Get().Server.FQDN,
+		Event: "security.report.received", Subject: "Security report received", Body: securitySummary(trackingID, component, severity), Severity: severity,
+		TrackingID: trackingID,
+	}
+	queued := false
+	for _, delivery := range deliveries {
+		queued = notify.DispatchAsync(delivery.role, delivery.hooks, event) || queued
+	}
+	return queued
 }
 
 func (contactEmailSender) SendResearcher(to, subject, body string) error {

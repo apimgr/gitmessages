@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -143,7 +144,7 @@ func TestAboutPageIncludesRequiredGeoIPAttribution(t *testing.T) {
 func TestPublicPagesAndAPI(t *testing.T) {
 	SetCORSOrigins([]string{"*"})
 	handler := Handler("test-version")
-	for _, path := range []string{"/", "/types", "/templates", "/builder", "/server/about", "/server/help", "/server/help/mcp", "/server/healthz", "/server/privacy", "/server/terms", "/server/security", "/server/preferences", "/.well-known/security.txt", "/server/docs/swagger", "/server/docs/graphql", "/manifest.json", "/icon.svg", "/styles.css", "/locales/en.json", "/sw.js", "/static/js/docs-swagger.js", "/static/js/docs-graphql.js", "/static/vendor/swagger-ui/swagger-ui-bundle.js", "/static/js/graphiql-compat.js", "/static/vendor/graphiql/graphiql.min.js", "/static/js/app.js", "/api/healthz", "/api/v1", "/api/v1/types", "/api/v1/conventions", "/api/v1/templates", "/api/v1/templates/random", "/api/v1/messages/random", "/api/v1/server/healthz", "/api/v1/server/about", "/api/v1/server/help", "/api/v1/server/help/mcp", "/api/v1/server/privacy", "/api/v1/server/terms", "/api/v1/server/security", "/api/v1/server/preferences", "/api/v1/server/swagger"} {
+	for _, path := range []string{"/", "/types", "/templates", "/builder", "/server/about", "/server/help", "/server/help/mcp", "/server/healthz", "/server/privacy", "/server/terms", "/server/security", "/server/preferences", "/.well-known/security.txt", "/server/docs/swagger", "/server/docs/graphql", "/manifest.json", "/icon.svg", "/styles.css", "/static/css/common.css", "/static/css/components.css", "/static/css/public.css", "/locales/en.json", "/sw.js", "/static/js/docs-swagger.js", "/static/js/docs-graphql.js", "/static/vendor/swagger-ui/swagger-ui-bundle.js", "/static/js/graphiql-compat.js", "/static/vendor/graphiql/graphiql.min.js", "/static/js/app.js", "/api/healthz", "/api/v1", "/api/v1/types", "/api/v1/conventions", "/api/v1/templates", "/api/v1/templates/random", "/api/v1/messages/random", "/api/v1/server/healthz", "/api/v1/server/about", "/api/v1/server/help", "/api/v1/server/help/mcp", "/api/v1/server/privacy", "/api/v1/server/terms", "/api/v1/server/security", "/api/v1/server/preferences", "/api/v1/server/swagger"} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, webTestRequest(http.MethodGet, path, nil))
 		if recorder.Code == http.StatusNotFound {
@@ -557,7 +558,7 @@ func assertPageConformance(t *testing.T, source string) {
 		if node.Data == "style" {
 			t.Error("page contains an inline style element")
 		}
-		if node.Data == "script" && attrs["type"] != "application/ld+json" && strings.TrimSpace(nodeText(node)) != "" {
+		if node.Data == "script" && attrs["type"] != "application/ld+json" && attrs["type"] != "application/json" && strings.TrimSpace(nodeText(node)) != "" {
 			t.Error("page contains an executable inline script")
 		}
 		if node.Data == "img" {
@@ -1622,8 +1623,10 @@ func TestPublicPagesHaveNavigationAndMainLandmarks(t *testing.T) {
 func TestPagesUseExternalStylesheetAndRestrictiveCSP(t *testing.T) {
 	response := httptest.NewRecorder()
 	Handler("test-version").ServeHTTP(response, webTestRequest(http.MethodGet, "/", nil))
-	if !bytes.Contains(response.Body.Bytes(), []byte(`<link rel="stylesheet" href="/styles.css?v=test-version-unknown">`)) {
-		t.Fatal("page does not link the embedded stylesheet")
+	for _, name := range []string{"common.css", "components.css", "public.css"} {
+		if !bytes.Contains(response.Body.Bytes(), []byte(`<link rel="stylesheet" href="/static/css/`+name+`?v=test-version-unknown">`)) {
+			t.Errorf("page does not link the %s stylesheet", name)
+		}
 	}
 	if bytes.Contains(response.Body.Bytes(), []byte("<style")) {
 		t.Fatal("page contains inline CSS")
@@ -1631,6 +1634,33 @@ func TestPagesUseExternalStylesheetAndRestrictiveCSP(t *testing.T) {
 	policy := response.Header().Get("Content-Security-Policy")
 	if strings.Contains(policy, "unsafe-inline") || !strings.Contains(policy, "style-src 'self'") || !strings.Contains(policy, "font-src 'self' data: https:") {
 		t.Fatalf("CSP does not match the required style and font policy: %q", policy)
+	}
+}
+
+func TestBuildStampCookieOmitsSecureOnI2P(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "https://gitmessages.b32.i2p/", nil)
+	response := httptest.NewRecorder()
+	Handler("test-version").ServeHTTP(response, request)
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == "gitmessages_build" {
+			if cookie.Secure {
+				t.Fatal("I2P build stamp cookie must omit Secure")
+			}
+			return
+		}
+	}
+	t.Fatal("page did not set the build stamp cookie")
+}
+
+func TestPageStoresTranslatedOfflineStrings(t *testing.T) {
+	request := webTestRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Accept-Language", "en")
+	response := httptest.NewRecorder()
+	Handler("test-version").ServeHTTP(response, request)
+	for _, marker := range []string{`id="offline-strings"`, `"title":"Offline"`, `"heading":"Offline"`, `"message":"This page is not available offline."`, `"reload":"Reload page"`} {
+		if !strings.Contains(response.Body.String(), marker) {
+			t.Errorf("page does not store offline string %q", marker)
+		}
 	}
 }
 
@@ -1793,6 +1823,31 @@ func TestBuilderEndpoint(t *testing.T) {
 	}
 }
 
+func TestBuilderJSONPageMatchesFormDescriptorAPI(t *testing.T) {
+	handler := Handler("test-version")
+	frontend := httptest.NewRecorder()
+	request := webTestRequest(http.MethodGet, "/builder", nil)
+	request.Header.Set("Accept", "application/json")
+	handler.ServeHTTP(frontend, request)
+	if frontend.Code != http.StatusOK || frontend.Header().Get("Content-Type") != "application/json; charset=utf-8" || !bytes.Contains(frontend.Body.Bytes(), []byte(`"fields"`)) {
+		t.Fatalf("builder JSON response: status %d, headers %v, body %s", frontend.Code, frontend.Header(), frontend.Body.String())
+	}
+	api := httptest.NewRecorder()
+	apiRequest := webTestRequest(http.MethodGet, "/api/v1/messages", nil)
+	apiRequest.Header.Set("Accept", "application/json")
+	handler.ServeHTTP(api, apiRequest)
+	var frontendEnvelope, apiEnvelope map[string]any
+	if err := json.Unmarshal(frontend.Body.Bytes(), &frontendEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(api.Body.Bytes(), &apiEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(frontendEnvelope, apiEnvelope) {
+		t.Fatalf("frontend builder data differs from API twin: frontend %v, API %v", frontendEnvelope, apiEnvelope)
+	}
+}
+
 func TestBuilderFormAndAPIMethods(t *testing.T) {
 	handler := Handler("test-version")
 	recorder := httptest.NewRecorder()
@@ -1870,6 +1925,8 @@ func TestTextRepresentations(t *testing.T) {
 		{name: "plain text API extension", path: "/api/v1/types.txt", contentType: "text/plain; charset=utf-8", contains: "feat"},
 		{name: "plain text API accept", path: "/api/v1/types", accept: "text/plain", contentType: "text/plain; charset=utf-8", contains: "feat"},
 		{name: "curl browser page", path: "/types", userAgent: "curl/8.0", contentType: "text/plain; charset=utf-8", contains: "feat"},
+		{name: "frontend JSON page", path: "/types", accept: "application/json", contentType: "application/json; charset=utf-8", contains: `"ok": true`},
+		{name: "frontend JSON quality zero", path: "/types", accept: "application/json;q=0, text/html", contentType: "text/html; charset=utf-8", contains: "<!doctype html"},
 		{name: "JSON wins for curl", path: "/api/v1/types", userAgent: "curl/8.0", accept: "application/json", contentType: "application/json; charset=utf-8", contains: `"ok": true`},
 	}
 	for _, test := range cases {
@@ -1887,5 +1944,33 @@ func TestTextRepresentations(t *testing.T) {
 				t.Errorf("status=%d content-type=%q body=%s", recorder.Code, recorder.Header().Get("Content-Type"), recorder.Body.String())
 			}
 		})
+	}
+}
+
+func TestFrontendJSONMatchesAPITwin(t *testing.T) {
+	handler := Handler("test-version")
+	for _, pair := range [][2]string{
+		{"/types", "/api/v1/types"},
+		{"/templates", "/api/v1/templates"},
+		{"/server/about", "/api/v1/server/about"},
+		{"/server/help", "/api/v1/server/help"},
+		{"/server/help/mcp", "/api/v1/server/help/mcp"},
+		{"/server/privacy", "/api/v1/server/privacy"},
+		{"/server/terms", "/api/v1/server/terms"},
+		{"/server/healthz", "/api/v1/server/healthz"},
+	} {
+		pageRequest := webTestRequest(http.MethodGet, pair[0], nil)
+		pageRequest.Header.Set("Accept", "application/json")
+		pageResponse := httptest.NewRecorder()
+		handler.ServeHTTP(pageResponse, pageRequest)
+
+		apiRequest := webTestRequest(http.MethodGet, pair[1], nil)
+		apiRequest.Header.Set("Accept", "application/json")
+		apiResponse := httptest.NewRecorder()
+		handler.ServeHTTP(apiResponse, apiRequest)
+
+		if pageResponse.Code != apiResponse.Code || pageResponse.Header().Get("Content-Type") != apiResponse.Header().Get("Content-Type") || !bytes.Equal(pageResponse.Body.Bytes(), apiResponse.Body.Bytes()) {
+			t.Errorf("frontend %s differs from API twin %s: page status=%d body=%s; API status=%d body=%s", pair[0], pair[1], pageResponse.Code, pageResponse.Body.String(), apiResponse.Code, apiResponse.Body.String())
+		}
 	}
 }

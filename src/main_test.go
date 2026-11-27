@@ -1360,20 +1360,25 @@ func TestOverlayManagersTrackReplacements(t *testing.T) {
 }
 
 func TestConfiguredTLSHostsUsesDomainEnvironmentOnly(t *testing.T) {
-	t.Setenv("DOMAIN", "fallback.example.test,ignored.example.test")
+	t.Setenv("DOMAIN", "fallback.example.com,ignored.example.net")
 	if got := configuredTLSHosts(nil); got != nil {
 		t.Fatalf("configuredTLSHosts(nil) = %v, want nil", got)
 	}
 	configuration := config.DefaultConfig()
-	if got := configuredTLSHosts(configuration); len(got) != 1 || got[0] != "fallback.example.test" {
+	if got := configuredTLSHosts(configuration); len(got) != 2 || got[0] != "fallback.example.com" || got[1] != "ignored.example.net" {
 		t.Fatalf("configuredTLSHosts() env fallback = %v", got)
 	}
-	configuration.Server.FQDN = " configured.example.test "
-	if got := configuredTLSHosts(configuration); len(got) != 1 || got[0] != "fallback.example.test" {
+	configuration.Server.FQDN = " configured.example.com "
+	if got := configuredTLSHosts(configuration); len(got) != 2 || got[0] != "fallback.example.com" || got[1] != "ignored.example.net" {
 		t.Fatalf("configuredTLSHosts() used server.fqdn = %v", got)
 	}
-	t.Setenv("DOMAIN", ",ignored.example.test")
-	if got := configuredTLSHosts(configuration); got != nil {
-		t.Fatalf("configuredTLSHosts() accepted an empty first DOMAIN: %v", got)
+	t.Setenv("DOMAIN", ",ignored.example.net")
+	if got := configuredTLSHosts(configuration); len(got) != 1 || got[0] != "ignored.example.net" {
+		t.Fatalf("configuredTLSHosts() failed to continue after an empty entry: %v", got)
+	}
+	configuration.Server.SSL.LetsEncrypt.Enabled = true
+	t.Setenv("DOMAIN", "dev.test,public.example.com,service.onion")
+	if got := configuredTLSHosts(configuration); len(got) != 1 || got[0] != "public.example.com" {
+		t.Fatalf("configuredTLSHosts() accepted a non-public ACME name: %v", got)
 	}
 }

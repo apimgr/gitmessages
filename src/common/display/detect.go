@@ -95,6 +95,15 @@ func ColorEnabled(environment *DisplayEnv, override string) bool {
 }
 
 func EmojiEnabled(environment *DisplayEnv, override string) bool {
-	return environment != nil && environment.IsTerminal && !environment.IsDumbTerminal() &&
-		strings.ToLower(strings.TrimSpace(override)) != "no" && os.Getenv("NO_COLOR") == ""
+	if environment == nil || !environment.IsTerminal || environment.IsDumbTerminal() {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(override)) {
+	case "yes":
+		return true
+	case "no":
+		return false
+	default:
+		return os.Getenv("NO_COLOR") == ""
+	}
 }

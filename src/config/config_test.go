@@ -82,6 +82,19 @@ func TestDefaultConfig(t *testing.T) {
 	}
 }
 
+func TestOutputPreferencesPreserveAutomaticDefaults(t *testing.T) {
+	configuration := DefaultConfig()
+	if configuration.Output.Color != nil || configuration.Output.Emoji != nil {
+		t.Fatal("unset output preferences should remain automatic")
+	}
+	if err := yaml.Unmarshal([]byte("output:\n  color: false\n  emoji: true\n"), configuration); err != nil {
+		t.Fatalf("decode output preferences: %v", err)
+	}
+	if configuration.Output.Color == nil || *configuration.Output.Color || configuration.Output.Emoji == nil || !*configuration.Output.Emoji {
+		t.Fatalf("decoded output preferences = %#v", configuration.Output)
+	}
+}
+
 func TestI18NAndEmailEventSettingsLoadAndValidate(t *testing.T) {
 	cfg := DefaultConfig()
 	if err := yaml.Unmarshal([]byte("server:\n  i18n:\n    default_language: es\n    available_languages: [en, es, es, unsupported]\n  notifications:\n    email:\n      events:\n        startup: true\n        backup_failed: false\n"), cfg); err != nil {

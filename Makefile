@@ -24,7 +24,8 @@ GO_DOCKER_RUN := timeout -k 30 $(DOCKER_TIMEOUT) docker run --rm --no-healthchec
 GO_DOCKER := $(GO_DOCKER_RUN) casjaysdev/go:latest
 GO_TEST_DOCKER := $(GO_DOCKER_RUN) --network $(TEST_NETWORK) casjaysdev/go:latest
 
-.PHONY: dev local build test release docker clean
+.PHONY: dev local build test release beta release-check docker clean
+.NOTPARALLEL: release
 
 dev:
 	@mkdir -p "$(GO_CACHE)" "$(GO_BUILD)" "$${TMPDIR:-/tmp}/$(PROJECT_ORG)"
@@ -42,22 +43,27 @@ build: clean
 
 test:
 	@set -e; network_created=0; if ! docker network inspect "$(TEST_NETWORK)" >/dev/null 2>&1; then docker network create --driver bridge "$(TEST_NETWORK)" >/dev/null; network_created=1; fi; cleanup() { if [ "$$network_created" -eq 1 ]; then docker network rm "$(TEST_NETWORK)" >/dev/null; fi; }; trap cleanup EXIT; mkdir -p $(GO_CACHE) $(GO_BUILD) "$${TMPDIR:-/tmp}/$(PROJECT_ORG)"; $(GO_TEST_DOCKER) sh -c 'set -e; mkdir -p "$${TMPDIR:-/tmp}/$(PROJECT_ORG)"; task_tmp=$$(mktemp -d "$${TMPDIR:-/tmp}/$(PROJECT_ORG)/$(INTERNAL_NAME)-XXXXXX"); trap "rm -rf $$task_tmp" EXIT; export TMPDIR="$$task_tmp"; go mod download; go generate ./src/swagger; go vet ./...; govulncheck ./...; go test -timeout 5m -covermode=atomic -coverprofile=$$task_tmp/coverage.out ./...; total=$$(go tool cover -func=$$task_tmp/coverage.out | grep "^total:" | grep -Eo "[0-9.]+%" | tr -d "%"); echo "Coverage: $$total%"; awk -v coverage="$$total" "BEGIN { if (coverage+0 < 60) exit 1 }"'
-release: build
+release: release-check build
 	@echo "$(VERSION)" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$$' || { echo "release requires stable SemVer (X.Y.Z), got $(VERSION)" >&2; exit 1; }
 	@mkdir -p $(RELDIR)
 	@echo "$(VERSION)" > $(RELDIR)/version.txt
 	@for file in $(BINDIR)/$(PROJECT_NAME)-*; do [ -f "$$file" ] || continue; strip "$$file" 2>/dev/null || true; cp "$$file" $(RELDIR)/; done
 	@tar --exclude='.git' --exclude='.github' --exclude='.gitea' --exclude='.forgejo' --exclude='binaries' --exclude='releases' --exclude='*.tar.gz' -czf $(RELDIR)/$(PROJECT_NAME)-$(VERSION)-source.tar.gz .
 	@cd $(RELDIR) && files="$$(ls)" && sha256sum $$files > sha256.txt && sha512sum $$files > sha512.txt
-	@gh release delete v$(VERSION) --yes 2>/dev/null || true
-	@git tag -d v$(VERSION) 2>/dev/null || true
-	@git push origin :refs/tags/v$(VERSION) 2>/dev/null || true
+	@git tag v$(VERSION)
+	@git push origin refs/tags/v$(VERSION)
 	@gh release create v$(VERSION) $(RELDIR)/* --title "v$(VERSION)" --notes "Release v$(VERSION)" --latest
+
+release-check:
+	@echo "$(VERSION)" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$$' || { echo "release requires stable SemVer (X.Y.Z), got $(VERSION)" >&2; exit 1; }
+	@if git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null; then echo "ERROR: tag v$(VERSION) already exists locally; release tags are immutable" >&2; exit 1; fi
+	@remote_tags="$$(git ls-remote --tags origin "refs/tags/v$(VERSION)" "refs/tags/v$(VERSION)^{}")" || { echo "ERROR: could not check whether tag v$(VERSION) exists on origin" >&2; exit 1; }; \
+	  if [ -n "$$remote_tags" ]; then echo "ERROR: tag v$(VERSION) already exists on origin; release tags are immutable" >&2; exit 1; fi
 
 docker:
 	@docker buildx version >/dev/null 2>&1 || { echo "docker buildx required" >&2; exit 1; }
 	@docker buildx create --name multiarch-builder --use 2>/dev/null || docker buildx use multiarch-builder
-	@docker buildx build --platform linux/amd64,linux/arm64 --file docker/Dockerfile --build-arg VERSION="$(VERSION)" --build-arg BUILD_DATE="$(BUILD_DATE)" --build-arg BUILD_EPOCH="$(BUILD_EPOCH)" --build-arg COMMIT_ID="$(COMMIT_ID)" --build-arg OFFICIAL_SITE="$(OFFICIAL_SITE)" --tag $(REGISTRY):$(VERSION) --tag $(REGISTRY):latest --push .
+	@docker buildx build --file docker/Dockerfile --load --build-arg VERSION="$(VERSION)" --build-arg BUILD_DATE="$(BUILD_DATE)" --build-arg BUILD_EPOCH="$(BUILD_EPOCH)" --build-arg COMMIT_ID="$(COMMIT_ID)" --build-arg OFFICIAL_SITE="$(OFFICIAL_SITE)" --tag $(REGISTRY):$(VERSION) --tag $(REGISTRY):latest .
 
 clean:
 	@rm -rf $(BINDIR) $(RELDIR)

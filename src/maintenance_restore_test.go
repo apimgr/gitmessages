@@ -39,6 +39,22 @@ func TestAuthorizeApplicationRestore(t *testing.T) {
 	}
 }
 
+func TestConfirmDefaultRestore(t *testing.T) {
+	var prompt bytes.Buffer
+	if err := confirmDefaultRestore(strings.NewReader("RESTORE\n"), &prompt); err != nil {
+		t.Fatalf("confirmed default restore failed: %v", err)
+	}
+	if prompt.Len() == 0 {
+		t.Fatal("default restore confirmation did not prompt")
+	}
+	if err := confirmDefaultRestore(strings.NewReader("no\n"), &bytes.Buffer{}); err == nil {
+		t.Fatal("default restore accepted a declined confirmation")
+	}
+	if err := confirmDefaultRestore(nil, &bytes.Buffer{}); err == nil {
+		t.Fatal("default restore accepted a missing confirmation input")
+	}
+}
+
 func TestReplaceRestoreTargets(t *testing.T) {
 	root := maintenanceTestDir(t)
 	source := filepath.Join(root, "source")

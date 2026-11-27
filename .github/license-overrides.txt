@@ -1,0 +1,9 @@
+# module SPDX reviewer evidence
+# apimgr reviewed each cited license source while updating this record on 2026-11-27.
+github.com/alibabacloud-go/darabonba-array Apache-2.0 apimgr 2026-11-27 C3 third-party notice for v0.1.0: https://docs.c3.ai/docs/platform/8.9/topic/C3OperatorThirdParty
+github.com/alibabacloud-go/darabonba-encode-util MIT apimgr 2026-11-27 C3 third-party notice for v0.0.2: https://docs.c3.ai/docs/platform/8.9/topic/C3OperatorThirdParty
+github.com/alibabacloud-go/darabonba-map MIT apimgr 2026-11-27 C3 third-party notice for v0.0.2: https://docs.c3.ai/docs/platform/8.9/topic/C3OperatorThirdParty
+github.com/alibabacloud-go/darabonba-signature-util MIT apimgr 2026-11-27 C3 third-party notice for v0.0.7: https://docs.c3.ai/docs/platform/8.9/topic/C3OperatorThirdParty
+github.com/alibabacloud-go/darabonba-string Apache-2.0 apimgr 2026-11-27 README.md of v1.0.2: https://github.com/aliyun/darabonba-string/blob/v1.0.2/README.md
+github.com/alibabacloud-go/endpoint-util Apache-2.0 apimgr 2026-11-27 README.md of v1.1.0: https://github.com/aliyun/endpoint-util/blob/v1.1.0/README.md
+modernc.org/mathutil BSD-3-Clause apimgr 2026-11-27 LICENSE of v1.7.1: https://gitlab.com/cznic/mathutil/-/blob/v1.7.1/LICENSE
