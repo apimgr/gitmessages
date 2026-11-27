@@ -71,6 +71,8 @@ Metrics can also be reached through `/server/metrics[/{service}]` and the versio
 
 Server-page APIs mirror public page content. The preferences endpoint returns the current request language and theme. `.txt` variants return plain text when available. A `?lang=` link selects the language for that request. It writes a preference cookie only after that browser accepts the Preferences cookie category; otherwise the server uses `Accept-Language` for subsequent requests. Preference writes/imports without consent return an empty `applied` list, list valid values under `ignored`, and include `data.consent_required: true`; web forms redirect with `consent_required=1`.
 
+API routes support the `.txt` suffix and `Accept: text/plain`; non-interactive API clients also receive text by default. Text output follows the route's response model: primary values are bare, objects use an `OK:` line followed by fields in model order, and lists include an item count. Nested fields use dot notation. Health uses its documented flat layout without an `OK:` line; binary downloads retain their binary content type. Errors keep their HTTP status and use `ERROR: {code}: {message}`.
+
 Example builder input:
 
 ```json
@@ -116,4 +118,4 @@ The GraphiQL explorer at `/server/docs/graphql` submits queries to `/api/{api_ve
 
 ## Model Context Protocol
 
-The Streamable HTTP endpoint accepts JSON-RPC `POST` requests at `/api/{api_version}/server/mcp`; `/api/mcp` and `/mcp` are direct aliases. Every request requires `Authorization: Bearer …` using an operator or owner token. It exposes the public catalog and stateless message builder, never token-management tools. MCP clients send `MCP-Protocol-Version`, `Mcp-Method`, and for named operations `Mcp-Name`; values must match the JSON-RPC body. Origin, authentication, protocol version, and headers are checked in the order specified by AI.md. See `/server/help/mcp` for connection details.
+The Streamable HTTP endpoint accepts JSON-RPC `POST` requests at `/api/{api_version}/server/mcp`; `/api/mcp` and `/mcp` are direct aliases. Every request requires `Authorization: Bearer …` using an operator or owner token. It exposes the public API operations the caller may use, including catalog and server-information reads, the stateless message builder, and the configured contact-report flow. Token-management and issuance, browser preference, and metrics operations are not tools. MCP clients send `MCP-Protocol-Version`, `Mcp-Method`, and for named operations `Mcp-Name`; values must match the JSON-RPC body. Origin, authentication, protocol version, and headers are checked in the order specified by AI.md. See `/server/help/mcp` for connection details.

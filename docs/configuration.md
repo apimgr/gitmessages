@@ -189,7 +189,7 @@ Backup policy is stored in `yaml.d/maintenance.yml`; compliance settings are sto
 | YAML key | Default | Behavior |
 |---|---:|---|
 | `server.backup.encryption.enabled` | `false` | Enables AES-256-GCM archive encryption when a password is configured. |
-| `server.backup.encryption_password` | unset | Argon2id key material; never expose it through APIs or logs. |
+| `server.backup.encryption_password` | unset | Encrypted at rest with `enc:v1:`; Argon2id derives archive keys. Never expose the value through APIs or logs. |
 | `server.backup.retention.max_backups` | `1` | Number of daily full backups retained. |
 | `server.backup.retention.keep_weekly` | `0` | Additional Sunday full backups retained. |
 | `server.backup.retention.keep_monthly` | `0` | Additional first-of-month full backups retained. |

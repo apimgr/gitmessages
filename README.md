@@ -78,7 +78,7 @@ git commit -m "$(gitmessages-cli --server http://127.0.0.1:8080 random)"
 gitmessages-cli --server http://127.0.0.1:8080 build --type feat --scope api --description 'add message search'
 ```
 
-Use `--json` before the command to print JSON output. Run `gitmessages-cli --shell completions [SHELL]` or `gitmessages-cli --shell init [SHELL]`; omit `SHELL` to detect it from the environment. Completions support bash, zsh, fish, sh, dash, ksh, PowerShell, and pwsh. Select a language with `--lang`, `GITMESSAGES_LANG`, the `language` setting in `cli.yml`, or `LANG`. See the [CLI reference](docs/cli.md) for all options.
+Use `--json` before the command to print JSON output. Run `gitmessages-cli --shell completions [SHELL]` or `gitmessages-cli --shell init [SHELL]`; omit `SHELL` to detect it from the environment. Programmable completions support bash, zsh, fish, PowerShell, and pwsh. For sh, dash, and ksh, `init` prints a harmless comment and `completions` returns a usage error. Select a language with `--lang`, `GITMESSAGES_LANG`, the `language` setting in `cli.yml`, or `LANG`. See the [CLI reference](docs/cli.md) for all options.
 
 ## Configuration
 

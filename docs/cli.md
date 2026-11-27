@@ -2,7 +2,7 @@
 
 ## Server binary
 
-The `gitmessages` server accepts `-h`/`--help` and `-v`/`--version`. Its shared output flags are `--debug`, `--color auto|yes|no`, `--lang CODE`, and `--shell completions|init [SHELL]`. Both binaries print a stable version line followed by build date, Go version, and OS/architecture metadata. Shell integration supports bash, zsh, fish, sh, dash, ksh, PowerShell, and pwsh; when omitted, the shell is detected from the environment. Use `--shell help` for usage.
+The `gitmessages` server accepts `-h`/`--help` and `-v`/`--version`. Its shared output flags are `--debug`, `--color auto|yes|no`, `--lang CODE`, and `--shell completions|init [SHELL]`. Both binaries print a stable version line followed by build date, Go version, and OS/architecture metadata. Programmable shell completions support bash, zsh, fish, PowerShell, and pwsh; when omitted, the shell is detected from the environment. For sh, dash, and ksh, `init` prints a harmless comment and `completions` returns a usage error with exit status 2. Use `--shell help` for usage.
 
 Command help accepts either `<command-flag> --help` (or `-h`) or `<command-flag> help`; it runs before normal flag parsing and exits without loading server configuration. For example:
 
@@ -76,7 +76,7 @@ Operators can provision release assets in `{data_dir}/cli/`: `{project_name}-cli
 
 The default CLI is built without GUI dependencies and opens the TUI when display detection identifies an interactive terminal. Optional `gitmessages-cli-gui-{os}-{arch}` builds include the native GUI for Linux, macOS, and Windows; those binaries require the system loader used by the build toolchain and are separate from the static CLI. Set `display.mode` to `auto`, `gui`, or `tui` in `cli.yml` to override automatic selection. Without GUI support, `auto` selects the TUI when a terminal is available; explicitly selecting `gui` reports that GUI support is unavailable. `TERM=dumb` disables TUI selection and ANSI output. The TUI reflows when the terminal is resized and supports `↑`/`↓` or `j`/`k` navigation, `/` to filter actions, `?` for help, Enter to open an action, and `q` or Ctrl+C to exit. Page Up and Page Down scroll long results on small screens.
 
-Shell integration supports bash, zsh, fish, sh, dash, ksh, PowerShell, and pwsh. The optional shell argument is detected from `SHELL` or `ComSpec` when omitted.
+Programmable completions support bash, zsh, fish, PowerShell, and pwsh. For sh, dash, and ksh, `init` prints a harmless comment and `completions` returns a usage error with exit status 2. The optional shell argument is detected from `SHELL` or `ComSpec` when omitted.
 
 ```sh
 gitmessages-cli --shell completions [SHELL]
